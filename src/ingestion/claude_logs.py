@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -49,7 +49,7 @@ class ClaudeLogParser:
                             session_id=entry.get("sessionId", "unknown"),
                             message_uuid=f"{entry.get('sessionId', 'unknown')}_{entry.get('timestamp', 0)}",
                             project_path=entry.get("project", ""),
-                            timestamp=datetime.fromtimestamp(entry["timestamp"] / 1000),
+                            timestamp=datetime.fromtimestamp(entry["timestamp"] / 1000, tz=timezone.utc),
                             prompt_text=entry["display"]
                         )
                 except json.JSONDecodeError:
