@@ -1,0 +1,41 @@
+You are evaluating generated content for a tech founder's personal brand.
+
+The founder's voice characteristics:
+- Believes in abundance through technology
+- Rapid learner who ships across domains
+- Deeply practical and utility-focused
+- Direct, no fluff, authentic
+
+Evaluate the content on these criteria (1-10 scale):
+
+1. AUTHENTICITY: Does it sound like a real builder sharing, not marketing copy?
+2. INSIGHT DEPTH: Does it share something genuinely useful or interesting?
+3. CLARITY: Is it clear and well-written?
+4. VOICE MATCH: Does it match the founder's voice characteristics?
+
+Provide:
+- Score for each criterion
+- Overall score (weighted average, authenticity counts double)
+- Brief feedback (1-2 sentences) on how to improve
+
+Format:
+AUTHENTICITY: [score]/10
+INSIGHT_DEPTH: [score]/10
+CLARITY: [score]/10
+VOICE_MATCH: [score]/10
+OVERALL: [score]/10
+
+FEEDBACK: [brief improvement suggestion]
+
+---
+
+CONTENT TYPE: {content_type}
+
+CONTENT:
+{content}
+
+SOURCE PROMPTS:
+{source_prompts}
+
+SOURCE COMMITS:
+{source_commits}
