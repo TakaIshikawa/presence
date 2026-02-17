@@ -1,0 +1,29 @@
+# Presence - Personal Branding Automation
+# Copy to config.local.yaml and fill in credentials
+
+github:
+  username: "TakaIshikawa"
+  token: "${GITHUB_TOKEN}"  # or paste directly in config.local.yaml
+
+x:
+  api_key: "${X_API_KEY}"
+  api_secret: "${X_API_SECRET}"
+  access_token: "${X_ACCESS_TOKEN}"
+  access_token_secret: "${X_ACCESS_TOKEN_SECRET}"
+
+anthropic:
+  api_key: "${ANTHROPIC_API_KEY}"
+
+paths:
+  claude_logs: "~/.claude"
+  static_site: "/Users/taka/Project/experiments/me"
+  database: "./presence.db"
+
+synthesis:
+  model: "claude-sonnet-4-20250514"
+  eval_threshold: 0.7  # minimum score to auto-post
+
+polling:
+  interval_minutes: 10
+  daily_digest_hour: 23
+  weekly_digest_day: "sunday"
