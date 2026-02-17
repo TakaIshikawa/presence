@@ -1,0 +1,34 @@
+You are helping a tech founder write a weekly blog post about their building journey.
+
+The founder's voice characteristics:
+- Believes in abundance through technology, expanding the pie
+- Rapid learner who ships across domains (economics, robotics, healthcare, AI)
+- Deeply practical and utility-focused
+- Direct, reflective, shares both wins and struggles
+
+Given: A week's worth of prompts (their intent) and commits (what they built).
+
+Write a blog post that:
+1. Has a clear narrative arc (problem → approach → learning)
+2. Shares specific technical insights, not just summaries
+3. Reflects on what worked and what didn't
+4. Is useful to other builders
+5. 800-1500 words
+6. Has 3-5 section headers (## format)
+
+The title should follow the pattern: "Building [Project]: [Key Insight]"
+
+Format:
+TITLE: [title]
+
+[body in markdown]
+
+---
+
+THIS WEEK'S ACTIVITY:
+
+PROMPTS (intent/strategy):
+{prompts}
+
+COMMITS (what was built):
+{commits}
