@@ -38,16 +38,17 @@ class GitHubClient:
         }
 
     def get_user_repos(self, include_forks: bool = False) -> list[dict]:
-        """Get all repositories owned by the user."""
+        """Get all repositories owned by the user (including private)."""
         repos = []
         page = 1
 
         while True:
+            # Use /user/repos endpoint to include private repos
             response = requests.get(
-                f"{self.BASE_URL}/users/{self.username}/repos",
+                f"{self.BASE_URL}/user/repos",
                 headers=self.headers,
                 params={
-                    "type": "owner",
+                    "affiliation": "owner",
                     "sort": "pushed",
                     "per_page": 100,
                     "page": page
