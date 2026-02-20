@@ -54,6 +54,32 @@ def main():
     print(f"Polling for commits since {since.isoformat()}")
 
     posts_made = 0
+    rate_limited = False
+
+    # First, try to post any unpublished content from previous runs
+    min_score = config.synthesis.eval_threshold * 10
+    unpublished = db.get_unpublished_content("x_post", min_score)
+    if unpublished:
+        print(f"Retrying {len(unpublished)} unpublished posts...")
+        for item in unpublished[:3]:  # Limit retries per poll
+            if posts_made > 0:
+                time.sleep(POST_DELAY_SECONDS)
+
+            result = x_client.post(item["content"])
+            if result.success:
+                db.mark_published(item["id"], result.url)
+                print(f"  ✓ Posted queued: {result.url}")
+                posts_made += 1
+            elif "429" in str(result.error):
+                print(f"  Still rate limited, skipping retries")
+                rate_limited = True
+                break
+
+    if rate_limited:
+        db.set_last_poll_time(current_poll_time)
+        db.close()
+        print(f"Done. {posts_made} posts made. (rate limited)")
+        return
 
     for commit in github.get_all_recent_commits(since=since):
         if db.is_commit_processed(commit.sha):
