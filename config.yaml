@@ -27,3 +27,28 @@ polling:
   interval_minutes: 10
   daily_digest_hour: 23
   weekly_digest_day: "sunday"
+
+# Embeddings for semantic search
+embeddings:
+  provider: "voyage"  # or "openai"
+  model: "voyage-3-lite"
+  api_key: "${VOYAGE_API_KEY}"
+
+# Curated external sources (manually approved)
+curated_sources:
+  x_accounts:
+    # AI/ML builders and researchers
+    - username: "karpathy"
+      name: "Andrej Karpathy"
+      license: "attribution_required"
+    - username: "swyx"
+      name: "swyx"
+      license: "attribution_required"
+    - username: "simonw"
+      name: "Simon Willison"
+      license: "attribution_required"
+
+  blogs:
+    - domain: "simonwillison.net"
+      name: "Simon Willison's Blog"
+      license: "attribution_required"
