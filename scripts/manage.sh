@@ -12,16 +12,17 @@ AGENTS=(
 )
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|run|retry}"
+    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|knowledge}"
     echo ""
     echo "Commands:"
-    echo "  start   - Load and start all automation jobs"
-    echo "  stop    - Unload and stop all automation jobs"
-    echo "  restart - Stop then start all jobs"
-    echo "  status  - Show status of all jobs"
-    echo "  logs    - Tail all log files"
-    echo "  run     - Run a specific job now (poll|daily|weekly)"
-    echo "  retry   - Retry posting unpublished content"
+    echo "  start     - Load and start all automation jobs"
+    echo "  stop      - Unload and stop all automation jobs"
+    echo "  restart   - Stop then start all jobs"
+    echo "  status    - Show status of all jobs"
+    echo "  logs      - Tail all log files"
+    echo "  run       - Run a specific job now (poll|daily|weekly)"
+    echo "  retry     - Retry posting unpublished content"
+    echo "  knowledge - Knowledge base commands (build|fetch|stats)"
     exit 1
 }
 
@@ -136,6 +137,37 @@ case "$1" in
     retry)
         echo "Retrying unpublished content..."
         cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/retry_unpublished.py
+        ;;
+    knowledge)
+        case "$2" in
+            build)
+                echo "Building knowledge base from existing content..."
+                cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/build_knowledge.py
+                ;;
+            fetch)
+                echo "Fetching content from curated sources..."
+                cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/fetch_curated.py
+                ;;
+            stats)
+                echo "Knowledge base statistics:"
+                cd "$PROJECT_DIR" && /opt/anaconda3/bin/python -c "
+import sqlite3
+conn = sqlite3.connect('presence.db')
+cur = conn.cursor()
+cur.execute('SELECT source_type, COUNT(*) FROM knowledge GROUP BY source_type')
+for row in cur.fetchall():
+    print(f'  {row[0]}: {row[1]} items')
+cur.execute('SELECT COUNT(*) FROM knowledge')
+total = cur.fetchone()[0]
+print(f'  Total: {total} items')
+conn.close()
+"
+                ;;
+            *)
+                echo "Usage: $0 knowledge {build|fetch|stats}"
+                exit 1
+                ;;
+        esac
         ;;
     *)
         usage

@@ -47,6 +47,26 @@ class PollingConfig:
 
 
 @dataclass
+class EmbeddingsConfig:
+    provider: str
+    model: str
+    api_key: str
+
+
+@dataclass
+class CuratedSource:
+    identifier: str  # username or domain
+    name: str
+    license: str
+
+
+@dataclass
+class CuratedSourcesConfig:
+    x_accounts: list[CuratedSource]
+    blogs: list[CuratedSource]
+
+
+@dataclass
 class Config:
     github: GitHubConfig
     x: XConfig
@@ -54,6 +74,8 @@ class Config:
     paths: PathsConfig
     synthesis: SynthesisConfig
     polling: PollingConfig
+    embeddings: Optional[EmbeddingsConfig]
+    curated_sources: Optional[CuratedSourcesConfig]
 
 
 def _resolve_env_var(value: str) -> str:
@@ -79,6 +101,39 @@ def load_config(config_path: Optional[str] = None) -> Config:
 
     with open(config_path, "r") as f:
         data = yaml.safe_load(f)
+
+    # Parse embeddings config if present
+    embeddings_config = None
+    if "embeddings" in data:
+        embeddings_config = EmbeddingsConfig(
+            provider=data["embeddings"]["provider"],
+            model=data["embeddings"]["model"],
+            api_key=_resolve_env_var(data["embeddings"]["api_key"])
+        )
+
+    # Parse curated sources if present
+    curated_sources_config = None
+    if "curated_sources" in data:
+        x_accounts = [
+            CuratedSource(
+                identifier=acc.get("username", ""),
+                name=acc.get("name", ""),
+                license=acc.get("license", "attribution_required")
+            )
+            for acc in data["curated_sources"].get("x_accounts", [])
+        ]
+        blogs = [
+            CuratedSource(
+                identifier=blog.get("domain", ""),
+                name=blog.get("name", ""),
+                license=blog.get("license", "attribution_required")
+            )
+            for blog in data["curated_sources"].get("blogs", [])
+        ]
+        curated_sources_config = CuratedSourcesConfig(
+            x_accounts=x_accounts,
+            blogs=blogs
+        )
 
     return Config(
         github=GitHubConfig(
@@ -107,5 +162,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             interval_minutes=data["polling"]["interval_minutes"],
             daily_digest_hour=data["polling"]["daily_digest_hour"],
             weekly_digest_day=data["polling"]["weekly_digest_day"]
-        )
+        ),
+        embeddings=embeddings_config,
+        curated_sources=curated_sources_config
     )
