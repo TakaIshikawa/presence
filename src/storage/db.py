@@ -143,3 +143,26 @@ class Database:
             (content_type, min_score)
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    # Poll state
+    def get_last_poll_time(self) -> Optional[datetime]:
+        """Get the last successful poll time."""
+        cursor = self.conn.execute(
+            "SELECT last_poll_time FROM poll_state WHERE id = 1"
+        )
+        row = cursor.fetchone()
+        if row:
+            return datetime.fromisoformat(row[0])
+        return None
+
+    def set_last_poll_time(self, poll_time: datetime) -> None:
+        """Update the last poll time."""
+        self.conn.execute(
+            """INSERT INTO poll_state (id, last_poll_time, updated_at)
+               VALUES (1, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(id) DO UPDATE SET
+               last_poll_time = excluded.last_poll_time,
+               updated_at = CURRENT_TIMESTAMP""",
+            (poll_time.isoformat(),)
+        )
+        self.conn.commit()
