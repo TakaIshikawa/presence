@@ -2,8 +2,12 @@
 """Build knowledge base from existing content."""
 
 import sys
+import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+
+# Rate limiting: seconds between API calls (Voyage free tier: 3 RPM)
+API_DELAY_SECONDS = 25
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -48,7 +52,7 @@ def main():
     posts = cursor.fetchall()
     print(f"Found {len(posts)} published posts")
 
-    for post in posts:
+    for i, post in enumerate(posts):
         post_id = str(post["id"])
         if store.exists("own_post", post_id):
             continue
@@ -64,8 +68,10 @@ def main():
                 author=config.github.username
             )
             print(f"    ✓ Ingested")
+            time.sleep(API_DELAY_SECONDS)  # Rate limiting
         except Exception as e:
             print(f"    ✗ Error: {e}")
+            time.sleep(API_DELAY_SECONDS)  # Still wait on error
 
     # 2. Ingest Claude Code conversations (last 30 days)
     print("\n=== Ingesting Claude Code conversations ===")
@@ -80,11 +86,11 @@ def main():
     print(f"  {len(substantial)} are substantial (100+ chars)")
 
     ingested = 0
-    for msg in substantial[:100]:  # Limit to avoid too many API calls
+    for i, msg in enumerate(substantial[:50]):  # Limit to 50 to stay within rate limits
         if store.exists("own_conversation", msg.message_uuid):
             continue
 
-        print(f"  Processing conversation {msg.message_uuid[:8]}...")
+        print(f"  Processing conversation {msg.message_uuid[:8]} ({i+1}/{min(50, len(substantial))})...")
         try:
             result = ingest_own_conversation(
                 store=store,
@@ -96,8 +102,10 @@ def main():
             if result:
                 print(f"    ✓ Ingested")
                 ingested += 1
+            time.sleep(API_DELAY_SECONDS)  # Rate limiting
         except Exception as e:
             print(f"    ✗ Error: {e}")
+            time.sleep(API_DELAY_SECONDS)  # Still wait on error
 
     print(f"\nIngested {ingested} new conversations")
 
