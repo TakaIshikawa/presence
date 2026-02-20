@@ -20,6 +20,7 @@ Automated personal branding pipeline that turns your coding activity into conten
 - GitHub account
 - X (Twitter) developer account
 - Anthropic API key
+- Voyage AI API key (for knowledge base embeddings)
 
 ## Installation
 
@@ -65,6 +66,23 @@ polling:
   interval_minutes: 10
   daily_digest_hour: 23
   weekly_digest_day: "sunday"
+
+# For knowledge base (semantic search)
+embeddings:
+  provider: "voyage"
+  model: "voyage-3-lite"
+  api_key: "pa-xxxxxxxxxxxx"  # From voyageai.com
+
+# Curated external sources (optional)
+curated_sources:
+  x_accounts:
+    - username: "karpathy"
+      name: "Andrej Karpathy"
+      license: "attribution_required"
+  blogs:
+    - domain: "simonwillison.net"
+      name: "Simon Willison's Blog"
+      license: "attribution_required"
 ```
 
 ### Getting API Keys
@@ -80,6 +98,10 @@ polling:
 
 **Anthropic API:**
 1. Go to [console.anthropic.com](https://console.anthropic.com)
+2. Create an API key
+
+**Voyage AI (for embeddings):**
+1. Go to [voyageai.com](https://www.voyageai.com/)
 2. Create an API key
 
 ## Usage
@@ -110,6 +132,24 @@ polling:
 
 # Restart
 ./scripts/manage.sh restart
+
+# Retry rate-limited posts
+./scripts/manage.sh retry
+```
+
+### Knowledge Base
+
+Build accumulated knowledge for enhanced synthesis:
+
+```bash
+# Build from own content (X posts, Claude conversations)
+./scripts/manage.sh knowledge build
+
+# Fetch from curated external sources
+./scripts/manage.sh knowledge fetch
+
+# View stats
+./scripts/manage.sh knowledge stats
 ```
 
 ### Schedule
@@ -132,15 +172,21 @@ polling:
    - Matches commits with Claude prompts by timestamp (±30 min window)
    - Your prompts contain intent/strategy; commits contain what was built
 
-3. **Synthesis**
+3. **Knowledge Retrieval** (Enhanced mode)
+   - Semantic search through accumulated insights
+   - Retrieves relevant own posts and conversations
+   - Retrieves relevant external perspectives (with attribution)
+
+4. **Synthesis**
    - Uses Claude API to generate content from prompt + commit context
+   - Enhanced mode incorporates retrieved knowledge for richer insights
    - Customizable prompts in `src/synthesis/prompts/`
 
-4. **Evaluation**
+5. **Evaluation**
    - LLM-as-judge scores content on authenticity, insight depth, clarity, voice match
    - Only publishes if score ≥ threshold (default 70%)
 
-5. **Output**
+6. **Output**
    - X posts via Twitter API
    - Blog posts as HTML committed to static site repo
 
@@ -154,10 +200,15 @@ presence/
 │   │   └── github_commits.py   # Fetch commits via API
 │   ├── storage/
 │   │   └── db.py               # SQLite tracking layer
+│   ├── knowledge/
+│   │   ├── embeddings.py       # Embedding providers (Voyage, OpenAI)
+│   │   ├── store.py            # Knowledge store with semantic search
+│   │   └── ingest.py           # Ingest content into knowledge base
 │   ├── synthesis/
-│   │   ├── generator.py        # Content generation
+│   │   ├── generator.py        # Basic content generation
+│   │   ├── generator_enhanced.py  # Knowledge-enhanced generation
 │   │   ├── evaluator.py        # LLM-as-judge scoring
-│   │   └── prompts/            # Prompt templates
+│   │   └── prompts/            # Prompt templates (basic + enhanced)
 │   ├── output/
 │   │   ├── x_client.py         # X API client
 │   │   └── blog_writer.py      # Static site writer
@@ -166,6 +217,9 @@ presence/
 │   ├── poll_commits.py         # Per-commit job
 │   ├── daily_digest.py         # Daily thread job
 │   ├── weekly_digest.py        # Weekly blog job
+│   ├── build_knowledge.py      # Build knowledge from own content
+│   ├── fetch_curated.py        # Fetch from curated sources
+│   ├── retry_unpublished.py    # Retry rate-limited posts
 │   └── manage.sh               # Automation manager
 ├── config.yaml                 # Config template
 ├── schema.sql                  # Database schema
