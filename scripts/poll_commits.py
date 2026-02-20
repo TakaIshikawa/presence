@@ -2,8 +2,9 @@
 """Poll for new commits and generate X posts."""
 
 import sys
+import time
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -15,6 +16,9 @@ from ingestion.claude_logs import get_prompts_around_timestamp
 from synthesis.generator import ContentGenerator
 from synthesis.evaluator import ContentEvaluator
 from output.x_client import XClient
+
+# Rate limiting: seconds between X posts
+POST_DELAY_SECONDS = 30
 
 
 def main():
@@ -35,10 +39,21 @@ def main():
         config.x.access_token_secret
     )
 
-    # Get commits from last polling interval
-    since = datetime.now() - timedelta(minutes=config.polling.interval_minutes)
+    # Get last poll time from DB, or use fallback window
+    last_poll = db.get_last_poll_time()
+    if last_poll:
+        # Add timezone info if missing
+        if last_poll.tzinfo is None:
+            last_poll = last_poll.replace(tzinfo=timezone.utc)
+        since = last_poll
+    else:
+        # First run: check last 60 minutes
+        since = datetime.now(timezone.utc) - timedelta(minutes=60)
 
+    current_poll_time = datetime.now(timezone.utc)
     print(f"Polling for commits since {since.isoformat()}")
+
+    posts_made = 0
 
     for commit in github.get_all_recent_commits(since=since):
         if db.is_commit_processed(commit.sha):
@@ -104,18 +119,31 @@ def main():
 
         # Post if passes threshold
         if eval_result.passes_threshold(config.synthesis.eval_threshold):
+            # Rate limiting: wait between posts
+            if posts_made > 0:
+                print(f"  Rate limiting: waiting {POST_DELAY_SECONDS}s...")
+                time.sleep(POST_DELAY_SECONDS)
+
             print("  Posting to X...")
             result = x_client.post(generated.content)
             if result.success:
                 db.mark_published(content_id, result.url)
                 print(f"  Posted: {result.url}")
+                posts_made += 1
             else:
                 print(f"  Post failed: {result.error}")
+                # If rate limited, stop posting but continue processing
+                if "429" in str(result.error):
+                    print("  Rate limited by X, will retry unpublished on next poll")
+                    break
         else:
             print("  Below threshold, not posting")
 
+    # Update last poll time
+    db.set_last_poll_time(current_poll_time)
+
     db.close()
-    print("Done")
+    print(f"Done. {posts_made} posts made.")
 
 
 if __name__ == "__main__":

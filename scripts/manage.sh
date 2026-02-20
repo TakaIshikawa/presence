@@ -12,7 +12,7 @@ AGENTS=(
 )
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|run}"
+    echo "Usage: $0 {start|stop|restart|status|logs|run|retry}"
     echo ""
     echo "Commands:"
     echo "  start   - Load and start all automation jobs"
@@ -21,6 +21,7 @@ usage() {
     echo "  status  - Show status of all jobs"
     echo "  logs    - Tail all log files"
     echo "  run     - Run a specific job now (poll|daily|weekly)"
+    echo "  retry   - Retry posting unpublished content"
     exit 1
 }
 
@@ -131,6 +132,10 @@ case "$1" in
         ;;
     run)
         run_job "$2"
+        ;;
+    retry)
+        echo "Retrying unpublished content..."
+        cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/retry_unpublished.py
         ;;
     *)
         usage

@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
     UNIQUE(prompt_type, version)
 );
 
+-- Poll state tracking
+CREATE TABLE IF NOT EXISTS poll_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+    last_poll_time TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_claude_messages_session ON claude_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_claude_messages_timestamp ON claude_messages(timestamp);
