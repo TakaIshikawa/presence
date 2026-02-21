@@ -13,6 +13,7 @@ class EvalResult:
     insight_depth: float
     clarity: float
     voice_match: float
+    accessibility: float
     overall: float
     feedback: str
 
@@ -68,6 +69,7 @@ class ContentEvaluator:
         insight_depth = extract_score(r"INSIGHT_DEPTH:\s*(\d+(?:\.\d+)?)/10")
         clarity = extract_score(r"CLARITY:\s*(\d+(?:\.\d+)?)/10")
         voice_match = extract_score(r"VOICE_MATCH:\s*(\d+(?:\.\d+)?)/10")
+        accessibility = extract_score(r"ACCESSIBILITY:\s*(\d+(?:\.\d+)?)/10")
         overall = extract_score(r"OVERALL:\s*(\d+(?:\.\d+)?)/10")
 
         feedback_match = re.search(r"FEEDBACK:\s*(.+?)(?:\n|$)", response, re.DOTALL)
@@ -78,6 +80,7 @@ class ContentEvaluator:
             insight_depth=insight_depth,
             clarity=clarity,
             voice_match=voice_match,
+            accessibility=accessibility,
             overall=overall,
             feedback=feedback
         )

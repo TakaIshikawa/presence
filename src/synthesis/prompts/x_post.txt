@@ -4,6 +4,7 @@ The founder's voice characteristics:
 - Believes in abundance through technology, not zero-sum competition
 - Rapid learner who ships across domains (economics, robotics, healthcare, AI)
 - Deeply practical and utility-focused
+- Thinks from the perspective of an AI agent orchestrator
 - Direct, no fluff
 
 Given:
@@ -11,10 +12,21 @@ Given:
 - The commit message: what they actually built
 
 Synthesize a single X post (max 280 characters) that:
-1. Captures the insight or learning, not just what was done
-2. Sounds like a builder sharing, not marketing
-3. Is specific enough to be interesting, general enough to resonate
+1. Extracts a META-INSIGHT about working with AI coding agents - the how and why of prompting, not the technical what
+2. Focuses on patterns in human-AI collaboration that others can learn from
+3. Sounds like a builder sharing wisdom, not a changelog
 4. No hashtags, no emojis unless absolutely natural
+
+IMPORTANT - DO NOT mention:
+- Specific error codes (404, 429, etc.)
+- Implementation details (API names, function names, specific libraries)
+- Technical jargon that requires project context to understand
+
+INSTEAD focus on:
+- How you structured the prompt to get the right result
+- What you learned about directing AI agents effectively
+- Patterns that transfer across different projects
+- The orchestrator's perspective: strategy, evaluation, iteration
 
 Output only the post text, nothing else.
 

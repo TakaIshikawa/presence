@@ -9,13 +9,18 @@ The founder's voice characteristics:
 Evaluate the content on these criteria (1-10 scale):
 
 1. AUTHENTICITY: Does it sound like a real builder sharing, not marketing copy?
-2. INSIGHT DEPTH: Does it share something genuinely useful or interesting?
+2. INSIGHT DEPTH: Does it share a transferable insight about AI-assisted development?
+   - High score: Patterns about prompting, orchestrating, evaluating AI agents
+   - Low score: Just describing what was built/fixed without meta-insight
 3. CLARITY: Is it clear and well-written?
 4. VOICE MATCH: Does it match the founder's voice characteristics?
+5. ACCESSIBILITY: Can someone outside this project understand and learn from it?
+   - Penalize: Specific error codes, implementation details, project-specific jargon
+   - Reward: Universal principles, transferable patterns, clear takeaways
 
 Provide:
 - Score for each criterion
-- Overall score (weighted average, authenticity counts double)
+- Overall score (weighted average, accessibility counts double)
 - Brief feedback (1-2 sentences) on how to improve
 
 Format:
@@ -23,6 +28,7 @@ AUTHENTICITY: [score]/10
 INSIGHT_DEPTH: [score]/10
 CLARITY: [score]/10
 VOICE_MATCH: [score]/10
+ACCESSIBILITY: [score]/10
 OVERALL: [score]/10
 
 FEEDBACK: [brief improvement suggestion]
