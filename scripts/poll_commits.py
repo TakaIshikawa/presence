@@ -17,8 +17,9 @@ from synthesis.generator import ContentGenerator
 from synthesis.evaluator import ContentEvaluator
 from output.x_client import XClient
 
-# Rate limiting: seconds between X posts
-POST_DELAY_SECONDS = 30
+# Rate limiting: be conservative to avoid X rate limits
+POST_DELAY_SECONDS = 60  # 1 minute between posts
+MAX_POSTS_PER_POLL = 1   # Only 1 post per 10-min poll cycle
 
 
 def main():
@@ -56,24 +57,20 @@ def main():
     posts_made = 0
     rate_limited = False
 
-    # First, try to post any unpublished content from previous runs
+    # First, try to post any unpublished content from previous runs (1 per cycle max)
     min_score = config.synthesis.eval_threshold * 10
     unpublished = db.get_unpublished_content("x_post", min_score)
-    if unpublished:
-        print(f"Retrying {len(unpublished)} unpublished posts...")
-        for item in unpublished[:3]:  # Limit retries per poll
-            if posts_made > 0:
-                time.sleep(POST_DELAY_SECONDS)
-
-            result = x_client.post(item["content"])
-            if result.success:
-                db.mark_published(item["id"], result.url)
-                print(f"  ✓ Posted queued: {result.url}")
-                posts_made += 1
-            elif "429" in str(result.error):
-                print(f"  Still rate limited, skipping retries")
-                rate_limited = True
-                break
+    if unpublished and posts_made < MAX_POSTS_PER_POLL:
+        print(f"Retrying {len(unpublished)} unpublished posts (1 per cycle)...")
+        item = unpublished[0]
+        result = x_client.post(item["content"])
+        if result.success:
+            db.mark_published(item["id"], result.url)
+            print(f"  ✓ Posted queued: {result.url}")
+            posts_made += 1
+        elif "429" in str(result.error):
+            print(f"  Still rate limited, will retry next cycle")
+            rate_limited = True
 
     if rate_limited:
         db.set_last_poll_time(current_poll_time)
@@ -143,8 +140,12 @@ def main():
             eval_feedback=eval_result.feedback
         )
 
-        # Post if passes threshold
+        # Post if passes threshold (respect max posts per cycle)
         if eval_result.passes_threshold(config.synthesis.eval_threshold):
+            if posts_made >= MAX_POSTS_PER_POLL:
+                print(f"  Reached max posts per cycle ({MAX_POSTS_PER_POLL}), queued for next poll")
+                continue
+
             # Rate limiting: wait between posts
             if posts_made > 0:
                 print(f"  Rate limiting: waiting {POST_DELAY_SECONDS}s...")
@@ -158,10 +159,9 @@ def main():
                 posts_made += 1
             else:
                 print(f"  Post failed: {result.error}")
-                # If rate limited, stop posting but continue processing
+                # If rate limited, stop posting but continue processing commits
                 if "429" in str(result.error):
-                    print("  Rate limited by X, will retry unpublished on next poll")
-                    break
+                    print("  Rate limited by X, will retry next poll")
         else:
             print("  Below threshold, not posting")
 
