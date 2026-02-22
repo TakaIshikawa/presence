@@ -52,6 +52,39 @@ class ContentGenerator:
             source_commits=[commit_message]
         )
 
+    def generate_x_post_batched(
+        self,
+        prompts: list[str],
+        commits: list[dict]
+    ) -> GeneratedContent:
+        """Generate a single X post synthesizing multiple commits."""
+        template = self._load_prompt("x_post_batched")
+
+        prompts_text = "\n\n".join(f"- {p[:500]}" for p in prompts[:5])  # Limit context
+        commits_text = "\n\n".join(
+            f"- [{c['repo_name']}] {c['message']}"
+            for c in commits[:10]
+        )
+
+        filled = template.format(
+            prompts=prompts_text,
+            commits=commits_text,
+            commit_count=len(commits)
+        )
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=500,
+            messages=[{"role": "user", "content": filled}]
+        )
+
+        return GeneratedContent(
+            content_type="x_post",
+            content=response.content[0].text.strip(),
+            source_prompts=prompts,
+            source_commits=[c["message"] for c in commits]
+        )
+
     def generate_x_thread(
         self,
         prompts: list[str],
