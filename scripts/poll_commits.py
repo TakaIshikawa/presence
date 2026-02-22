@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Poll for new commits and generate X posts."""
+"""Poll for new commits and generate X posts (batched)."""
 
 import sys
-import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -16,10 +15,6 @@ from ingestion.claude_logs import get_prompts_around_timestamp
 from synthesis.generator import ContentGenerator
 from synthesis.evaluator import ContentEvaluator
 from output.x_client import XClient
-
-# Rate limiting: be conservative to avoid X rate limits
-POST_DELAY_SECONDS = 60  # 1 minute between posts
-MAX_POSTS_PER_POLL = 1   # Only 1 post per 10-min poll cycle
 
 
 def main():
@@ -43,34 +38,37 @@ def main():
     # Get last poll time from DB, or use fallback window
     last_poll = db.get_last_poll_time()
     if last_poll:
-        # Add timezone info if missing
         if last_poll.tzinfo is None:
             last_poll = last_poll.replace(tzinfo=timezone.utc)
         since = last_poll
     else:
-        # First run: check last 60 minutes
-        since = datetime.now(timezone.utc) - timedelta(minutes=60)
+        # First run: check last 90 minutes
+        since = datetime.now(timezone.utc) - timedelta(minutes=90)
 
     current_poll_time = datetime.now(timezone.utc)
     print(f"Polling for commits since {since.isoformat()}")
 
-    posts_made = 0
+    posted = False
     rate_limited = False
 
-    # First, try to post any unpublished content from previous runs (1 per cycle max)
+    # First, try to post any unpublished content from previous runs
     min_score = config.synthesis.eval_threshold * 10
     unpublished = db.get_unpublished_content("x_post", min_score)
-    if unpublished and posts_made < MAX_POSTS_PER_POLL:
-        print(f"Retrying {len(unpublished)} unpublished posts (1 per cycle)...")
+    if unpublished:
+        print(f"Retrying {len(unpublished)} unpublished posts...")
         item = unpublished[0]
         result = x_client.post(item["content"])
         if result.success:
             db.mark_published(item["id"], result.url)
-            print(f"  ✓ Posted queued: {result.url}")
-            posts_made += 1
+            print(f"  Posted queued: {result.url}")
+            posted = True
         elif "429" in str(result.error):
             print(f"  Still rate limited, will retry next cycle")
             rate_limited = True
+
+    # Collect all new commits and their prompts
+    new_commits = []
+    all_prompts = []
 
     for commit in github.get_all_recent_commits(since=since):
         if db.is_commit_processed(commit.sha):
@@ -94,81 +92,83 @@ def main():
             claude_dir=config.paths.claude_logs
         )
 
-        if not prompts:
-            print("  No related prompts found, skipping post generation")
-            continue
+        # Collect commit data
+        new_commits.append({
+            "sha": commit.sha,
+            "repo_name": commit.repo_name,
+            "message": commit.message
+        })
 
-        # Use the most recent prompt before the commit
-        relevant_prompts = [p for p in prompts if p.timestamp <= commit.timestamp]
-        if not relevant_prompts:
-            relevant_prompts = prompts
+        # Collect related prompts
+        if prompts:
+            relevant = [p for p in prompts if p.timestamp <= commit.timestamp]
+            if not relevant:
+                relevant = prompts
+            all_prompts.append({
+                "text": relevant[-1].prompt_text,
+                "uuid": relevant[-1].message_uuid
+            })
 
-        prompt_text = relevant_prompts[-1].prompt_text
+    # Generate one batched post if we have commits with prompts
+    if new_commits and all_prompts:
+        print(f"\nSynthesizing {len(new_commits)} commits into one post...")
 
-        # Generate X post
-        print("  Generating X post...")
-        generated = generator.generate_x_post(
-            prompt=prompt_text,
-            commit_message=commit.message,
-            repo_name=commit.repo_name
+        prompt_texts = [p["text"] for p in all_prompts]
+
+        generated = generator.generate_x_post_batched(
+            prompts=prompt_texts,
+            commits=new_commits
         )
 
         # Evaluate
-        print("  Evaluating...")
+        print("Evaluating...")
         eval_result = evaluator.evaluate(
             content_type="x_post",
             content=generated.content,
-            source_prompts=[prompt_text],
-            source_commits=[commit.message]
+            source_prompts=prompt_texts,
+            source_commits=[c["message"] for c in new_commits]
         )
 
-        print(f"  Score: {eval_result.overall}/10 - {eval_result.feedback}")
+        print(f"Score: {eval_result.overall}/10 - {eval_result.feedback}")
 
         # Store generated content
         content_id = db.insert_generated_content(
             content_type="x_post",
-            source_commits=[commit.sha],
-            source_messages=[relevant_prompts[-1].message_uuid],
+            source_commits=[c["sha"] for c in new_commits],
+            source_messages=[p["uuid"] for p in all_prompts],
             content=generated.content,
             eval_score=eval_result.overall,
             eval_feedback=eval_result.feedback
         )
 
-        # Post if passes threshold (respect max posts per cycle and rate limit)
+        # Post if passes threshold
         if eval_result.passes_threshold(config.synthesis.eval_threshold):
             if rate_limited:
-                print(f"  Rate limited, queued for later")
-                continue
-
-            if posts_made >= MAX_POSTS_PER_POLL:
-                print(f"  Reached max posts per cycle ({MAX_POSTS_PER_POLL}), queued for next poll")
-                continue
-
-            # Rate limiting: wait between posts
-            if posts_made > 0:
-                print(f"  Rate limiting: waiting {POST_DELAY_SECONDS}s...")
-                time.sleep(POST_DELAY_SECONDS)
-
-            print("  Posting to X...")
-            result = x_client.post(generated.content)
-            if result.success:
-                db.mark_published(content_id, result.url)
-                print(f"  Posted: {result.url}")
-                posts_made += 1
+                print("Rate limited, queued for later")
+            elif posted:
+                print("Already posted this cycle, queued for next")
             else:
-                print(f"  Post failed: {result.error}")
-                # If rate limited, stop posting but continue processing commits
-                if "429" in str(result.error):
-                    print("  Rate limited by X, queuing remaining")
-                    rate_limited = True
+                print("Posting to X...")
+                result = x_client.post(generated.content)
+                if result.success:
+                    db.mark_published(content_id, result.url)
+                    print(f"Posted: {result.url}")
+                    posted = True
+                else:
+                    print(f"Post failed: {result.error}")
         else:
-            print("  Below threshold, not posting")
+            print("Below threshold, not posting")
+
+    elif new_commits:
+        print(f"\n{len(new_commits)} commits but no related prompts found")
+    else:
+        print("No new commits")
 
     # Update last poll time
     db.set_last_poll_time(current_poll_time)
 
     db.close()
-    print(f"Done. {posts_made} posts made.")
+    print(f"\nDone. {'1 post made' if posted else 'No posts made'}.")
 
 
 if __name__ == "__main__":
