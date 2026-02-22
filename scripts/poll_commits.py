@@ -72,12 +72,6 @@ def main():
             print(f"  Still rate limited, will retry next cycle")
             rate_limited = True
 
-    if rate_limited:
-        db.set_last_poll_time(current_poll_time)
-        db.close()
-        print(f"Done. {posts_made} posts made. (rate limited)")
-        return
-
     for commit in github.get_all_recent_commits(since=since):
         if db.is_commit_processed(commit.sha):
             continue
@@ -140,8 +134,12 @@ def main():
             eval_feedback=eval_result.feedback
         )
 
-        # Post if passes threshold (respect max posts per cycle)
+        # Post if passes threshold (respect max posts per cycle and rate limit)
         if eval_result.passes_threshold(config.synthesis.eval_threshold):
+            if rate_limited:
+                print(f"  Rate limited, queued for later")
+                continue
+
             if posts_made >= MAX_POSTS_PER_POLL:
                 print(f"  Reached max posts per cycle ({MAX_POSTS_PER_POLL}), queued for next poll")
                 continue
@@ -161,7 +159,8 @@ def main():
                 print(f"  Post failed: {result.error}")
                 # If rate limited, stop posting but continue processing commits
                 if "429" in str(result.error):
-                    print("  Rate limited by X, will retry next poll")
+                    print("  Rate limited by X, queuing remaining")
+                    rate_limited = True
         else:
             print("  Below threshold, not posting")
 
