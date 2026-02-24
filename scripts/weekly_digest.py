@@ -3,7 +3,7 @@
 
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -28,8 +28,8 @@ def main():
     evaluator = ContentEvaluator(config.anthropic.api_key, config.synthesis.model)
     blog_writer = BlogWriter(config.paths.static_site)
 
-    # Get this week's date range (last 7 days)
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # Get this week's date range (last 7 days, UTC)
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     week_ago = today - timedelta(days=7)
 
     print(f"Generating weekly digest for {week_ago.date()} to {today.date()}")

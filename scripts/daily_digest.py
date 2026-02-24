@@ -3,7 +3,7 @@
 
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -33,8 +33,8 @@ def main():
         config.x.access_token_secret
     )
 
-    # Get today's date range
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # Get today's date range (UTC)
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today + timedelta(days=1)
 
     print(f"Generating daily digest for {today.date()}")
