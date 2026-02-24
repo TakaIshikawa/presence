@@ -95,7 +95,7 @@ class ContentGenerator:
 
         prompts_text = "\n\n".join(f"- {p}" for p in prompts)
         commits_text = "\n\n".join(
-            f"- [{c['repo_name']}] {c['message']}"
+            f"- [{c['repo_name']}] {c.get('message') or c.get('commit_message')}"
             for c in commits
         )
 
@@ -114,7 +114,7 @@ class ContentGenerator:
             content_type="x_thread",
             content=response.content[0].text.strip(),
             source_prompts=prompts,
-            source_commits=[c["message"] for c in commits]
+            source_commits=[c.get("message") or c.get("commit_message") for c in commits]
         )
 
     def generate_blog_post(
@@ -127,7 +127,7 @@ class ContentGenerator:
 
         prompts_text = "\n\n".join(f"- {p}" for p in prompts)
         commits_text = "\n\n".join(
-            f"- [{c['repo_name']}] {c['message']}"
+            f"- [{c['repo_name']}] {c.get('message') or c.get('commit_message')}"
             for c in commits
         )
 
@@ -146,5 +146,5 @@ class ContentGenerator:
             content_type="blog_post",
             content=response.content[0].text.strip(),
             source_prompts=prompts,
-            source_commits=[c["message"] for c in commits]
+            source_commits=[c.get("message") or c.get("commit_message") for c in commits]
         )
