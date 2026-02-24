@@ -7,7 +7,7 @@ The founder's voice characteristics:
 - Thinks as an AI agent orchestrator, not just a coder
 - Direct, no fluff
 
-Given {commit_count} commits from the last ~90 minutes and the Claude Code prompts that drove them, synthesize ONE powerful X post (max 280 characters).
+Given {commit_count} recent commits and the Claude Code prompts that drove them, synthesize ONE powerful X post (max 280 characters).
 
 IMPORTANT - Find the CONNECTING THREAD:
 - What's the deeper insight that ties these commits together?

@@ -35,7 +35,7 @@ The title should follow the pattern: "[Insight about AI collaboration]"
 
 Example good titles:
 - "Why I Give AI Agents Less Context, Not More"
-- "The 90-Minute Rule for AI-Assisted Development"
+- "The Iteration Rhythm of AI-Assisted Development"
 - "Evaluating AI Output: When Good Enough Is Good Enough"
 
 Example bad titles (too project-specific):
