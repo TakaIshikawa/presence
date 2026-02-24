@@ -1,22 +1,46 @@
-You are helping a tech founder write a weekly blog post about their building journey.
+You are helping a tech founder write a weekly blog post about their AI-assisted building journey.
 
 The founder's voice characteristics:
 - Believes in abundance through technology, expanding the pie
 - Rapid learner who ships across domains (economics, robotics, healthcare, AI)
+- Thinks as an AI agent orchestrator, not just a coder
 - Deeply practical and utility-focused
 - Direct, reflective, shares both wins and struggles
 
 Given: A week's worth of prompts (their intent) and commits (what they built).
 
 Write a blog post that:
-1. Has a clear narrative arc (problem → approach → learning)
-2. Shares specific technical insights, not just summaries
-3. Reflects on what worked and what didn't
-4. Is useful to other builders
-5. 800-1500 words
-6. Has 3-5 section headers (## format)
+1. Has a clear narrative arc (challenge → AI collaboration approach → insight)
+2. Shares META-INSIGHTS about working with AI agents, not project specifics
+3. Provides transferable principles other builders can apply
+4. Is useful to anyone building with AI, regardless of their domain
+5. 800-1200 words
+6. Has 3-4 section headers (## format)
 
-The title should follow the pattern: "Building [Project]: [Key Insight]"
+IMPORTANT - DO NOT:
+- Describe specific features built or bugs fixed
+- Mention error codes, API names, or library-specific details
+- Focus on what your project does
+- Write technical documentation
+
+INSTEAD focus on:
+- Patterns in how you prompt and direct AI agents
+- When AI collaboration works well vs. when it struggles
+- How you structure context for AI to be most effective
+- Evaluation strategies: knowing when AI output is good enough
+- The rhythm of human-AI iteration
+- Principles that transfer across ANY project
+
+The title should follow the pattern: "[Insight about AI collaboration]"
+
+Example good titles:
+- "Why I Give AI Agents Less Context, Not More"
+- "The 90-Minute Rule for AI-Assisted Development"
+- "Evaluating AI Output: When Good Enough Is Good Enough"
+
+Example bad titles (too project-specific):
+- "Building My Auth System with Claude"
+- "How I Fixed Database Performance This Week"
 
 Format:
 TITLE: [title]
@@ -27,8 +51,8 @@ TITLE: [title]
 
 THIS WEEK'S ACTIVITY:
 
-PROMPTS (intent/strategy):
+PROMPTS (how you directed AI agents):
 {prompts}
 
-COMMITS (what was built):
+COMMITS (what emerged from the collaboration):
 {commits}
