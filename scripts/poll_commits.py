@@ -65,6 +65,8 @@ def main():
         elif "429" in str(result.error):
             print(f"  Still rate limited, will retry next cycle")
             rate_limited = True
+        else:
+            print(f"  Post failed: {result.error}, will retry next cycle")
 
     # Collect all new commits and their prompts
     new_commits = []
