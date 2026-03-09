@@ -1,0 +1,7 @@
+qualityGates: []
+externalServices: []
+workflow:
+  packageManager: npm
+  branchPrefix: tact/
+  commitConventions: conventional
+conventions: []
