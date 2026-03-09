@@ -1,0 +1,6 @@
+maxConcurrentSessions: 20
+dailyBudgetUsd: null
+monthlyBudgetUsd: null
+perSessionBudgetUsd: 5
+rateLimitBackoffMs: 1000
+rateLimitMaxBackoffMs: 60000

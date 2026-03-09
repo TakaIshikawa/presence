@@ -1,0 +1,18 @@
+claudeMdSections: []
+toolPermissions:
+  baseTools:
+    - Read
+    - Glob
+    - Grep
+    - Bash
+    - Edit
+    - Write
+  extendedTools:
+    - Task
+    - WebSearch
+    - WebFetch
+  deniedTools: []
+mcpServers: {}
+hooks:
+  preCommitChecks: []
+  postTaskChecks: []
