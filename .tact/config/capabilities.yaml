@@ -5,3 +5,14 @@ workflow:
   branchPrefix: tact/
   commitConventions: conventional
 conventions: []
+operator:
+  description: test
+  promptTemplate: ""
+  allowedTools:
+    - Read
+    - Write
+    - Bash
+    - Glob
+    - Grep
+  maxTurns: 30
+  maxBudgetUsd: 2
