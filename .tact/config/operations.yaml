@@ -1,0 +1,219 @@
+discoveredAt: 2026-03-10T11:00:36.775Z
+discoverySessionId: 36a314ab-994f-4e12-aa17-bcb7f0335855
+operations:
+  - id: start-automation
+    name: Start Automation
+    description: "Loads all launchd agents to start automated polling, daily digest,
+      and weekly blog post generation. Schedules: poll (every 10 min), daily
+      digest (23:59), weekly blog (Sunday 12:00)."
+    command: ./scripts/manage.sh start
+    category: daemon
+    inputs: []
+    dangerous: false
+    tags:
+      - automation
+      - daemon
+      - scheduler
+    runtimeType: oneshot
+    healthCheck:
+      command: launchctl list | grep -E 'com\.presence\.(poll|daily|weekly)' | wc -l |
+        grep -q 3
+      intervalSec: 60
+      timeoutSec: 5
+      successPattern: "3"
+  - id: stop-automation
+    name: Stop Automation
+    description: Unloads all launchd agents to stop automated content generation pipeline.
+    command: ./scripts/manage.sh stop
+    category: daemon
+    inputs: []
+    dangerous: false
+    tags:
+      - automation
+      - daemon
+    runtimeType: oneshot
+  - id: restart-automation
+    name: Restart Automation
+    description: Stops and restarts all launchd agents for the content pipeline.
+    command: ./scripts/manage.sh restart
+    category: daemon
+    inputs: []
+    dangerous: false
+    tags:
+      - automation
+      - daemon
+    runtimeType: oneshot
+    healthCheck:
+      command: launchctl list | grep -E 'com\.presence\.(poll|daily|weekly)' | wc -l |
+        grep -q 3
+      intervalSec: 60
+      timeoutSec: 5
+      successPattern: "3"
+  - id: status-automation
+    name: Automation Status
+    description: Shows status of all launchd agents (poll, daily, weekly) and log
+      file statistics.
+    command: ./scripts/manage.sh status
+    category: utility
+    inputs: []
+    dangerous: false
+    tags:
+      - automation
+      - status
+      - monitoring
+    runtimeType: check
+  - id: view-logs
+    name: View Logs
+    description: Tails all log files (poll.log, daily.log, weekly.log) in real-time
+      for monitoring pipeline activity.
+    command: ./scripts/manage.sh logs
+    category: utility
+    inputs: []
+    dangerous: false
+    tags:
+      - logs
+      - monitoring
+      - debug
+    runtimeType: service
+  - id: run-poll
+    name: Run Poll Pipeline
+    description: Manually polls GitHub for new commits since last run, correlates
+      with Claude Code prompts, generates X posts, evaluates quality, and
+      auto-posts if score ≥ threshold. Batches multiple commits into one post.
+    command: ./scripts/manage.sh run poll
+    category: pipeline
+    inputs: []
+    schedule: every 10 min (when automation started)
+    dangerous: false
+    estimatedDurationSec: 60
+    tags:
+      - content
+      - social
+      - x
+      - pipeline
+      - commits
+    runtimeType: oneshot
+  - id: run-daily-digest
+    name: Run Daily Digest
+    description: Manually generates an X thread summarizing today's commits and
+      Claude Code prompts. Evaluates and posts if quality passes threshold.
+    command: ./scripts/manage.sh run daily
+    category: pipeline
+    inputs: []
+    schedule: daily at 23:59 (when automation started)
+    dangerous: false
+    estimatedDurationSec: 90
+    tags:
+      - content
+      - social
+      - x
+      - digest
+      - thread
+    runtimeType: oneshot
+  - id: run-weekly-blog
+    name: Run Weekly Blog Post
+    description: Manually generates a blog post from the last 7 days of commits and
+      Claude prompts. Evaluates, writes HTML to static site, commits and pushes
+      to git if quality passes threshold.
+    command: ./scripts/manage.sh run weekly
+    category: pipeline
+    inputs: []
+    schedule: weekly on Sundays at 12:00 (when automation started)
+    dangerous: false
+    estimatedDurationSec: 120
+    tags:
+      - content
+      - blog
+      - weekly
+      - git
+    runtimeType: oneshot
+  - id: retry-unpublished
+    name: Retry Unpublished Posts
+    description: Retries posting X content that passed evaluation but failed to
+      publish (e.g., due to rate limiting). Posts with 30s delay between each to
+      respect rate limits.
+    command: ./scripts/manage.sh retry
+    category: maintenance
+    inputs: []
+    dangerous: false
+    estimatedDurationSec: 60
+    tags:
+      - social
+      - x
+      - retry
+      - rate-limit
+    runtimeType: oneshot
+  - id: knowledge-build
+    name: Build Knowledge Base
+    description: "Builds semantic knowledge base from own content: published X posts
+      and Claude Code conversations (last 30 days). Extracts insights, generates
+      embeddings via Voyage/OpenAI API. Rate-limited to 3 RPM."
+    command: ./scripts/manage.sh knowledge build
+    category: pipeline
+    inputs: []
+    dangerous: false
+    estimatedDurationSec: 600
+    tags:
+      - knowledge
+      - embeddings
+      - semantic-search
+      - indexing
+    runtimeType: oneshot
+  - id: knowledge-fetch
+    name: Fetch Curated Content
+    description: Fetches content from curated external sources (X accounts like
+      @karpathy, @swyx, @simonw) and ingests into knowledge base with
+      attribution. Requires X API credentials.
+    command: ./scripts/manage.sh knowledge fetch
+    category: pipeline
+    inputs: []
+    dangerous: false
+    estimatedDurationSec: 300
+    tags:
+      - knowledge
+      - curation
+      - x
+      - external
+    runtimeType: oneshot
+  - id: knowledge-stats
+    name: Knowledge Base Statistics
+    description: "Displays knowledge base statistics: item counts by source type
+      (own_post, own_conversation, curated_x) and total items indexed."
+    command: ./scripts/manage.sh knowledge stats
+    category: utility
+    inputs: []
+    dangerous: false
+    estimatedDurationSec: 2
+    tags:
+      - knowledge
+      - stats
+      - metrics
+    runtimeType: check
+  - id: setup-cron
+    name: Setup Cron Jobs
+    description: "Legacy script that outputs crontab entries for scheduling (prints
+      instructions only). Note: Project now uses launchd agents instead of
+      cron."
+    command: ./scripts/setup_cron.sh
+    category: utility
+    inputs: []
+    dangerous: false
+    estimatedDurationSec: 1
+    tags:
+      - setup
+      - deprecated
+      - cron
+    runtimeType: oneshot
+runs:
+  - runId: run-1773059321279
+    operationId: run-poll
+    sessionId: 24e29d7f-cf29-4cbf-99f5-2e4594167ba4
+    startedAt: 2026-03-09T12:28:41.279Z
+    completedAt: 2026-03-09T12:29:44.839Z
+    status: completed
+    summary: Successfully polled 26 commits, synthesized content, evaluated at
+      8.0/10, and auto-posted to X
+    costUsd: 0.14054069999999996
+    agent:
+      agentType: claude-code
+      model: sonnet

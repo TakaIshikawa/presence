@@ -1,9 +1,26 @@
 name: presence
 version: 0.1.0
-vision: ""
-goals: []
+vision: Automated personal branding pipeline that turns your coding activity
+  into content.
+goals:
+  - id: G-001
+    description: "Per-commit posts: Every 10 minutes, checks for new commits. Finds
+      related Claude Code prompts, synthesizes an X post, evaluates quality, and
+      auto-posts if it passes threshold."
+    successCriteria: "Per-commit posts: Every 10 minutes, checks for new commits.
+      Finds related Claude Code prompts, synthesizes an X post, evaluates
+      quality, and auto-posts if it passes threshold."
+  - id: G-002
+    description: "Daily digest: At 23:59, generates an X thread summarizing the day's work."
+    successCriteria: "Daily digest: At 23:59, generates an X thread summarizing the day's work."
+  - id: G-003
+    description: "Weekly blog: Sundays at 12:00, generates a blog post from the
+      week's activity and publishes to your static site."
+    successCriteria: "Weekly blog: Sundays at 12:00, generates a blog post from the
+      week's activity and publishes to your static site."
 constraints: []
 techStack:
-  languages: []
+  languages:
+    - Python
   frameworks: []
   infrastructure: []

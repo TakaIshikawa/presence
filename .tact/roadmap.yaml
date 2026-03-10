@@ -1,2 +1,11 @@
-milestones: []
-currentMilestone: ""
+milestones:
+  - id: M-001
+    name: Initial Setup
+    targetDate: ""
+    status: in_progress
+    requirements:
+      - REQ-001
+      - REQ-002
+      - REQ-003
+    description: Initial project setup and core features
+currentMilestone: M-001

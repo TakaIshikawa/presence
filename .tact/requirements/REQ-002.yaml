@@ -1,0 +1,12 @@
+id: REQ-002
+title: "Daily digest: At 23:59, generates an X thread summarizing the day's work."
+milestone: M-001
+status: approved
+priority: high
+description: "Implement: Daily digest: At 23:59, generates an X thread
+  summarizing the day's work."
+acceptanceCriteria:
+  - "Daily digest: At 23:59, generates an X thread summarizing the day's work."
+decomposition:
+  tasks: []
+dependencies: []

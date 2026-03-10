@@ -1,4 +1,6 @@
-claudeMdSections: []
+claudeMdSections:
+  - heading: Package Manager
+    content: Always use npm for dependency management.
 toolPermissions:
   baseTools:
     - Read
