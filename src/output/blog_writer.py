@@ -149,10 +149,11 @@ class BlogWriter:
         )
 
     def commit_and_push(self, title: str) -> bool:
-        """Commit and push changes to trigger GitHub Pages deploy."""
+        """Commit and push blog changes to trigger GitHub Pages deploy."""
         try:
+            # Stage only blog and index files, not unrelated changes
             subprocess.run(
-                ["git", "add", "."],
+                ["git", "add", "blog/", "index.html"],
                 cwd=self.site_path,
                 check=True,
                 capture_output=True
