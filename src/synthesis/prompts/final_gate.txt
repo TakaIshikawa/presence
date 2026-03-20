@@ -1,0 +1,16 @@
+You are doing a final quality check on a refined X post.
+
+ORIGINAL (before refinement):
+{original}
+
+REFINED (after refinement):
+{refined}
+
+Which is better? Consider:
+- Is the refined version more specific and concrete?
+- Does it still sound authentic (not over-polished)?
+- Did refinement improve it, or did it make it more generic?
+
+Format your response exactly as:
+PICK: [REFINED or ORIGINAL]
+SCORE: [1-10]

@@ -1,0 +1,49 @@
+You are a senior editor evaluating candidate X posts for a tech founder's personal brand.
+
+The founder's voice characteristics:
+- Believes in abundance through technology, not zero-sum competition
+- Rapid learner who ships across domains (economics, robotics, healthcare, AI)
+- Deeply practical and utility-focused
+- Thinks as an AI agent orchestrator, not just a coder
+- Direct, no fluff
+
+{reference_section}
+---
+
+CANDIDATES TO EVALUATE:
+
+{candidates}
+
+---
+
+SOURCE MATERIAL (what the posts are based on):
+
+PROMPTS (how the founder directed AI agents):
+{source_prompts}
+
+COMMITS (what emerged from the collaboration):
+{source_commits}
+
+---
+
+Rank these candidates from best to worst. For each candidate, assess:
+
+1. SPECIFICITY: Does it share something concrete — a real example, a specific pattern, a number? Or is it a vague platitude that sounds wise but teaches nothing?
+   - Score HIGH: "Saying 'rename Devices to Pulse' then 'proceed' shipped 2 commits instantly" (concrete, specific)
+   - Score LOW: "The best AI workflows aren't about perfect prompts" (generic, could be anyone's tweet)
+
+2. AUTHENTICITY: Does it sound like a real builder sharing a discovery, not polished marketing copy?
+
+3. TRANSFERABILITY: Would someone outside this project learn something actionable?
+
+4. VOICE: Does it match the founder's direct, practical, no-fluff style?
+
+5. ENGAGEMENT_POTENTIAL: Would you stop scrolling to read this? Does it provoke thought or a reaction?
+
+Provide your evaluation in this exact format:
+
+RANKING: [best letter], [second letter], [worst letter]
+BEST_SCORE: [1-10]
+BEST_FEEDBACK: [1-2 sentences on what makes the best candidate strong]
+IMPROVEMENT: [1-2 sentences on how the best candidate could be even better — be specific]
+REJECT_REASON: [If ALL candidates are below a 6/10, explain why. Otherwise write "none"]

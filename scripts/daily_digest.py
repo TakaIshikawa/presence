@@ -97,7 +97,7 @@ def main():
         tweets = parse_thread_content(generated.content)
         result = x_client.post_thread(tweets)
         if result.success:
-            db.mark_published(content_id, result.url)
+            db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
             print(f"Posted: {result.url}")
         else:
             print(f"Post failed: {result.error}")

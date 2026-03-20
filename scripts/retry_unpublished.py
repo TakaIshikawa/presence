@@ -47,7 +47,7 @@ def main():
 
         result = x_client.post(item['content'])
         if result.success:
-            db.mark_published(item['id'], result.url)
+            db.mark_published(item['id'], result.url, tweet_id=result.tweet_id)
             print(f"  Posted: {result.url}")
             posts_made += 1
         else:
