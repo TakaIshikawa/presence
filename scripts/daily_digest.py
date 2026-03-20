@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and post daily digest thread."""
+"""Generate and post daily digest thread via multi-stage pipeline."""
 
 import sys
 from pathlib import Path
@@ -11,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config import load_config
 from storage.db import Database
 from ingestion.claude_logs import ClaudeLogParser
-from synthesis.generator import ContentGenerator
-from synthesis.evaluator import ContentEvaluator
+from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 
 
@@ -24,8 +23,13 @@ def main():
     db.connect()
     db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
 
-    generator = ContentGenerator(config.anthropic.api_key, config.synthesis.model)
-    evaluator = ContentEvaluator(config.anthropic.api_key, config.synthesis.model)
+    pipeline = SynthesisPipeline(
+        api_key=config.anthropic.api_key,
+        generator_model=config.synthesis.model,
+        evaluator_model=config.synthesis.eval_model,
+        db=db,
+        num_candidates=config.synthesis.num_candidates,
+    )
     x_client = XClient(
         config.x.api_key,
         config.x.api_secret,
@@ -63,48 +67,70 @@ def main():
         db.close()
         return
 
-    # Generate thread
-    print("Generating thread...")
-    generated = generator.generate_x_thread(
+    # Convert commit dicts from db rows to have expected keys
+    commit_dicts = [
+        {"repo_name": c.get("repo_name", ""), "message": c.get("commit_message", ""),
+         "sha": c.get("commit_sha", "")}
+        for c in commits
+    ]
+
+    # Run pipeline
+    print(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
+    result = pipeline.run(
         prompts=prompt_texts,
-        commits=commits
-    )
-
-    # Evaluate
-    print("Evaluating...")
-    eval_result = evaluator.evaluate(
+        commits=commit_dicts,
         content_type="x_thread",
-        content=generated.content,
-        source_prompts=prompt_texts[:5],  # Limit for eval
-        source_commits=[c["commit_message"] for c in commits[:5]]
+        threshold=config.synthesis.eval_threshold,
     )
 
-    print(f"Score: {eval_result.overall}/10 - {eval_result.feedback}")
+    # Log pipeline stages
+    best_idx = result.comparison.ranking[0] if result.comparison.ranking else 0
+    print(f"  Best candidate: {chr(65 + best_idx)} (score: {result.comparison.best_score}/10)")
+    if result.refinement:
+        print(f"  Refinement: picked {result.refinement.picked} (score: {result.refinement.final_score}/10)")
+    print(f"  Final score: {result.final_score}/10")
 
     # Store
     content_id = db.insert_generated_content(
         content_type="x_thread",
-        source_commits=[c["commit_sha"] for c in commits],
+        source_commits=[c["sha"] for c in commit_dicts],
         source_messages=[p.message_uuid for p in prompts],
-        content=generated.content,
-        eval_score=eval_result.overall,
-        eval_feedback=eval_result.feedback
+        content=result.final_content,
+        eval_score=result.final_score,
+        eval_feedback=result.comparison.best_feedback,
+    )
+
+    # Record pipeline run
+    db.insert_pipeline_run(
+        batch_id=result.batch_id,
+        content_type="x_thread",
+        candidates_generated=len(result.candidates),
+        best_candidate_index=best_idx,
+        best_score_before_refine=result.comparison.best_score,
+        best_score_after_refine=result.refinement.final_score if result.refinement else None,
+        refinement_picked=result.refinement.picked if result.refinement else None,
+        final_score=result.final_score,
+        content_id=content_id,
     )
 
     # Post if passes threshold
-    if eval_result.passes_threshold(config.synthesis.eval_threshold):
+    passes = result.final_score >= config.synthesis.eval_threshold * 10
+    if passes:
         print("Posting thread to X...")
-        tweets = parse_thread_content(generated.content)
-        result = x_client.post_thread(tweets)
-        if result.success:
-            db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
-            print(f"Posted: {result.url}")
+        tweets = parse_thread_content(result.final_content)
+        post_result = x_client.post_thread(tweets)
+        if post_result.success:
+            db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)
+            print(f"Posted: {post_result.url}")
         else:
-            print(f"Post failed: {result.error}")
+            print(f"Post failed: {post_result.error}")
     else:
-        print("Below threshold, not posting")
+        if result.comparison.reject_reason:
+            print(f"Rejected: {result.comparison.reject_reason}")
+        else:
+            print("Below threshold, not posting")
         print("Generated content:")
-        print(generated.content)
+        print(result.final_content)
 
     db.close()
     print("Done")

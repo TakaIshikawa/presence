@@ -1,6 +1,6 @@
-You are refining an X post based on editorial feedback.
+You are refining content based on editorial feedback.
 
-ORIGINAL POST:
+ORIGINAL:
 {content}
 
 WHAT'S WORKING:
@@ -10,10 +10,10 @@ HOW TO IMPROVE:
 {improvement}
 
 CONSTRAINTS:
-- Max 280 characters
+{format_constraints}
 - Preserve what's working (don't rewrite from scratch)
 - Address the specific improvement suggestion
 - Keep the founder's direct, practical voice
 - Be specific — concrete examples over abstract wisdom
 
-Output only the refined post text, nothing else.
+Output only the refined content, nothing else.

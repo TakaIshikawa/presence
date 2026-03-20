@@ -85,25 +85,37 @@ class ContentGenerator:
             source_commits=[c["message"] for c in commits]
         )
 
+    # Content-type settings for multi-candidate generation
+    CONTENT_TYPE_CONFIG = {
+        "x_post": {"template": "x_post_v2", "max_tokens": 500},
+        "x_thread": {"template": "x_thread_v2", "max_tokens": 2000},
+        "blog_post": {"template": "blog_post_v2", "max_tokens": 4000},
+    }
+
     def generate_candidates(
         self,
         prompts: list[str],
         commits: list[dict],
+        content_type: str = "x_post",
         few_shot_examples: str = "",
         num_candidates: int = 3,
     ) -> list[GeneratedContent]:
-        """Generate multiple candidate X posts with temperature variation for diversity."""
-        template = self._load_prompt("x_post_v2")
+        """Generate multiple candidates with temperature variation for diversity."""
+        type_config = self.CONTENT_TYPE_CONFIG.get(
+            content_type, self.CONTENT_TYPE_CONFIG["x_post"]
+        )
+        template = self._load_prompt(type_config["template"])
+        max_tokens = type_config["max_tokens"]
 
         prompts_text = "\n\n".join(f"- {p[:500]}" for p in prompts[:5])
         commits_text = "\n\n".join(
-            f"- [{c['repo_name']}] {c['message']}"
+            f"- [{c.get('repo_name', '')}] {c.get('message') or c.get('commit_message', '')}"
             for c in commits[:10]
         )
 
         if few_shot_examples:
             few_shot_section = (
-                "EXAMPLES OF POSTS THAT RESONATED:\n\n"
+                "EXAMPLES OF CONTENT THAT RESONATED:\n\n"
                 f"{few_shot_examples}\n\n"
                 "Match this quality level. Be specific and concrete like these examples.\n"
             )
@@ -123,16 +135,16 @@ class ContentGenerator:
         for temp in temperatures:
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=500,
+                max_tokens=max_tokens,
                 temperature=temp,
                 messages=[{"role": "user", "content": filled}],
             )
             candidates.append(
                 GeneratedContent(
-                    content_type="x_post",
+                    content_type=content_type,
                     content=response.content[0].text.strip(),
                     source_prompts=prompts,
-                    source_commits=[c["message"] for c in commits],
+                    source_commits=[c.get("message") or c.get("commit_message", "") for c in commits],
                 )
             )
 
