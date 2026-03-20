@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS commit_prompt_links (
 );
 
 -- Generated content
+-- published: 0 = unpublished, 1 = published, -1 = abandoned (max retries exceeded)
 CREATE TABLE IF NOT EXISTS generated_content (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content_type TEXT NOT NULL,  -- 'x_post', 'x_thread', 'blog_post'
@@ -42,6 +43,8 @@ CREATE TABLE IF NOT EXISTS generated_content (
     eval_feedback TEXT,
     published INTEGER DEFAULT 0,
     published_url TEXT,
+    retry_count INTEGER DEFAULT 0,
+    last_retry_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

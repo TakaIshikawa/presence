@@ -25,7 +25,7 @@ class ContentEvaluator:
     PROMPTS_DIR = Path(__file__).parent / "prompts"
 
     def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=api_key, timeout=300.0)
         self.model = model
 
     def _load_prompt(self) -> str:

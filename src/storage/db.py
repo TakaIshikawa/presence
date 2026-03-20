@@ -4,7 +4,9 @@ import sqlite3
 import json
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
+
+MAX_RETRIES = 3
 
 
 class Database:
@@ -32,6 +34,12 @@ class Database:
         """Initialize database with schema."""
         schema = Path(schema_path).read_text()
         self.conn.executescript(schema)
+        # Migrate: add retry columns if missing (existing DBs)
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(generated_content)")}
+        if "retry_count" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN retry_count INTEGER DEFAULT 0")
+        if "last_retry_at" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN last_retry_at TEXT")
         self.conn.commit()
 
     # Claude messages
@@ -138,11 +146,38 @@ class Database:
     def get_unpublished_content(self, content_type: str, min_score: float) -> list[dict]:
         cursor = self.conn.execute(
             """SELECT * FROM generated_content
-               WHERE content_type = ? AND published = 0 AND eval_score >= ?
+               WHERE content_type = ? AND published = 0
+               AND eval_score >= ? AND COALESCE(retry_count, 0) < ?
                ORDER BY created_at""",
-            (content_type, min_score)
+            (content_type, min_score, MAX_RETRIES)
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def increment_retry(self, content_id: int) -> int:
+        """Increment retry count and return new count. Abandons if max exceeded."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE generated_content
+               SET retry_count = COALESCE(retry_count, 0) + 1, last_retry_at = ?
+               WHERE id = ?""",
+            (now, content_id)
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT retry_count FROM generated_content WHERE id = ?", (content_id,)
+        ).fetchone()
+        count = row[0] if row else 0
+        if count >= MAX_RETRIES:
+            self.mark_abandoned(content_id)
+        return count
+
+    def mark_abandoned(self, content_id: int) -> None:
+        """Mark content as abandoned (published = -1)."""
+        self.conn.execute(
+            "UPDATE generated_content SET published = -1 WHERE id = ?",
+            (content_id,)
+        )
+        self.conn.commit()
 
     # Poll state
     def get_last_poll_time(self) -> Optional[datetime]:

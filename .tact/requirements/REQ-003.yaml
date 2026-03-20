@@ -1,8 +1,8 @@
 id: REQ-003
 title: "Weekly blog: Sundays at 12:00, generates a blog post from the week's
   activity and publishes to your static site."
-milestone: M-001
-status: approved
+approval: approved
+phase: planned
 priority: high
 description: "Implement: Weekly blog: Sundays at 12:00, generates a blog post
   from the week's activity and publishes to your static site."
@@ -10,5 +10,5 @@ acceptanceCriteria:
   - "Weekly blog: Sundays at 12:00, generates a blog post from the week's
     activity and publishes to your static site."
 decomposition:
-  tasks: []
+  assignments: []
 dependencies: []

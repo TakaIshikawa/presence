@@ -16,3 +16,11 @@ operator:
     - Grep
   maxTurns: 30
   maxBudgetUsd: 2
+maintainer:
+  enabled: true
+  autonomyLevel: 1
+  checkIntervalSec: 300
+  maxBudgetPerSessionUsd: 1
+  maxDailyBudgetUsd: 5
+  maxConcurrentSessions: 1
+  watchOperationIds: all
