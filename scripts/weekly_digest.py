@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and publish weekly blog post."""
+"""Generate and publish weekly blog post via multi-stage pipeline."""
 
 import sys
 from pathlib import Path
@@ -11,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config import load_config
 from storage.db import Database
 from ingestion.claude_logs import ClaudeLogParser
-from synthesis.generator import ContentGenerator
-from synthesis.evaluator import ContentEvaluator
+from synthesis.pipeline import SynthesisPipeline
 from output.blog_writer import BlogWriter
 
 
@@ -24,8 +23,13 @@ def main():
     db.connect()
     db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
 
-    generator = ContentGenerator(config.anthropic.api_key, config.synthesis.model)
-    evaluator = ContentEvaluator(config.anthropic.api_key, config.synthesis.model)
+    pipeline = SynthesisPipeline(
+        api_key=config.anthropic.api_key,
+        generator_model=config.synthesis.model,
+        evaluator_model=config.synthesis.eval_model,
+        db=db,
+        num_candidates=config.synthesis.num_candidates,
+    )
     blog_writer = BlogWriter(config.paths.static_site)
 
     # Get this week's date range (last 7 days, UTC)
@@ -58,56 +62,78 @@ def main():
         db.close()
         return
 
-    # Generate blog post
-    print("Generating blog post...")
-    generated = generator.generate_blog_post(
+    # Convert commit dicts from db rows to have expected keys
+    commit_dicts = [
+        {"repo_name": c.get("repo_name", ""), "message": c.get("commit_message", ""),
+         "sha": c.get("commit_sha", "")}
+        for c in commits
+    ]
+
+    # Run pipeline
+    print(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
+    result = pipeline.run(
         prompts=prompt_texts,
-        commits=commits
-    )
-
-    # Evaluate
-    print("Evaluating...")
-    eval_result = evaluator.evaluate(
+        commits=commit_dicts,
         content_type="blog_post",
-        content=generated.content,
-        source_prompts=prompt_texts[:10],  # Limit for eval
-        source_commits=[c["commit_message"] for c in commits[:10]]
+        threshold=config.synthesis.eval_threshold,
     )
 
-    print(f"Score: {eval_result.overall}/10 - {eval_result.feedback}")
+    # Log pipeline stages
+    best_idx = result.comparison.ranking[0] if result.comparison.ranking else 0
+    print(f"  Best candidate: {chr(65 + best_idx)} (score: {result.comparison.best_score}/10)")
+    if result.refinement:
+        print(f"  Refinement: picked {result.refinement.picked} (score: {result.refinement.final_score}/10)")
+    print(f"  Final score: {result.final_score}/10")
 
     # Store
     content_id = db.insert_generated_content(
         content_type="blog_post",
-        source_commits=[c["commit_sha"] for c in commits],
+        source_commits=[c["sha"] for c in commit_dicts],
         source_messages=[p.message_uuid for p in prompts],
-        content=generated.content,
-        eval_score=eval_result.overall,
-        eval_feedback=eval_result.feedback
+        content=result.final_content,
+        eval_score=result.final_score,
+        eval_feedback=result.comparison.best_feedback,
+    )
+
+    # Record pipeline run
+    db.insert_pipeline_run(
+        batch_id=result.batch_id,
+        content_type="blog_post",
+        candidates_generated=len(result.candidates),
+        best_candidate_index=best_idx,
+        best_score_before_refine=result.comparison.best_score,
+        best_score_after_refine=result.refinement.final_score if result.refinement else None,
+        refinement_picked=result.refinement.picked if result.refinement else None,
+        final_score=result.final_score,
+        content_id=content_id,
     )
 
     # Publish if passes threshold
-    if eval_result.passes_threshold(config.synthesis.eval_threshold):
+    passes = result.final_score >= config.synthesis.eval_threshold * 10
+    if passes:
         print("Writing blog post...")
-        result = blog_writer.write_post(generated.content)
+        write_result = blog_writer.write_post(result.final_content)
 
-        if result.success:
-            print(f"Blog post written: {result.file_path}")
+        if write_result.success:
+            print(f"Blog post written: {write_result.file_path}")
 
             # Commit and push
             print("Committing and pushing...")
-            title = generated.content.split("\n")[0].replace("TITLE:", "").strip()
+            title = result.final_content.split("\n")[0].replace("TITLE:", "").strip()
             if blog_writer.commit_and_push(title):
-                db.mark_published(content_id, result.url)
-                print(f"Published: {result.url}")
+                db.mark_published(content_id, write_result.url)
+                print(f"Published: {write_result.url}")
             else:
                 print("Git push failed")
         else:
-            print(f"Write failed: {result.error}")
+            print(f"Write failed: {write_result.error}")
     else:
-        print("Below threshold, not publishing")
+        if result.comparison.reject_reason:
+            print(f"Rejected: {result.comparison.reject_reason}")
+        else:
+            print("Below threshold, not publishing")
         print("Generated content:")
-        print(generated.content[:500] + "...")
+        print(result.final_content[:500] + "...")
 
     db.close()
     print("Done")

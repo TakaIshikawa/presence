@@ -9,6 +9,7 @@ AGENTS=(
     "com.presence.poll"
     "com.presence.daily"
     "com.presence.weekly"
+    "com.presence.engagement"
 )
 
 usage() {

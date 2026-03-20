@@ -79,6 +79,7 @@ class SynthesisPipeline:
         candidates = self.generator.generate_candidates(
             prompts=prompts,
             commits=commits,
+            content_type=content_type,
             few_shot_examples=few_shot_text,
             num_candidates=self.num_candidates,
         )
@@ -110,6 +111,7 @@ class SynthesisPipeline:
                 content=best_content,
                 best_feedback=comparison.best_feedback,
                 improvement=comparison.improvement,
+                content_type=content_type,
             )
             final_content = refinement.final_content
             final_score = refinement.final_score

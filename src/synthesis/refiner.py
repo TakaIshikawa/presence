@@ -21,6 +21,12 @@ class ContentRefiner:
 
     PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+    FORMAT_CONSTRAINTS = {
+        "x_post": ("- Max 280 characters\n- Single tweet format", 500),
+        "x_thread": ("- Each tweet max 280 characters\n- Keep TWEET N: format\n- 3-5 tweets", 2000),
+        "blog_post": ("- 800-1200 words\n- Keep ## section headers\n- Keep TITLE: format", 4000),
+    }
+
     def __init__(
         self,
         refine_api_key: str,
@@ -38,30 +44,34 @@ class ContentRefiner:
         content: str,
         best_feedback: str,
         improvement: str,
+        content_type: str = "x_post",
     ) -> RefinementResult:
         """Refine content based on feedback, then pick the better version."""
-        # Stage 1: Refine
-        refined = self._refine(content, best_feedback, improvement)
+        refined = self._refine(content, best_feedback, improvement, content_type)
+        return self._final_gate(content, refined, content_type)
 
-        # Stage 2: Final gate — pick original vs refined
-        return self._final_gate(content, refined)
-
-    def _refine(self, content: str, best_feedback: str, improvement: str) -> str:
+    def _refine(
+        self, content: str, best_feedback: str, improvement: str, content_type: str
+    ) -> str:
         template = (self.PROMPTS_DIR / "refiner.txt").read_text()
+        constraints, max_tokens = self.FORMAT_CONSTRAINTS.get(
+            content_type, self.FORMAT_CONSTRAINTS["x_post"]
+        )
         filled = template.format(
             content=content,
             best_feedback=best_feedback,
             improvement=improvement,
+            format_constraints=constraints,
         )
 
         response = self.refine_client.messages.create(
             model=self.refine_model,
-            max_tokens=500,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": filled}],
         )
         return response.content[0].text.strip()
 
-    def _final_gate(self, original: str, refined: str) -> RefinementResult:
+    def _final_gate(self, original: str, refined: str, content_type: str = "x_post") -> RefinementResult:
         template = (self.PROMPTS_DIR / "final_gate.txt").read_text()
         filled = template.format(original=original, refined=refined)
 
