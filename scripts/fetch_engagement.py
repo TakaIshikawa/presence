@@ -2,6 +2,7 @@
 """Fetch engagement metrics for published posts from X API."""
 
 import sys
+import tweepy
 from pathlib import Path
 
 # Add src to path
@@ -9,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config import load_config
 from storage.db import Database
-from output.x_client import XClient
 
 # Engagement score weights (absolute counts, no impression normalization)
 WEIGHT_LIKE = 1.0
@@ -21,11 +21,29 @@ WEIGHT_QUOTE = 5.0
 BATCH_SIZE = 100
 
 
+def get_bearer_token(api_key: str, api_secret: str) -> str:
+    """Get OAuth 2.0 bearer token from consumer credentials."""
+    import base64
+    import requests
+
+    credentials = base64.b64encode(f"{api_key}:{api_secret}".encode()).decode()
+    resp = requests.post(
+        "https://api.twitter.com/oauth2/token",
+        headers={
+            "Authorization": f"Basic {credentials}",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        data="grant_type=client_credentials",
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
 def compute_engagement_score(
     like_count: int,
     retweet_count: int,
     reply_count: int,
-    quote_count: int
+    quote_count: int,
 ) -> float:
     return (
         like_count * WEIGHT_LIKE
@@ -35,6 +53,26 @@ def compute_engagement_score(
     )
 
 
+def backfill_tweet_ids(db) -> int:
+    """Backfill tweet_ids for published posts that only have URLs."""
+    cursor = db.conn.execute(
+        """SELECT id, published_url FROM generated_content
+           WHERE published = 1 AND tweet_id IS NULL
+             AND published_url LIKE '%/status/%'"""
+    )
+    count = 0
+    for row in cursor.fetchall():
+        tweet_id = str(row[1]).split("/status/")[-1]
+        db.conn.execute(
+            "UPDATE generated_content SET tweet_id = ? WHERE id = ?",
+            (tweet_id, row[0]),
+        )
+        count += 1
+    if count:
+        db.conn.commit()
+    return count
+
+
 def main():
     config = load_config()
 
@@ -42,12 +80,14 @@ def main():
     db.connect()
     db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
 
-    x_client = XClient(
-        config.x.api_key,
-        config.x.api_secret,
-        config.x.access_token,
-        config.x.access_token_secret
-    )
+    # Backfill tweet_ids from URLs for pre-pipeline posts
+    backfilled = backfill_tweet_ids(db)
+    if backfilled:
+        print(f"Backfilled {backfilled} tweet_ids from URLs")
+
+    # Use bearer token for read endpoints (OAuth 2.0 App-Only)
+    bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
+    client = tweepy.Client(bearer_token=bearer_token)
 
     # Get posts that need metrics (published in last 30 days, not fetched in 6h)
     posts = db.get_posts_needing_metrics(max_age_days=30)
@@ -64,12 +104,11 @@ def main():
 
     fetched = 0
     for i in range(0, len(tweet_ids), BATCH_SIZE):
-        batch = tweet_ids[i:i + BATCH_SIZE]
+        batch = tweet_ids[i : i + BATCH_SIZE]
 
         try:
-            response = x_client.client.get_tweets(
-                ids=batch,
-                tweet_fields=["public_metrics"]
+            response = client.get_tweets(
+                ids=batch, tweet_fields=["public_metrics"]
             )
         except Exception as e:
             print(f"API error fetching batch {i // BATCH_SIZE + 1}: {e}")
@@ -101,10 +140,12 @@ def main():
                 retweet_count=retweet_count,
                 reply_count=reply_count,
                 quote_count=quote_count,
-                engagement_score=score
+                engagement_score=score,
             )
             fetched += 1
-            print(f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}")
+            print(
+                f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}"
+            )
 
     db.close()
     print(f"\nDone. Fetched metrics for {fetched} posts.")
