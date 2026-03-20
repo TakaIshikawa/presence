@@ -34,12 +34,16 @@ class Database:
         """Initialize database with schema."""
         schema = Path(schema_path).read_text()
         self.conn.executescript(schema)
-        # Migrate: add retry columns if missing (existing DBs)
+        # Migrate: add columns if missing (existing DBs)
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(generated_content)")}
         if "retry_count" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN retry_count INTEGER DEFAULT 0")
         if "last_retry_at" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN last_retry_at TEXT")
+        if "tweet_id" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN tweet_id TEXT")
+        if "published_at" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN published_at TEXT")
         self.conn.commit()
 
     # Claude messages
@@ -136,10 +140,13 @@ class Database:
         self.conn.commit()
         return cursor.lastrowid
 
-    def mark_published(self, content_id: int, url: str) -> None:
+    def mark_published(self, content_id: int, url: str, tweet_id: str = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
         self.conn.execute(
-            "UPDATE generated_content SET published = 1, published_url = ? WHERE id = ?",
-            (url, content_id)
+            """UPDATE generated_content
+               SET published = 1, published_url = ?, tweet_id = ?, published_at = ?
+               WHERE id = ?""",
+            (url, tweet_id, now, content_id)
         )
         self.conn.commit()
 
@@ -201,3 +208,104 @@ class Database:
             (poll_time.isoformat(),)
         )
         self.conn.commit()
+
+    # Engagement tracking
+    def get_posts_needing_metrics(self, max_age_days: int = 30) -> list[dict]:
+        """Get published posts with tweet_ids that need engagement metrics fetched."""
+        cursor = self.conn.execute(
+            """SELECT gc.id, gc.tweet_id, gc.content, gc.published_at,
+                      pe.fetched_at AS last_fetched
+               FROM generated_content gc
+               LEFT JOIN (
+                   SELECT content_id, MAX(fetched_at) AS fetched_at
+                   FROM post_engagement
+                   GROUP BY content_id
+               ) pe ON pe.content_id = gc.id
+               WHERE gc.published = 1
+                 AND gc.tweet_id IS NOT NULL
+                 AND gc.published_at >= datetime('now', ?)
+                 AND (pe.fetched_at IS NULL
+                      OR pe.fetched_at < datetime('now', '-6 hours'))
+               ORDER BY gc.published_at DESC""",
+            (f'-{max_age_days} days',)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def insert_engagement(
+        self,
+        content_id: int,
+        tweet_id: str,
+        like_count: int,
+        retweet_count: int,
+        reply_count: int,
+        quote_count: int,
+        engagement_score: float
+    ) -> int:
+        """Insert an engagement metrics snapshot."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO post_engagement
+               (content_id, tweet_id, like_count, retweet_count,
+                reply_count, quote_count, engagement_score, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (content_id, tweet_id, like_count, retweet_count,
+             reply_count, quote_count, engagement_score, now)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_top_performing_posts(
+        self,
+        limit: int = 5,
+        content_type: str = "x_post"
+    ) -> list[dict]:
+        """Get top-performing published posts ranked by latest engagement score."""
+        cursor = self.conn.execute(
+            """SELECT gc.id, gc.content, gc.eval_score, gc.tweet_id,
+                      pe.engagement_score, pe.like_count, pe.retweet_count,
+                      pe.reply_count, pe.quote_count
+               FROM generated_content gc
+               INNER JOIN (
+                   SELECT content_id, engagement_score, like_count,
+                          retweet_count, reply_count, quote_count,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               WHERE gc.published = 1 AND gc.content_type = ?
+               ORDER BY pe.engagement_score DESC
+               LIMIT ?""",
+            (content_type, limit)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    # Pipeline runs
+    def insert_pipeline_run(
+        self,
+        batch_id: str,
+        content_type: str,
+        candidates_generated: int,
+        best_candidate_index: int,
+        best_score_before_refine: float,
+        best_score_after_refine: float = None,
+        refinement_picked: str = None,
+        final_score: float = None,
+        published: bool = False,
+        content_id: int = None,
+    ) -> int:
+        """Record a pipeline run for observability."""
+        cursor = self.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated,
+                best_candidate_index, best_score_before_refine,
+                best_score_after_refine, refinement_picked,
+                final_score, published, content_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (batch_id, content_type, candidates_generated,
+             best_candidate_index, best_score_before_refine,
+             best_score_after_refine, refinement_picked,
+             final_score, 1 if published else 0, content_id)
+        )
+        self.conn.commit()
+        return cursor.lastrowid

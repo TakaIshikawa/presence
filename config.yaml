@@ -21,7 +21,9 @@ paths:
 
 synthesis:
   model: "claude-sonnet-4-20250514"
+  eval_model: "claude-opus-4-20250514"
   eval_threshold: 0.7  # minimum score to auto-post
+  num_candidates: 3
 
 polling:
   interval_minutes: 10

@@ -36,7 +36,9 @@ class PathsConfig:
 @dataclass
 class SynthesisConfig:
     model: str
+    eval_model: str
     eval_threshold: float
+    num_candidates: int
 
 
 @dataclass
@@ -156,7 +158,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         ),
         synthesis=SynthesisConfig(
             model=data["synthesis"]["model"],
-            eval_threshold=data["synthesis"]["eval_threshold"]
+            eval_model=data["synthesis"].get("eval_model", data["synthesis"]["model"]),
+            eval_threshold=data["synthesis"]["eval_threshold"],
+            num_candidates=data["synthesis"].get("num_candidates", 3),
         ),
         polling=PollingConfig(
             interval_minutes=data["polling"]["interval_minutes"],

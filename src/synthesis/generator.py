@@ -85,6 +85,59 @@ class ContentGenerator:
             source_commits=[c["message"] for c in commits]
         )
 
+    def generate_candidates(
+        self,
+        prompts: list[str],
+        commits: list[dict],
+        few_shot_examples: str = "",
+        num_candidates: int = 3,
+    ) -> list[GeneratedContent]:
+        """Generate multiple candidate X posts with temperature variation for diversity."""
+        template = self._load_prompt("x_post_v2")
+
+        prompts_text = "\n\n".join(f"- {p[:500]}" for p in prompts[:5])
+        commits_text = "\n\n".join(
+            f"- [{c['repo_name']}] {c['message']}"
+            for c in commits[:10]
+        )
+
+        if few_shot_examples:
+            few_shot_section = (
+                "EXAMPLES OF POSTS THAT RESONATED:\n\n"
+                f"{few_shot_examples}\n\n"
+                "Match this quality level. Be specific and concrete like these examples.\n"
+            )
+        else:
+            few_shot_section = ""
+
+        filled = template.format(
+            prompts=prompts_text,
+            commits=commits_text,
+            commit_count=len(commits),
+            few_shot_section=few_shot_section,
+        )
+
+        temperatures = [0.5, 0.7, 0.9][:num_candidates]
+        candidates = []
+
+        for temp in temperatures:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                temperature=temp,
+                messages=[{"role": "user", "content": filled}],
+            )
+            candidates.append(
+                GeneratedContent(
+                    content_type="x_post",
+                    content=response.content[0].text.strip(),
+                    source_prompts=prompts,
+                    source_commits=[c["message"] for c in commits],
+                )
+            )
+
+        return candidates
+
     def generate_x_thread(
         self,
         prompts: list[str],

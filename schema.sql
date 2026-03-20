@@ -43,8 +43,24 @@ CREATE TABLE IF NOT EXISTS generated_content (
     eval_feedback TEXT,
     published INTEGER DEFAULT 0,
     published_url TEXT,
+    tweet_id TEXT,
+    published_at TEXT,
     retry_count INTEGER DEFAULT 0,
     last_retry_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Track engagement metrics for published posts (time-series)
+CREATE TABLE IF NOT EXISTS post_engagement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    tweet_id TEXT NOT NULL,
+    like_count INTEGER DEFAULT 0,
+    retweet_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    quote_count INTEGER DEFAULT 0,
+    engagement_score REAL,
+    fetched_at TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -105,6 +121,22 @@ CREATE TABLE IF NOT EXISTS content_knowledge_links (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Track pipeline runs for observability
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id TEXT UNIQUE NOT NULL,
+    content_type TEXT NOT NULL,
+    candidates_generated INTEGER,
+    best_candidate_index INTEGER,
+    best_score_before_refine REAL,
+    best_score_after_refine REAL,
+    refinement_picked TEXT,  -- 'REFINED', 'ORIGINAL', or NULL if skipped
+    final_score REAL,
+    published INTEGER DEFAULT 0,
+    content_id INTEGER REFERENCES generated_content(id),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_source_type ON knowledge(source_type);
 CREATE INDEX IF NOT EXISTS idx_knowledge_author ON knowledge(author);
 CREATE INDEX IF NOT EXISTS idx_curated_sources_type ON curated_sources(source_type);
@@ -115,3 +147,5 @@ CREATE INDEX IF NOT EXISTS idx_claude_messages_timestamp ON claude_messages(time
 CREATE INDEX IF NOT EXISTS idx_github_commits_repo ON github_commits(repo_name);
 CREATE INDEX IF NOT EXISTS idx_github_commits_timestamp ON github_commits(timestamp);
 CREATE INDEX IF NOT EXISTS idx_generated_content_type ON generated_content(content_type);
+CREATE INDEX IF NOT EXISTS idx_post_engagement_content ON post_engagement(content_id);
+CREATE INDEX IF NOT EXISTS idx_post_engagement_tweet ON post_engagement(tweet_id);

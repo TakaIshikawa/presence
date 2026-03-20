@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll for new commits and generate X posts (batched)."""
+"""Poll for new commits and generate X posts via multi-stage pipeline."""
 
 import sys
 import subprocess
@@ -13,8 +13,7 @@ from config import load_config
 from storage.db import Database
 from ingestion.github_commits import GitHubClient
 from ingestion.claude_logs import get_prompts_around_timestamp
-from synthesis.generator import ContentGenerator
-from synthesis.evaluator import ContentEvaluator
+from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient
 
 
@@ -27,8 +26,13 @@ def main():
     db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
 
     github = GitHubClient(config.github.token, config.github.username)
-    generator = ContentGenerator(config.anthropic.api_key, config.synthesis.model)
-    evaluator = ContentEvaluator(config.anthropic.api_key, config.synthesis.model)
+    pipeline = SynthesisPipeline(
+        api_key=config.anthropic.api_key,
+        generator_model=config.synthesis.model,
+        evaluator_model=config.synthesis.eval_model,
+        db=db,
+        num_candidates=config.synthesis.num_candidates,
+    )
     x_client = XClient(
         config.x.api_key,
         config.x.api_secret,
@@ -61,7 +65,7 @@ def main():
         retry_num = (item.get("retry_count") or 0) + 1
         result = x_client.post(item["content"])
         if result.success:
-            db.mark_published(item["id"], result.url)
+            db.mark_published(item["id"], result.url, tweet_id=result.tweet_id)
             print(f"  Posted queued: {result.url}")
             posted = True
         elif "429" in str(result.error):
@@ -117,55 +121,71 @@ def main():
                 "uuid": relevant[-1].message_uuid
             })
 
-    # Generate one batched post if we have commits with prompts
+    # Run multi-stage pipeline if we have commits with prompts
     if new_commits and all_prompts:
-        print(f"\nSynthesizing {len(new_commits)} commits into one post...")
-
         prompt_texts = [p["text"] for p in all_prompts]
 
-        generated = generator.generate_x_post_batched(
+        print(f"\nRunning pipeline: {len(new_commits)} commits, {config.synthesis.num_candidates} candidates...")
+        pipeline_result = pipeline.run(
             prompts=prompt_texts,
-            commits=new_commits
-        )
-
-        # Evaluate
-        print("Evaluating...")
-        eval_result = evaluator.evaluate(
+            commits=new_commits,
             content_type="x_post",
-            content=generated.content,
-            source_prompts=prompt_texts,
-            source_commits=[c["message"] for c in new_commits]
+            threshold=config.synthesis.eval_threshold,
         )
 
-        print(f"Score: {eval_result.overall}/10 - {eval_result.feedback}")
+        # Log pipeline stages
+        best_idx = pipeline_result.comparison.ranking[0] if pipeline_result.comparison.ranking else 0
+        print(f"  Candidates generated: {len(pipeline_result.candidates)}")
+        print(f"  Best candidate: {chr(65 + best_idx)} (score: {pipeline_result.comparison.best_score}/10)")
+        if pipeline_result.refinement:
+            print(f"  Refinement: picked {pipeline_result.refinement.picked} (score: {pipeline_result.refinement.final_score}/10)")
+        print(f"  Final score: {pipeline_result.final_score}/10")
+        print(f"  Content: {pipeline_result.final_content[:100]}...")
 
         # Store generated content
         content_id = db.insert_generated_content(
             content_type="x_post",
             source_commits=[c["sha"] for c in new_commits],
             source_messages=[p["uuid"] for p in all_prompts],
-            content=generated.content,
-            eval_score=eval_result.overall,
-            eval_feedback=eval_result.feedback
+            content=pipeline_result.final_content,
+            eval_score=pipeline_result.final_score,
+            eval_feedback=pipeline_result.comparison.best_feedback,
+        )
+
+        # Record pipeline run
+        db.insert_pipeline_run(
+            batch_id=pipeline_result.batch_id,
+            content_type="x_post",
+            candidates_generated=len(pipeline_result.candidates),
+            best_candidate_index=best_idx,
+            best_score_before_refine=pipeline_result.comparison.best_score,
+            best_score_after_refine=pipeline_result.refinement.final_score if pipeline_result.refinement else None,
+            refinement_picked=pipeline_result.refinement.picked if pipeline_result.refinement else None,
+            final_score=pipeline_result.final_score,
+            content_id=content_id,
         )
 
         # Post if passes threshold
-        if eval_result.passes_threshold(config.synthesis.eval_threshold):
+        passes = pipeline_result.final_score >= config.synthesis.eval_threshold * 10
+        if passes:
             if rate_limited:
                 print("Rate limited, queued for later")
             elif posted:
                 print("Already posted this cycle, queued for next")
             else:
                 print("Posting to X...")
-                result = x_client.post(generated.content)
+                result = x_client.post(pipeline_result.final_content)
                 if result.success:
-                    db.mark_published(content_id, result.url)
+                    db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
                     print(f"Posted: {result.url}")
                     posted = True
                 else:
                     print(f"Post failed: {result.error}")
         else:
-            print("Below threshold, not posting")
+            if pipeline_result.comparison.reject_reason:
+                print(f"Rejected: {pipeline_result.comparison.reject_reason}")
+            else:
+                print("Below threshold, not posting")
 
     elif new_commits:
         print(f"\n{len(new_commits)} commits but no related prompts found")
