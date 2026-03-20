@@ -2,8 +2,8 @@ id: REQ-001
 title: "Per-commit posts: Every 10 minutes, checks for new commits. Finds
   related Claude Code prompts, synthesizes an X post, evaluates quality, and
   auto-posts if it passes threshold."
-milestone: M-001
-status: approved
+approval: approved
+phase: planned
 priority: high
 description: "Implement: Per-commit posts: Every 10 minutes, checks for new
   commits. Finds related Claude Code prompts, synthesizes an X post, evaluates
@@ -13,5 +13,5 @@ acceptanceCriteria:
     Claude Code prompts, synthesizes an X post, evaluates quality, and
     auto-posts if it passes threshold."
 decomposition:
-  tasks: []
+  assignments: []
 dependencies: []

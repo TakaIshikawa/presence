@@ -2,6 +2,7 @@
 """Poll for new commits and generate X posts (batched)."""
 
 import sys
+import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -57,6 +58,7 @@ def main():
     if unpublished:
         print(f"Retrying {len(unpublished)} unpublished posts...")
         item = unpublished[0]
+        retry_num = (item.get("retry_count") or 0) + 1
         result = x_client.post(item["content"])
         if result.success:
             db.mark_published(item["id"], result.url)
@@ -66,7 +68,11 @@ def main():
             print(f"  Still rate limited, will retry next cycle")
             rate_limited = True
         else:
-            print(f"  Post failed: {result.error}, will retry next cycle")
+            count = db.increment_retry(item["id"])
+            if count >= 3:
+                print(f"  Post failed: {result.error} (attempt {retry_num}/3 — abandoned)")
+            else:
+                print(f"  Post failed: {result.error} (attempt {retry_num}/3)")
 
     # Collect all new commits and their prompts
     new_commits = []
@@ -168,6 +174,15 @@ def main():
 
     # Update last poll time
     db.set_last_poll_time(current_poll_time)
+
+    # Update operations.yaml for tact maintainer monitoring
+    try:
+        script_path = Path(__file__).parent / "check_poll_health.sh"
+        if script_path.exists():
+            subprocess.run([str(script_path)], check=False, capture_output=True)
+    except Exception as e:
+        # Don't fail the whole job if monitoring update fails
+        print(f"Warning: Could not update monitoring state: {e}")
 
     db.close()
     print(f"\nDone. {'1 post made' if posted else 'No posts made'}.")

@@ -37,7 +37,8 @@ def main():
 
     posts_made = 0
     for item in unpublished:
-        print(f"\nRetrying: {item['content'][:60]}...")
+        retry_num = (item.get("retry_count") or 0) + 1
+        print(f"\nRetrying (attempt {retry_num}/3): {item['content'][:60]}...")
 
         # Rate limiting
         if posts_made > 0:
@@ -50,7 +51,11 @@ def main():
             print(f"  Posted: {result.url}")
             posts_made += 1
         else:
-            print(f"  Failed: {result.error}")
+            count = db.increment_retry(item['id'])
+            if count >= 3:
+                print(f"  Failed: {result.error} — abandoned after 3 attempts")
+            else:
+                print(f"  Failed: {result.error}")
             if "429" in str(result.error):
                 print("  Rate limited, stopping")
                 break

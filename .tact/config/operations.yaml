@@ -1,11 +1,11 @@
-discoveredAt: 2026-03-10T11:00:36.775Z
-discoverySessionId: 36a314ab-994f-4e12-aa17-bcb7f0335855
+discoveredAt: 2026-03-13T13:04:49.813Z
+discoverySessionId: 1c3dc09a-8414-4570-a43d-f5ddcbabd5a2
 operations:
-  - id: start-automation
+  - id: start
     name: Start Automation
-    description: "Loads all launchd agents to start automated polling, daily digest,
-      and weekly blog post generation. Schedules: poll (every 10 min), daily
-      digest (23:59), weekly blog (Sunday 12:00)."
+    description: Load and start all scheduled automation jobs (poll, daily, weekly)
+      via launchd. The command itself exits after loading the agents, but the
+      scheduled jobs will run in the background.
     command: ./scripts/manage.sh start
     category: daemon
     inputs: []
@@ -13,17 +13,16 @@ operations:
     tags:
       - automation
       - daemon
-      - scheduler
+      - scheduling
     runtimeType: oneshot
     healthCheck:
-      command: launchctl list | grep -E 'com\.presence\.(poll|daily|weekly)' | wc -l |
-        grep -q 3
-      intervalSec: 60
-      timeoutSec: 5
-      successPattern: "3"
-  - id: stop-automation
+      command: launchctl list | grep -E 'com.presence.(poll|daily|weekly)'
+      intervalSec: 30
+      timeoutSec: 10
+      successPattern: com\.presence\.(poll|daily|weekly)
+  - id: stop
     name: Stop Automation
-    description: Unloads all launchd agents to stop automated content generation pipeline.
+    description: Unload and stop all scheduled automation jobs via launchd.
     command: ./scripts/manage.sh stop
     category: daemon
     inputs: []
@@ -31,10 +30,12 @@ operations:
     tags:
       - automation
       - daemon
+      - scheduling
     runtimeType: oneshot
-  - id: restart-automation
+  - id: restart
     name: Restart Automation
-    description: Stops and restarts all launchd agents for the content pipeline.
+    description: Stop then start all scheduled automation jobs. First unloads then
+      reloads all launchd agents.
     command: ./scripts/manage.sh restart
     category: daemon
     inputs: []
@@ -42,16 +43,16 @@ operations:
     tags:
       - automation
       - daemon
+      - scheduling
     runtimeType: oneshot
     healthCheck:
-      command: launchctl list | grep -E 'com\.presence\.(poll|daily|weekly)' | wc -l |
-        grep -q 3
-      intervalSec: 60
-      timeoutSec: 5
-      successPattern: "3"
-  - id: status-automation
-    name: Automation Status
-    description: Shows status of all launchd agents (poll, daily, weekly) and log
+      command: launchctl list | grep -E 'com.presence.(poll|daily|weekly)'
+      intervalSec: 30
+      timeoutSec: 10
+      successPattern: com\.presence\.(poll|daily|weekly)
+  - id: status
+    name: Check Status
+    description: Show status of all automation jobs (loaded, running, idle) and log
       file statistics.
     command: ./scripts/manage.sh status
     category: utility
@@ -59,13 +60,13 @@ operations:
     dangerous: false
     tags:
       - automation
-      - status
       - monitoring
+      - status
     runtimeType: check
-  - id: view-logs
+  - id: logs
     name: View Logs
-    description: Tails all log files (poll.log, daily.log, weekly.log) in real-time
-      for monitoring pipeline activity.
+    description: Tail all log files from the automation jobs in real-time (poll,
+      daily, weekly logs).
     command: ./scripts/manage.sh logs
     category: utility
     inputs: []
@@ -73,17 +74,17 @@ operations:
     tags:
       - logs
       - monitoring
-      - debug
+      - debugging
     runtimeType: service
   - id: run-poll
     name: Run Poll Pipeline
-    description: Manually polls GitHub for new commits since last run, correlates
-      with Claude Code prompts, generates X posts, evaluates quality, and
-      auto-posts if score ≥ threshold. Batches multiple commits into one post.
+    description: Manually run the commit polling pipeline. Checks for new commits
+      since last poll, finds related Claude Code prompts, generates and
+      evaluates X posts, and publishes if score meets threshold.
     command: ./scripts/manage.sh run poll
     category: pipeline
     inputs: []
-    schedule: every 10 min (when automation started)
+    schedule: every 90 minutes (5400 sec)
     dangerous: false
     estimatedDurationSec: 60
     tags:
@@ -91,16 +92,21 @@ operations:
       - social
       - x
       - pipeline
-      - commits
     runtimeType: oneshot
-  - id: run-daily-digest
+    healthCheck:
+      command: ./scripts/check_poll_health.sh
+      intervalSec: 300
+      timeoutSec: 10
+      successPattern: last_poll_time=
+  - id: run-daily
     name: Run Daily Digest
-    description: Manually generates an X thread summarizing today's commits and
-      Claude Code prompts. Evaluates and posts if quality passes threshold.
+    description: Manually run the daily digest pipeline. Generates an X thread
+      summarizing the day's commits and Claude Code activity, evaluates quality,
+      and posts if it passes threshold.
     command: ./scripts/manage.sh run daily
     category: pipeline
     inputs: []
-    schedule: daily at 23:59 (when automation started)
+    schedule: daily at 23:59
     dangerous: false
     estimatedDurationSec: 90
     tags:
@@ -108,102 +114,88 @@ operations:
       - social
       - x
       - digest
-      - thread
+      - pipeline
     runtimeType: oneshot
-  - id: run-weekly-blog
+  - id: run-weekly
     name: Run Weekly Blog Post
-    description: Manually generates a blog post from the last 7 days of commits and
-      Claude prompts. Evaluates, writes HTML to static site, commits and pushes
-      to git if quality passes threshold.
+    description: Manually run the weekly blog post pipeline. Generates a blog post
+      from the past 7 days of activity, evaluates quality, writes to static
+      site, and commits/pushes to git if it passes threshold.
     command: ./scripts/manage.sh run weekly
     category: pipeline
     inputs: []
-    schedule: weekly on Sundays at 12:00 (when automation started)
+    schedule: weekly on Sundays at 12:00
     dangerous: false
     estimatedDurationSec: 120
     tags:
       - content
       - blog
-      - weekly
-      - git
+      - pipeline
     runtimeType: oneshot
-  - id: retry-unpublished
+  - id: retry
     name: Retry Unpublished Posts
-    description: Retries posting X content that passed evaluation but failed to
-      publish (e.g., due to rate limiting). Posts with 30s delay between each to
-      respect rate limits.
+    description: Retry posting unpublished X posts that passed evaluation but failed
+      to publish (e.g., due to rate limiting). Respects 30-second delays between
+      posts and abandons after 3 failed attempts.
     command: ./scripts/manage.sh retry
-    category: maintenance
+    category: utility
     inputs: []
     dangerous: false
     estimatedDurationSec: 60
     tags:
+      - content
       - social
       - x
       - retry
-      - rate-limit
     runtimeType: oneshot
   - id: knowledge-build
     name: Build Knowledge Base
-    description: "Builds semantic knowledge base from own content: published X posts
-      and Claude Code conversations (last 30 days). Extracts insights, generates
-      embeddings via Voyage/OpenAI API. Rate-limited to 3 RPM."
+    description: "Build semantic knowledge base from your own content: extracts
+      insights from published X posts and Claude Code conversations (last 30
+      days), generates embeddings via Voyage AI, and stores in SQLite for
+      enhanced content synthesis."
     command: ./scripts/manage.sh knowledge build
-    category: pipeline
+    category: maintenance
     inputs: []
     dangerous: false
     estimatedDurationSec: 600
     tags:
       - knowledge
       - embeddings
-      - semantic-search
-      - indexing
+      - ai
+      - maintenance
     runtimeType: oneshot
   - id: knowledge-fetch
-    name: Fetch Curated Content
-    description: Fetches content from curated external sources (X accounts like
-      @karpathy, @swyx, @simonw) and ingests into knowledge base with
-      attribution. Requires X API credentials.
+    name: Fetch Curated Sources
+    description: Fetch and ingest content from curated external sources (X accounts,
+      blogs) configured in config.yaml. Extracts insights, generates embeddings,
+      and stores with attribution metadata for knowledge-enhanced synthesis.
     command: ./scripts/manage.sh knowledge fetch
-    category: pipeline
+    category: maintenance
     inputs: []
     dangerous: false
     estimatedDurationSec: 300
     tags:
       - knowledge
-      - curation
-      - x
+      - curated
       - external
+      - maintenance
     runtimeType: oneshot
   - id: knowledge-stats
     name: Knowledge Base Statistics
-    description: "Displays knowledge base statistics: item counts by source type
-      (own_post, own_conversation, curated_x) and total items indexed."
+    description: "Display statistics about the knowledge base: count of items by
+      source type (own posts, conversations, curated content) and total items
+      stored."
     command: ./scripts/manage.sh knowledge stats
     category: utility
     inputs: []
     dangerous: false
-    estimatedDurationSec: 2
+    estimatedDurationSec: 5
     tags:
       - knowledge
       - stats
-      - metrics
+      - monitoring
     runtimeType: check
-  - id: setup-cron
-    name: Setup Cron Jobs
-    description: "Legacy script that outputs crontab entries for scheduling (prints
-      instructions only). Note: Project now uses launchd agents instead of
-      cron."
-    command: ./scripts/setup_cron.sh
-    category: utility
-    inputs: []
-    dangerous: false
-    estimatedDurationSec: 1
-    tags:
-      - setup
-      - deprecated
-      - cron
-    runtimeType: oneshot
 runs:
   - runId: run-1773059321279
     operationId: run-poll
@@ -217,3 +209,14 @@ runs:
     agent:
       agentType: claude-code
       model: sonnet
+  - runId: run-1773142071848
+    operationId: run-poll
+    sessionId: launchd-automated
+    startedAt: 2026-03-18T04:28:07.720854+00:00
+    completedAt: 2026-03-18T04:28:07.720854+00:00
+    status: completed
+    summary: Automated poll via launchd (state synced from database poll_state table)
+    costUsd: 0.0
+    agent:
+      agentType: launchd
+      model: n/a
