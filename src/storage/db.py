@@ -186,6 +186,22 @@ class Database:
         )
         self.conn.commit()
 
+    def get_last_published_time(self, content_type: str = "x_post") -> Optional[datetime]:
+        """Get the most recent published_at timestamp for a content type."""
+        cursor = self.conn.execute(
+            "SELECT published_at FROM generated_content "
+            "WHERE content_type = ? AND published = 1 AND published_at IS NOT NULL "
+            "ORDER BY published_at DESC LIMIT 1",
+            (content_type,)
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            dt = datetime.fromisoformat(row[0])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return None
+
     # Poll state
     def get_last_poll_time(self) -> Optional[datetime]:
         """Get the last successful poll time."""

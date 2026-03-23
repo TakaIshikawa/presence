@@ -46,6 +46,8 @@ class PollingConfig:
     interval_minutes: int
     daily_digest_hour: int
     weekly_digest_day: str
+    readiness_token_threshold: int
+    max_post_gap_hours: int
 
 
 @dataclass
@@ -165,7 +167,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         polling=PollingConfig(
             interval_minutes=data["polling"]["interval_minutes"],
             daily_digest_hour=data["polling"]["daily_digest_hour"],
-            weekly_digest_day=data["polling"]["weekly_digest_day"]
+            weekly_digest_day=data["polling"]["weekly_digest_day"],
+            readiness_token_threshold=data["polling"].get("readiness_token_threshold", 500),
+            max_post_gap_hours=data["polling"].get("max_post_gap_hours", 6),
         ),
         embeddings=embeddings_config,
         curated_sources=curated_sources_config
