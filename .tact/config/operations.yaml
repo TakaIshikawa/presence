@@ -200,8 +200,8 @@ runs:
   - runId: run-1773059321279
     operationId: run-poll
     sessionId: 24e29d7f-cf29-4cbf-99f5-2e4594167ba4
-    startedAt: 2026-03-09T12:28:41.279Z
-    completedAt: 2026-03-09T12:29:44.839Z
+    startedAt: 2026-03-22T18:57:27.244115+00:00
+    completedAt: 2026-03-22T18:57:27.244115+00:00
     status: completed
     summary: Successfully polled 26 commits, synthesized content, evaluated at
       8.0/10, and auto-posted to X
@@ -212,8 +212,8 @@ runs:
   - runId: run-1773142071848
     operationId: run-poll
     sessionId: launchd-automated
-    startedAt: 2026-03-18T04:28:07.720854+00:00
-    completedAt: 2026-03-18T04:28:07.720854+00:00
+    startedAt: 2026-03-22T18:57:27.244115+00:00
+    completedAt: 2026-03-22T18:57:27.244115+00:00
     status: completed
     summary: Automated poll via launchd (state synced from database poll_state table)
     costUsd: 0.0
