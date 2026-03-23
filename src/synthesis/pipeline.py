@@ -58,6 +58,44 @@ class SynthesisPipeline:
         self.few_shot_selector = FewShotSelector(db)
         self.num_candidates = num_candidates
 
+    # Character limits per content type
+    CHAR_LIMITS = {
+        "x_post": 280,
+    }
+
+    def _enforce_char_limit(self, candidates: list[str], max_chars: int) -> list[str]:
+        """Validate and condense candidates that exceed character limit."""
+        valid = []
+        for i, text in enumerate(candidates):
+            if len(text) <= max_chars:
+                valid.append(text)
+                continue
+
+            # Try condensing once
+            print(f"  Candidate {i} is {len(text)} chars (limit {max_chars}), condensing...")
+            condensed = self.generator.condense(text, max_chars)
+            if len(condensed) <= max_chars:
+                print(f"  Condensed to {len(condensed)} chars")
+                valid.append(condensed)
+            else:
+                print(f"  Still {len(condensed)} chars after condensing, discarding")
+
+        if not valid:
+            # Fallback: take shortest original, truncate at sentence boundary
+            shortest = min(candidates, key=len)
+            sentences = shortest.split(". ")
+            truncated = ""
+            for s in sentences:
+                candidate = (truncated + ". " + s).strip(". ") + "." if truncated else s
+                if len(candidate) <= max_chars:
+                    truncated = candidate
+                else:
+                    break
+            valid.append(truncated or shortest[:max_chars])
+            print(f"  All candidates over limit, truncated shortest to {len(valid[0])} chars")
+
+        return valid
+
     def run(
         self,
         prompts: list[str],
@@ -84,6 +122,11 @@ class SynthesisPipeline:
             num_candidates=self.num_candidates,
         )
         candidate_texts = [c.content for c in candidates]
+
+        # Stage 2.5: Character limit enforcement
+        char_limit = self.CHAR_LIMITS.get(content_type)
+        if char_limit:
+            candidate_texts = self._enforce_char_limit(candidate_texts, char_limit)
 
         # Stage 3: Cross-model evaluation
         comparison = self.evaluator.evaluate(
@@ -115,6 +158,26 @@ class SynthesisPipeline:
             )
             final_content = refinement.final_content
             final_score = refinement.final_score
+
+        # Final character limit check (refinement may have expanded)
+        if char_limit and len(final_content) > char_limit:
+            print(f"  Final content is {len(final_content)} chars, condensing...")
+            condensed = self.generator.condense(final_content, char_limit)
+            if len(condensed) <= char_limit:
+                final_content = condensed
+                print(f"  Condensed to {len(final_content)} chars")
+            else:
+                # Hard truncate at sentence boundary
+                sentences = final_content.split(". ")
+                truncated = ""
+                for s in sentences:
+                    candidate_text = (truncated + ". " + s).strip(". ") + "." if truncated else s
+                    if len(candidate_text) <= char_limit:
+                        truncated = candidate_text
+                    else:
+                        break
+                final_content = truncated or final_content[:char_limit]
+                print(f"  Hard truncated to {len(final_content)} chars")
 
         return PipelineResult(
             batch_id=batch_id,

@@ -28,9 +28,10 @@ COMMITS (what emerged from the collaboration):
 
 Rank these candidates from best to worst. For each candidate, assess:
 
-1. SPECIFICITY: Does it share something concrete — a real example, a specific pattern, a number? Or is it a vague platitude that sounds wise but teaches nothing?
-   - Score HIGH: "Saying 'rename Devices to Pulse' then 'proceed' shipped 2 commits instantly" (concrete, specific)
-   - Score LOW: "The best AI workflows aren't about perfect prompts" (generic, could be anyone's tweet)
+1. GROUNDEDNESS: Are all factual claims traceable to the source material?
+   - Score HIGH: Uses real details from the commits/prompts — actual repos, actual work described, actual patterns observed
+   - Score LOW: Invents metrics ("reduced errors by 40%"), fabricates outcomes, or claims things not supported by the source material
+   - AUTOMATIC REJECT: Any post with fabricated statistics or percentages not present in the source material
 
 2. AUTHENTICITY: Does it sound like a real builder sharing a discovery, not polished marketing copy?
 
@@ -40,10 +41,20 @@ Rank these candidates from best to worst. For each candidate, assess:
 
 5. ENGAGEMENT_POTENTIAL: Would you stop scrolling to read this? Does it provoke thought or a reaction?
 
+Score calibration (apply strictly):
+- 9-10: Exceptional, rarely given. Would go viral in builder communities.
+- 7-8: Strong, publishable. Clear insight, well-expressed.
+- 5-6: Mediocre. Has an idea but doesn't land. Needs rework.
+- 1-4: Poor. Generic, fabricated, or off-voice.
+
 Provide your evaluation in this exact format:
 
 RANKING: [best letter], [second letter], [worst letter]
-BEST_SCORE: [1-10]
+GROUNDEDNESS: [1-10]
+AUTHENTICITY: [1-10]
+TRANSFERABILITY: [1-10]
+VOICE: [1-10]
+ENGAGEMENT_POTENTIAL: [1-10]
 BEST_FEEDBACK: [1-2 sentences on what makes the best candidate strong]
 IMPROVEMENT: [1-2 sentences on how the best candidate could be even better — be specific]
 REJECT_REASON: [If ALL candidates are below a 6/10, explain why. Otherwise write "none"]

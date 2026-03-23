@@ -25,7 +25,9 @@ IMPORTANT - DO NOT:
 - Mention error codes, API names, or library-specific details
 - Focus on what your project does
 - Write technical documentation
-- Use vague platitudes — be specific with examples and patterns
+- Use vague platitudes
+- Invent metrics, percentages, or statistics not in the source material
+- Fabricate outcomes ("reduced by X%", "N times faster")
 
 INSTEAD focus on:
 - Patterns in how you prompt and direct AI agents
@@ -34,6 +36,8 @@ INSTEAD focus on:
 - Evaluation strategies: knowing when AI output is good enough
 - The rhythm of human-AI iteration
 - Principles that transfer across ANY project
+- Ground every claim in the source material — a truthful observation beats an impressive-sounding lie
+- You may reference: number of commits, repos involved, what was actually built
 
 The title should follow the pattern: "[Insight about AI collaboration]"
 

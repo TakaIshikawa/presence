@@ -25,7 +25,11 @@ DO NOT:
 
 INSTEAD:
 - Extract ONE transferable insight about AI-assisted development
-- Be SPECIFIC — include a concrete example, pattern, or number
+- Ground every claim in the source material below
+- You may reference: number of commits, repos involved, what was actually built
+- DO NOT invent metrics, percentages, or statistics
+- DO NOT fabricate outcomes ("reduced by X%", "N times faster")
+- A truthful observation beats an impressive-sounding lie
 - Make it valuable to someone who knows nothing about your project
 - Make someone stop scrolling
 

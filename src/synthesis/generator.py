@@ -150,6 +150,17 @@ class ContentGenerator:
 
         return candidates
 
+    def condense(self, content: str, max_chars: int = 280) -> str:
+        """Condense content to fit character limit."""
+        template = self._load_prompt("condense")
+        filled = template.format(content=content, char_count=len(content))
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=200,
+            messages=[{"role": "user", "content": filled}],
+        )
+        return response.content[0].text.strip()
+
     def generate_x_thread(
         self,
         prompts: list[str],

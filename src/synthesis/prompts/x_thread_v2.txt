@@ -32,7 +32,11 @@ INSTEAD focus on:
 - When to give AI agents more context vs. more constraints
 - How you evaluated AI outputs and iterated
 - Principles that would help ANY builder working with AI
-- Be SPECIFIC — concrete examples, patterns, or numbers
+- Ground every claim in the source material below
+- You may reference: number of commits, repos involved, what was actually built
+- DO NOT invent metrics, percentages, or statistics
+- DO NOT fabricate outcomes ("reduced by X%", "N times faster")
+- A truthful observation beats an impressive-sounding lie
 
 The reader should learn something about AI-assisted development, not about your specific project.
 

@@ -1,0 +1,8 @@
+This X post is {char_count} characters but must be under 280.
+
+POST:
+{content}
+
+Condense it to under 280 characters while preserving the core insight.
+Do NOT add new claims or metrics. Only cut.
+Output only the condensed post text.
