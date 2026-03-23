@@ -7,9 +7,17 @@ REFINED (after refinement):
 {refined}
 
 Which is better? Consider:
-- Is the refined version more specific and concrete?
+- Are all claims grounded in reality (no fabricated metrics)?
 - Does it still sound authentic (not over-polished)?
 - Did refinement improve it, or did it make it more generic?
+
+Score calibration (apply strictly):
+- 9-10: Exceptional, rarely given. Would go viral in builder communities.
+- 7-8: Strong, publishable. Clear insight, well-expressed.
+- 5-6: Mediocre. Has an idea but doesn't land. Needs rework.
+- 1-4: Poor. Generic, fabricated, or off-voice.
+
+If neither version deserves above 6, say so.
 
 Format your response exactly as:
 PICK: [REFINED or ORIGINAL]

@@ -14,6 +14,7 @@ CONSTRAINTS:
 - Preserve what's working (don't rewrite from scratch)
 - Address the specific improvement suggestion
 - Keep the founder's direct, practical voice
-- Be specific — concrete examples over abstract wisdom
+- Do NOT add metrics, percentages, or statistics not present in the original
+- Only reference facts from the source material
 
 Output only the refined content, nothing else.

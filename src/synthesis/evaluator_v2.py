@@ -11,6 +11,11 @@ from typing import Optional
 class ComparisonResult:
     ranking: list[int]
     best_score: float
+    groundedness: float
+    authenticity: float
+    transferability: float
+    voice: float
+    engagement_potential: float
     best_feedback: str
     improvement: str
     reject_reason: Optional[str]
@@ -74,6 +79,12 @@ class CrossModelEvaluator:
 
         return self._parse_response(response.content[0].text, len(candidates))
 
+    def _parse_criterion_score(self, response: str, name: str) -> float:
+        """Extract a per-criterion score from the response."""
+        pattern = rf"{name}:\s*(\d+(?:\.\d+)?)"
+        match = re.search(pattern, response)
+        return float(match.group(1)) if match else 5.0
+
     def _parse_response(self, response: str, num_candidates: int) -> ComparisonResult:
         """Parse the structured comparative evaluation response."""
         # Parse ranking
@@ -90,9 +101,17 @@ class CrossModelEvaluator:
         if not ranking:
             ranking = list(range(num_candidates))
 
-        # Parse score
-        score_match = re.search(r"BEST_SCORE:\s*(\d+(?:\.\d+)?)", response)
-        best_score = float(score_match.group(1)) if score_match else 5.0
+        # Parse per-criterion scores
+        groundedness = self._parse_criterion_score(response, "GROUNDEDNESS")
+        authenticity = self._parse_criterion_score(response, "AUTHENTICITY")
+        transferability = self._parse_criterion_score(response, "TRANSFERABILITY")
+        voice = self._parse_criterion_score(response, "VOICE")
+        engagement_potential = self._parse_criterion_score(response, "ENGAGEMENT_POTENTIAL")
+
+        # Compute weighted average — GROUNDEDNESS counts double
+        best_score = (
+            groundedness * 2 + authenticity + transferability + voice + engagement_potential
+        ) / 6
 
         # Parse feedback
         feedback_match = re.search(
@@ -113,9 +132,18 @@ class CrossModelEvaluator:
         reject_text = reject_match.group(1).strip() if reject_match else "none"
         reject_reason = None if reject_text.lower() == "none" else reject_text
 
+        # Auto-reject if groundedness is critically low
+        if groundedness <= 3.0 and reject_reason is None:
+            reject_reason = f"Groundedness score too low ({groundedness}/10) — likely contains fabricated claims"
+
         return ComparisonResult(
             ranking=ranking,
             best_score=best_score,
+            groundedness=groundedness,
+            authenticity=authenticity,
+            transferability=transferability,
+            voice=voice,
+            engagement_potential=engagement_potential,
             best_feedback=best_feedback,
             improvement=improvement,
             reject_reason=reject_reason,
