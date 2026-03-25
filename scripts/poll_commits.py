@@ -250,6 +250,12 @@ def _update_monitoring():
         script_path = Path(__file__).parent / "check_poll_health.sh"
         if script_path.exists():
             subprocess.run([str(script_path)], check=False, capture_output=True)
+        sync_script = Path(__file__).parent / "update_operations_state.py"
+        if sync_script.exists():
+            subprocess.run(
+                [sys.executable, str(sync_script), "--operation", "run-poll"],
+                check=False, capture_output=True,
+            )
     except Exception as e:
         print(f"Warning: Could not update monitoring state: {e}")
 

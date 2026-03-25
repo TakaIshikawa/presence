@@ -2,6 +2,7 @@
 """Generate and publish weekly blog post via multi-stage pipeline."""
 
 import sys
+import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -136,7 +137,21 @@ def main():
         print(result.final_content[:500] + "...")
 
     db.close()
+    _update_monitoring()
     print("Done")
+
+
+def _update_monitoring():
+    """Sync run state to operations.yaml for tact maintainer monitoring."""
+    try:
+        sync_script = Path(__file__).parent / "update_operations_state.py"
+        if sync_script.exists():
+            subprocess.run(
+                [sys.executable, str(sync_script), "--operation", "run-weekly"],
+                check=False, capture_output=True,
+            )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
