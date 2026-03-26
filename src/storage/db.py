@@ -44,6 +44,9 @@ class Database:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN tweet_id TEXT")
         if "published_at" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN published_at TEXT")
+        if "curation_quality" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN curation_quality TEXT")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_curation ON generated_content(curation_quality)")
         self.conn.commit()
 
     # Claude messages
@@ -290,9 +293,36 @@ class Database:
                    FROM post_engagement
                ) pe ON pe.content_id = gc.id AND pe.rn = 1
                WHERE gc.published = 1 AND gc.content_type = ?
+                 AND COALESCE(gc.curation_quality, '') != 'too_specific'
                ORDER BY pe.engagement_score DESC
                LIMIT ?""",
             (content_type, limit)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    # Curation
+    def set_curation_quality(self, content_id: int, quality: str) -> None:
+        """Flag a post's curation quality ('good', 'too_specific', or None to clear)."""
+        self.conn.execute(
+            "UPDATE generated_content SET curation_quality = ? WHERE id = ?",
+            (quality, content_id)
+        )
+        self.conn.commit()
+
+    def get_curated_posts(
+        self,
+        quality: str,
+        content_type: str = "x_post",
+        limit: int = 5,
+    ) -> list[dict]:
+        """Get posts flagged with a specific curation quality."""
+        cursor = self.conn.execute(
+            """SELECT id, content, eval_score, curation_quality
+               FROM generated_content
+               WHERE curation_quality = ? AND content_type = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (quality, content_type, limit)
         )
         return [dict(row) for row in cursor.fetchall()]
 

@@ -55,6 +55,7 @@ class SynthesisPipeline:
             gate_api_key=api_key,
             gate_model=evaluator_model,
         )
+        self.db = db
         self.few_shot_selector = FewShotSelector(db)
         self.num_candidates = num_candidates
 
@@ -106,9 +107,16 @@ class SynthesisPipeline:
         """Execute the full multi-stage pipeline."""
         batch_id = str(uuid.uuid4())[:8]
 
+        # Stage 0: Load curation signals
+        too_specific_posts = self.db.get_curated_posts(
+            quality="too_specific", content_type=content_type, limit=5
+        )
+        negative_examples = [p["content"] for p in too_specific_posts]
+        exclude_ids = {p["id"] for p in too_specific_posts}
+
         # Stage 1: Few-shot retrieval
         examples = self.few_shot_selector.get_examples(
-            content_type=content_type, limit=3
+            content_type=content_type, limit=3, exclude_ids=exclude_ids
         )
         few_shot_text = self.few_shot_selector.format_examples(examples)
         reference_examples = [ex.content for ex in examples] if examples else None
@@ -134,6 +142,7 @@ class SynthesisPipeline:
             source_prompts=prompts,
             source_commits=[c["message"] for c in commits],
             reference_examples=reference_examples,
+            negative_examples=negative_examples or None,
         )
 
         best_idx = comparison.ranking[0] if comparison.ranking else 0

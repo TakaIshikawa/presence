@@ -13,7 +13,7 @@ AGENTS=(
 )
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|knowledge}"
+    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|knowledge|curate}"
     echo ""
     echo "Commands:"
     echo "  start     - Load and start all automation jobs"
@@ -24,6 +24,7 @@ usage() {
     echo "  run       - Run a specific job now (poll|daily|weekly)"
     echo "  retry     - Retry posting unpublished content"
     echo "  knowledge - Knowledge base commands (build|fetch|stats)"
+    echo "  curate    - Content quality curation (list|flag|clear|stats)"
     exit 1
 }
 
@@ -169,6 +170,9 @@ conn.close()
                 exit 1
                 ;;
         esac
+        ;;
+    curate)
+        cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/curate.py "${@:2}"
         ;;
     *)
         usage

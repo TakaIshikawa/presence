@@ -8,6 +8,7 @@ The founder's voice characteristics:
 - Direct, no fluff
 
 {reference_section}
+{negative_examples_section}
 ---
 
 CANDIDATES TO EVALUATE:

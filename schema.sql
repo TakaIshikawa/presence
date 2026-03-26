@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS generated_content (
     published_at TEXT,
     retry_count INTEGER DEFAULT 0,
     last_retry_at TEXT,
+    curation_quality TEXT,  -- 'good', 'too_specific', or NULL (unreviewed)
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
