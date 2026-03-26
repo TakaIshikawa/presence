@@ -20,41 +20,51 @@ class FewShotSelector:
         self,
         content_type: str = "x_post",
         limit: int = 3,
+        exclude_ids: set[int] = None,
     ) -> list[FewShotExample]:
         """Get top-performing posts as few-shot examples.
 
         Uses engagement data when available, falls back to eval scores.
+        Excludes posts flagged as too_specific via exclude_ids.
         """
         # Try engagement-ranked posts first
         top_posts = self.db.get_top_performing_posts(limit=limit, content_type=content_type)
 
         if top_posts:
-            return [
+            examples = [
                 FewShotExample(
                     content=p["content"],
                     engagement_score=p["engagement_score"],
                 )
                 for p in top_posts
+                if not exclude_ids or p["id"] not in exclude_ids
             ]
+            if examples:
+                return examples[:limit]
 
         # Cold start: fall back to highest eval scores among published posts
-        return self._fallback_by_eval_score(content_type, limit)
+        return self._fallback_by_eval_score(content_type, limit, exclude_ids)
 
     def _fallback_by_eval_score(
-        self, content_type: str, limit: int
+        self, content_type: str, limit: int, exclude_ids: set[int] = None
     ) -> list[FewShotExample]:
         """Fallback: select examples by eval score when no engagement data exists."""
         cursor = self.db.conn.execute(
-            """SELECT content, eval_score FROM generated_content
+            """SELECT id, content, eval_score FROM generated_content
                WHERE content_type = ? AND published = 1
+                 AND COALESCE(curation_quality, '') != 'too_specific'
                ORDER BY eval_score DESC
                LIMIT ?""",
-            (content_type, limit),
+            (content_type, limit + (len(exclude_ids) if exclude_ids else 0)),
         )
-        return [
-            FewShotExample(content=row["content"], engagement_score=0.0)
-            for row in cursor.fetchall()
-        ]
+        examples = []
+        for row in cursor.fetchall():
+            if exclude_ids and row["id"] in exclude_ids:
+                continue
+            examples.append(FewShotExample(content=row["content"], engagement_score=0.0))
+            if len(examples) >= limit:
+                break
+        return examples
 
     def format_examples(self, examples: list[FewShotExample]) -> str:
         """Format examples for injection into a generation prompt."""

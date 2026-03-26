@@ -39,12 +39,54 @@ class CrossModelEvaluator:
         prompt_file = self.PROMPTS_DIR / "evaluator_comparative.txt"
         return prompt_file.read_text()
 
+    STATIC_NEGATIVE_EXAMPLES = [
+        (
+            "Built termination detection with JSON fallback parsing when structured responses fail.",
+            "Uses implementation-specific jargon (\"JSON fallback parsing\", \"termination detection\") "
+            "that only makes sense to someone reading this codebase."
+        ),
+        (
+            "Added consolidation tracking, auto-restart hooks, and error handling across 4 commits.",
+            "Lists internal features (\"consolidation tracking\", \"auto-restart hooks\") as if they're insights. "
+            "This is a changelog, not a transferable observation."
+        ),
+        (
+            "Assignment preservation, session boundaries, and state transitions matter more than prompt engineering.",
+            "\"Assignment preservation\" and \"session boundaries\" are project-internal concepts. "
+            "The reader has no idea what assignments are being preserved or why."
+        ),
+    ]
+
+    def _build_negative_section(self, negative_examples: list[str] = None) -> str:
+        """Build the negative examples section from curated posts and static seeds."""
+        items = []
+
+        # Use curated posts if available
+        if negative_examples:
+            for ex in negative_examples[:3]:
+                items.append(f"- \"{ex}\"\n  Problem: Contains project-specific jargon that is meaningless to outside readers.")
+
+        # Fill remaining slots with static examples
+        remaining = 3 - len(items)
+        for content, annotation in self.STATIC_NEGATIVE_EXAMPLES[:remaining]:
+            items.append(f"- \"{content}\"\n  Problem: {annotation}")
+
+        if not items:
+            return ""
+
+        return (
+            "NEGATIVE EXAMPLES — posts that scored well but were TOO SPECIFIC for the audience. "
+            "Penalize candidates that follow these patterns:\n\n"
+            + "\n\n".join(items)
+        )
+
     def evaluate(
         self,
         candidates: list[str],
         source_prompts: list[str],
         source_commits: list[str],
         reference_examples: list[str] = None,
+        negative_examples: list[str] = None,
     ) -> ComparisonResult:
         """Evaluate multiple candidates comparatively and return ranking with feedback."""
         template = self._load_prompt()
@@ -64,11 +106,14 @@ class CrossModelEvaluator:
         else:
             reference_section = ""
 
+        negative_examples_section = self._build_negative_section(negative_examples)
+
         filled = template.format(
             candidates=candidates_text,
             source_prompts="\n".join(f"- {p[:500]}" for p in source_prompts[:5]),
             source_commits="\n".join(f"- {c}" for c in source_commits[:10]),
             reference_section=reference_section,
+            negative_examples_section=negative_examples_section,
         )
 
         response = self.client.messages.create(
