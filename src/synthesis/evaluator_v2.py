@@ -13,7 +13,7 @@ class ComparisonResult:
     best_score: float
     groundedness: float
     authenticity: float
-    transferability: float
+    narrative_specificity: float
     voice: float
     engagement_potential: float
     best_feedback: str
@@ -149,13 +149,13 @@ class CrossModelEvaluator:
         # Parse per-criterion scores
         groundedness = self._parse_criterion_score(response, "GROUNDEDNESS")
         authenticity = self._parse_criterion_score(response, "AUTHENTICITY")
-        transferability = self._parse_criterion_score(response, "TRANSFERABILITY")
+        narrative_specificity = self._parse_criterion_score(response, "NARRATIVE_SPECIFICITY")
         voice = self._parse_criterion_score(response, "VOICE")
         engagement_potential = self._parse_criterion_score(response, "ENGAGEMENT_POTENTIAL")
 
         # Compute weighted average — GROUNDEDNESS counts double
         best_score = (
-            groundedness * 2 + authenticity + transferability + voice + engagement_potential
+            groundedness * 2 + authenticity + narrative_specificity + voice + engagement_potential
         ) / 6
 
         # Parse feedback
@@ -186,7 +186,7 @@ class CrossModelEvaluator:
             best_score=best_score,
             groundedness=groundedness,
             authenticity=authenticity,
-            transferability=transferability,
+            narrative_specificity=narrative_specificity,
             voice=voice,
             engagement_potential=engagement_potential,
             best_feedback=best_feedback,

@@ -30,7 +30,8 @@ polling:
   daily_digest_hour: 23
   weekly_digest_day: "sunday"
   readiness_token_threshold: 500  # min accumulated tokens before triggering pipeline
-  max_post_gap_hours: 6  # force pipeline after this many hours without posting
+  max_post_gap_hours: 12  # force pipeline after this many hours without posting
+  max_daily_posts: 3  # cap x_posts per day to prioritize quality over volume
 
 # Embeddings for semantic search
 embeddings:

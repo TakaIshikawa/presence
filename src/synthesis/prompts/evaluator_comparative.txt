@@ -36,11 +36,16 @@ Rank these candidates from best to worst. For each candidate, assess:
 
 2. AUTHENTICITY: Does it sound like a real builder sharing a discovery, not polished marketing copy?
 
-3. TRANSFERABILITY: Would someone outside this project learn something actionable?
+3. NARRATIVE_SPECIFICITY: Does the post tell a concrete story from the work?
+   - Score HIGH: Names what went wrong, what was tried, what was learned — grounded in the source material
+   - Score LOW: Abstract aphorism that could apply to anything ("AI isn't about X—it's about Y")
+   - PENALIZE: Posts that state a conclusion without showing the journey that led to it
 
 4. VOICE: Does it match the founder's direct, practical, no-fluff style?
 
-5. ENGAGEMENT_POTENTIAL: Would you stop scrolling to read this? Does it provoke thought or a reaction?
+5. ENGAGEMENT_POTENTIAL: Would another builder recognize this situation from their own experience?
+   - Score HIGH: Describes a universal problem through a specific lens — "I spent 3 hours on X"
+   - Score LOW: Generic wisdom that's technically true but provokes no reaction
 
 Score calibration (apply strictly):
 - 9-10: Exceptional, rarely given. Would go viral in builder communities.
@@ -53,7 +58,7 @@ Provide your evaluation in this exact format:
 RANKING: [best letter], [second letter], [worst letter]
 GROUNDEDNESS: [1-10]
 AUTHENTICITY: [1-10]
-TRANSFERABILITY: [1-10]
+NARRATIVE_SPECIFICITY: [1-10]
 VOICE: [1-10]
 ENGAGEMENT_POTENTIAL: [1-10]
 BEST_FEEDBACK: [1-2 sentences on what makes the best candidate strong]

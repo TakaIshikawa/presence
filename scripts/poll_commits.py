@@ -117,6 +117,17 @@ def main():
         print("No new commits")
 
     # --- Phase 2: Readiness check ---
+    # Daily post cap
+    posts_today = db.count_posts_today("x_post")
+    max_daily = config.polling.max_daily_posts
+    if posts_today >= max_daily:
+        print(f"Daily post limit reached ({posts_today}/{max_daily}), waiting for tomorrow")
+        db.set_last_poll_time(current_poll_time)
+        _update_monitoring()
+        db.close()
+        print("Done. No posts made.")
+        return
+
     last_post_time = db.get_last_published_time("x_post")
     now = datetime.now(timezone.utc)
 
