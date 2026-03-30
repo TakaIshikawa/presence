@@ -22,6 +22,10 @@ DO NOT:
 - Mention specific error codes, API names, or implementation details
 - Write a changelog or status update
 - Write vague platitudes ("the best AI workflows aren't about perfect prompts")
+- Start with "AI [X] isn't about [Y]—it's about [Z]" or any variant of this contrast structure
+- Use the word "breakthrough" in the opening
+- Mirror the structure of your reference examples — use them for QUALITY calibration, not as templates
+- Open with the same sentence pattern as any typical AI thought-leadership post
 
 INSTEAD:
 - Extract ONE transferable insight about AI-assisted development

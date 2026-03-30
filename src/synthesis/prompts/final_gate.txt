@@ -11,14 +11,18 @@ Which is better? Consider:
 - Does it still sound authentic (not over-polished)?
 - Did refinement improve it, or did it make it more generic?
 
-Score calibration (apply strictly):
-- 9-10: Exceptional, rarely given. Would go viral in builder communities.
-- 7-8: Strong, publishable. Clear insight, well-expressed.
-- 5-6: Mediocre. Has an idea but doesn't land. Needs rework.
-- 1-4: Poor. Generic, fabricated, or off-voice.
+Score on a 1-10 scale using HALF-POINT precision (e.g., 6.5, 7.5, 8.0):
+- 9.0+: Exceptional. Would go viral in builder communities.
+- 8.0-8.5: Very strong. Clear insight, sharp writing, makes you think.
+- 7.0-7.5: Solid but not remarkable. Publishable.
+- 6.0-6.5: Mediocre. Has potential but doesn't land.
+- 5.0-5.5: Weak. Generic or unclear.
+- Below 5: Poor. Fabricated, off-voice, or pointless.
+
+Use the full range. Most posts should NOT score 7.0 — differentiate between a merely adequate post (6.5) and a genuinely strong one (8.0).
 
 If neither version deserves above 6, say so.
 
 Format your response exactly as:
 PICK: [REFINED or ORIGINAL]
-SCORE: [1-10]
+SCORE: [number with half-point precision, e.g. 7.5]
