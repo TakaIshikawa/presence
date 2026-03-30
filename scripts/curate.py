@@ -14,7 +14,7 @@ VALID_FLAGS = ("good", "too_specific")
 def cmd_list(db: Database, content_type: str = "x_post"):
     """Show recent published posts with curation status."""
     cursor = db.conn.execute(
-        """SELECT id, content, eval_score, curation_quality, published_at
+        """SELECT id, content, eval_score, curation_quality, auto_quality, published_at
            FROM generated_content
            WHERE content_type = ? AND published = 1
            ORDER BY published_at DESC
@@ -27,11 +27,12 @@ def cmd_list(db: Database, content_type: str = "x_post"):
         return
 
     for row in rows:
-        flag = row["curation_quality"] or "-"
-        preview = row["content"][:80].replace("\n", " ")
+        manual = row["curation_quality"] or "-"
+        auto = row["auto_quality"] or "-"
+        preview = row["content"][:70].replace("\n", " ")
         score = row["eval_score"] or 0
         date = (row["published_at"] or "")[:10]
-        print(f"  [{row['id']:>3}] [{flag:<13}] {score:.1f}  {date}  {preview}...")
+        print(f"  [{row['id']:>3}] m:{manual:<13} a:{auto:<14} {score:.1f}  {date}  {preview}...")
 
 
 def cmd_flag(db: Database, content_id: int, quality: str):
@@ -61,6 +62,7 @@ def cmd_clear(db: Database, content_id: int):
 
 def cmd_stats(db: Database):
     """Show curation statistics."""
+    # Manual curation
     cursor = db.conn.execute(
         """SELECT
              COALESCE(curation_quality, 'unreviewed') AS quality,
@@ -70,7 +72,21 @@ def cmd_stats(db: Database):
            GROUP BY curation_quality
            ORDER BY count DESC"""
     )
-    print("Curation stats (published posts):")
+    print("Manual curation (published posts):")
+    for row in cursor.fetchall():
+        print(f"  {row['quality']:<15} {row['count']}")
+
+    # Auto-classification
+    cursor = db.conn.execute(
+        """SELECT
+             COALESCE(auto_quality, 'pending') AS quality,
+             COUNT(*) AS count
+           FROM generated_content
+           WHERE published = 1
+           GROUP BY auto_quality
+           ORDER BY count DESC"""
+    )
+    print("\nAuto-classification (engagement-based):")
     for row in cursor.fetchall():
         print(f"  {row['quality']:<15} {row['count']}")
 

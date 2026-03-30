@@ -57,25 +57,40 @@ class CrossModelEvaluator:
         ),
     ]
 
-    def _build_negative_section(self, negative_examples: list[str] = None) -> str:
-        """Build the negative examples section from curated posts and static seeds."""
+    ANNOTATION_BY_SOURCE = {
+        "too_specific": "Scored well in evaluation but contains project-specific jargon meaningless to outside readers.",
+        "low_resonance": "Scored well in evaluation but got zero audience engagement — likely too generic or abstract to provoke a reaction.",
+    }
+
+    def _build_negative_section(self, negative_examples: list = None) -> str:
+        """Build the negative examples section from curated/auto-classified posts and static seeds.
+
+        negative_examples can be:
+        - list of (content, source) tuples where source is 'too_specific' or 'low_resonance'
+        - list of plain strings (legacy, treated as 'too_specific')
+        """
         items = []
 
-        # Use curated posts if available
         if negative_examples:
-            for ex in negative_examples[:3]:
-                items.append(f"- \"{ex}\"\n  Problem: Contains project-specific jargon that is meaningless to outside readers.")
+            for ex in negative_examples[:5]:
+                if isinstance(ex, tuple):
+                    content, source = ex
+                    annotation = self.ANNOTATION_BY_SOURCE.get(source, self.ANNOTATION_BY_SOURCE["too_specific"])
+                else:
+                    content, annotation = ex, self.ANNOTATION_BY_SOURCE["too_specific"]
+                items.append(f"- \"{content}\"\n  Problem: {annotation}")
 
         # Fill remaining slots with static examples
         remaining = 3 - len(items)
-        for content, annotation in self.STATIC_NEGATIVE_EXAMPLES[:remaining]:
-            items.append(f"- \"{content}\"\n  Problem: {annotation}")
+        if remaining > 0:
+            for content, annotation in self.STATIC_NEGATIVE_EXAMPLES[:remaining]:
+                items.append(f"- \"{content}\"\n  Problem: {annotation}")
 
         if not items:
             return ""
 
         return (
-            "NEGATIVE EXAMPLES — posts that scored well but were TOO SPECIFIC for the audience. "
+            "NEGATIVE EXAMPLES — posts that scored well but failed with real audiences. "
             "Penalize candidates that follow these patterns:\n\n"
             + "\n\n".join(items)
         )

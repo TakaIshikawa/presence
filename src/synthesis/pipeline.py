@@ -143,8 +143,21 @@ class SynthesisPipeline:
         too_specific_posts = self.db.get_curated_posts(
             quality="too_specific", content_type=content_type, limit=5
         )
-        negative_examples = [p["content"] for p in too_specific_posts]
-        exclude_ids = {p["id"] for p in too_specific_posts}
+        low_resonance_posts = self.db.get_auto_classified_posts(
+            quality="low_resonance", content_type=content_type, limit=3
+        )
+
+        # Build negative examples with source annotations for the evaluator
+        negative_examples = []
+        for p in too_specific_posts:
+            negative_examples.append((p["content"], "too_specific"))
+        for p in low_resonance_posts:
+            negative_examples.append((p["content"], "low_resonance"))
+
+        exclude_ids = (
+            {p["id"] for p in too_specific_posts}
+            | {p["id"] for p in low_resonance_posts}
+        )
 
         # Stage 1: Few-shot retrieval
         examples = self.few_shot_selector.get_examples(
