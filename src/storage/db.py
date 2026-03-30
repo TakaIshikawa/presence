@@ -300,6 +300,16 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def count_posts_today(self, content_type: str = "x_post") -> int:
+        """Count posts published today (UTC)."""
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) FROM generated_content
+               WHERE content_type = ? AND published = 1
+                 AND published_at >= datetime('now', 'start of day')""",
+            (content_type,)
+        )
+        return cursor.fetchone()[0]
+
     def get_recent_published_content(
         self,
         content_type: str = "x_post",

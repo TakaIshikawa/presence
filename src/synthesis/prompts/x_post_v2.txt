@@ -12,10 +12,11 @@ The founder's voice characteristics:
 
 Given {commit_count} recent commits and the Claude Code prompts that drove them, synthesize ONE powerful X post (max 280 characters).
 
-IMPORTANT - Find the CONNECTING THREAD:
-- What's the deeper insight that ties these commits together?
-- What did you learn about orchestrating AI agents across this session?
-- What pattern or principle emerged from this work?
+IMPORTANT - Tell a SPECIFIC STORY:
+- What concrete problem did you hit during this work?
+- What surprised you or contradicted your assumption?
+- What did you try first, and why did you change approach?
+- What moment of "aha" or "wait, that's wrong" happened?
 
 DO NOT:
 - List what was done ("Fixed X, added Y, updated Z")
@@ -26,16 +27,14 @@ DO NOT:
 - Use the word "breakthrough" in the opening
 - Mirror the structure of your reference examples — use them for QUALITY calibration, not as templates
 - Open with the same sentence pattern as any typical AI thought-leadership post
+- State a conclusion without showing the journey that led to it
 
 INSTEAD:
-- Extract ONE transferable insight about AI-assisted development
-- Ground every claim in the source material below
-- You may reference: number of commits, repos involved, what was actually built
-- DO NOT invent metrics, percentages, or statistics
-- DO NOT fabricate outcomes ("reduced by X%", "N times faster")
-- A truthful observation beats an impressive-sounding lie
-- Make it valuable to someone who knows nothing about your project
-- Make someone stop scrolling
+- Share a specific moment of discovery: "I tried X, realized Y, so I did Z"
+- Use concrete details from the source material — real repos, real errors, real decisions
+- The insight should emerge FROM the story, not replace it
+- Write like you're telling a colleague what happened today, not posting a thought-leadership take
+- Make someone stop scrolling because they recognize the situation, not because the insight sounds clever
 
 Output only the post text, nothing else.
 
