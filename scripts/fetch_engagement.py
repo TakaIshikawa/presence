@@ -147,6 +147,12 @@ def main():
                 f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}"
             )
 
+    # Auto-classify posts that have settled (>= 48h old)
+    classified = db.auto_classify_posts(min_age_hours=48)
+    if classified["resonated"] or classified["low_resonance"]:
+        print(f"\nAuto-classified: {classified['resonated']} resonated, "
+              f"{classified['low_resonance']} low_resonance")
+
     db.close()
     print(f"\nDone. Fetched metrics for {fetched} posts.")
 

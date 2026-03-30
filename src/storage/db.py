@@ -47,6 +47,9 @@ class Database:
         if "curation_quality" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN curation_quality TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_curation ON generated_content(curation_quality)")
+        if "auto_quality" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN auto_quality TEXT")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_auto_quality ON generated_content(auto_quality)")
         self.conn.commit()
 
     # Claude messages
@@ -294,6 +297,7 @@ class Database:
                ) pe ON pe.content_id = gc.id AND pe.rn = 1
                WHERE gc.published = 1 AND gc.content_type = ?
                  AND COALESCE(gc.curation_quality, '') != 'too_specific'
+                 AND COALESCE(gc.auto_quality, '') != 'low_resonance'
                ORDER BY pe.engagement_score DESC
                LIMIT ?""",
             (content_type, limit)
@@ -346,6 +350,62 @@ class Database:
             """SELECT id, content, eval_score, curation_quality
                FROM generated_content
                WHERE curation_quality = ? AND content_type = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (quality, content_type, limit)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    # Auto-classification
+    def auto_classify_posts(self, min_age_hours: int = 48) -> dict:
+        """Auto-classify published posts based on engagement after settling period.
+
+        Posts >= min_age_hours old with auto_quality IS NULL get classified:
+        - 'resonated' if latest engagement_score > 0
+        - 'low_resonance' if latest engagement_score == 0
+        """
+        cursor = self.conn.execute(
+            """SELECT gc.id, gc.content,
+                      COALESCE(pe.engagement_score, 0) AS latest_score
+               FROM generated_content gc
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               WHERE gc.published = 1
+                 AND gc.auto_quality IS NULL
+                 AND gc.published_at IS NOT NULL
+                 AND gc.published_at <= datetime('now', ?)""",
+            (f'-{min_age_hours} hours',)
+        )
+
+        results = {"resonated": 0, "low_resonance": 0}
+        for row in cursor.fetchall():
+            quality = "resonated" if row[2] > 0 else "low_resonance"
+            self.conn.execute(
+                "UPDATE generated_content SET auto_quality = ? WHERE id = ?",
+                (quality, row[0])
+            )
+            results[quality] += 1
+
+        if results["resonated"] or results["low_resonance"]:
+            self.conn.commit()
+        return results
+
+    def get_auto_classified_posts(
+        self,
+        quality: str,
+        content_type: str = "x_post",
+        limit: int = 3,
+    ) -> list[dict]:
+        """Get posts with a specific auto_quality classification."""
+        cursor = self.conn.execute(
+            """SELECT id, content, eval_score, auto_quality
+               FROM generated_content
+               WHERE auto_quality = ? AND content_type = ?
                ORDER BY created_at DESC
                LIMIT ?""",
             (quality, content_type, limit)
