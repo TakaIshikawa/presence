@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Poll for new commits and generate X posts when enough material accumulates."""
 
+import signal
 import sys
 import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+
+WATCHDOG_TIMEOUT = 600  # 10 minutes
+
+
+def _timeout_handler(signum, frame):
+    print("WATCHDOG: Poll process exceeded 10-minute timeout, exiting")
+    sys.exit(1)
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -23,6 +31,9 @@ def estimate_tokens(texts: list[str]) -> int:
 
 
 def main():
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(WATCHDOG_TIMEOUT)
+
     config = load_config()
 
     # Initialize components

@@ -1,7 +1,9 @@
 """Multi-stage synthesis pipeline for content generation."""
 
+import re
 import uuid
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import Optional
 
 from storage.db import Database
@@ -63,6 +65,36 @@ class SynthesisPipeline:
     CHAR_LIMITS = {
         "x_post": 280,
     }
+
+    @staticmethod
+    def _extract_opening(text: str, max_len: int = 50) -> str:
+        """Extract the opening clause of a post for repetition comparison."""
+        # Split on em-dash, colon, or period — whichever comes first
+        match = re.split(r'[—:\.]', text, maxsplit=1)
+        opening = match[0].strip().lower() if match else text[:max_len].lower()
+        return opening[:max_len]
+
+    def _filter_repetitive(self, candidates: list[str], content_type: str) -> list[str]:
+        """Remove candidates whose opening is too similar to recent posts."""
+        recent = self.db.get_recent_published_content(content_type, limit=10)
+        if not recent:
+            return candidates
+
+        recent_openings = [self._extract_opening(p["content"]) for p in recent]
+
+        filtered = []
+        for candidate in candidates:
+            opening = self._extract_opening(candidate)
+            is_repetitive = any(
+                SequenceMatcher(None, opening, ro).ratio() > 0.6
+                for ro in recent_openings
+            )
+            if is_repetitive:
+                print(f"  Rejected as repetitive: {opening[:40]}...")
+            else:
+                filtered.append(candidate)
+
+        return filtered if filtered else candidates[:1]  # keep at least one
 
     def _enforce_char_limit(self, candidates: list[str], max_chars: int) -> list[str]:
         """Validate and condense candidates that exceed character limit."""
@@ -136,6 +168,9 @@ class SynthesisPipeline:
         if char_limit:
             candidate_texts = self._enforce_char_limit(candidate_texts, char_limit)
 
+        # Stage 2.6: Repetition filter
+        candidate_texts = self._filter_repetitive(candidate_texts, content_type)
+
         # Stage 3: Cross-model evaluation
         comparison = self.evaluator.evaluate(
             candidates=candidate_texts,
@@ -166,7 +201,9 @@ class SynthesisPipeline:
                 content_type=content_type,
             )
             final_content = refinement.final_content
-            final_score = refinement.final_score
+            # Use the higher of gate score and evaluator score — the evaluator
+            # is more granular and the gate tends to cluster at round numbers
+            final_score = max(refinement.final_score, comparison.best_score)
 
         # Final character limit check (refinement may have expanded)
         if char_limit and len(final_content) > char_limit:

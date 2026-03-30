@@ -300,6 +300,22 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_recent_published_content(
+        self,
+        content_type: str = "x_post",
+        limit: int = 10,
+    ) -> list[dict]:
+        """Get most recently published posts by timestamp."""
+        cursor = self.conn.execute(
+            """SELECT id, content, published_at
+               FROM generated_content
+               WHERE content_type = ? AND published = 1
+               ORDER BY published_at DESC
+               LIMIT ?""",
+            (content_type, limit)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     # Curation
     def set_curation_quality(self, content_id: int, quality: str) -> None:
         """Flag a post's curation quality ('good', 'too_specific', or None to clear)."""
