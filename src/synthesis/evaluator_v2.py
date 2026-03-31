@@ -12,7 +12,7 @@ class ComparisonResult:
     ranking: list[int]
     best_score: float
     groundedness: float
-    authenticity: float
+    rawness: float
     narrative_specificity: float
     voice: float
     engagement_potential: float
@@ -95,6 +95,32 @@ class CrossModelEvaluator:
             + "\n\n".join(items)
         )
 
+    @staticmethod
+    def _build_calibration_section(
+        resonated: list[dict] = None,
+        low_resonance: list[dict] = None,
+    ) -> str:
+        """Build engagement calibration section from real audience data."""
+        if not resonated and not low_resonance:
+            return ""
+
+        lines = [
+            "ENGAGEMENT REALITY CHECK — calibrate your scoring with real audience data:"
+        ]
+        if resonated:
+            lines.append("\nPosts that GOT engagement (likes/replies/retweets):")
+            for p in resonated[:3]:
+                lines.append(f"- \"{p['content'][:200]}\"")
+        if low_resonance:
+            lines.append("\nPosts that got ZERO engagement (audience scrolled past):")
+            for p in low_resonance[:3]:
+                lines.append(f"- \"{p['content'][:200]}\"")
+        lines.append(
+            "\nUse these to calibrate: if a candidate resembles the zero-engagement "
+            "posts, score ENGAGEMENT_POTENTIAL 5 or below regardless of writing quality."
+        )
+        return "\n".join(lines)
+
     def evaluate(
         self,
         candidates: list[str],
@@ -102,6 +128,8 @@ class CrossModelEvaluator:
         source_commits: list[str],
         reference_examples: list[str] = None,
         negative_examples: list[str] = None,
+        calibration_resonated: list[dict] = None,
+        calibration_low_resonance: list[dict] = None,
     ) -> ComparisonResult:
         """Evaluate multiple candidates comparatively and return ranking with feedback."""
         template = self._load_prompt()
@@ -122,6 +150,9 @@ class CrossModelEvaluator:
             reference_section = ""
 
         negative_examples_section = self._build_negative_section(negative_examples)
+        engagement_calibration_section = self._build_calibration_section(
+            calibration_resonated, calibration_low_resonance
+        )
 
         filled = template.format(
             candidates=candidates_text,
@@ -129,6 +160,7 @@ class CrossModelEvaluator:
             source_commits="\n".join(f"- {c}" for c in source_commits[:10]),
             reference_section=reference_section,
             negative_examples_section=negative_examples_section,
+            engagement_calibration_section=engagement_calibration_section,
         )
 
         response = self.client.messages.create(
@@ -162,15 +194,15 @@ class CrossModelEvaluator:
             ranking = list(range(num_candidates))
 
         # Parse per-criterion scores
-        groundedness = self._parse_criterion_score(response, "GROUNDEDNESS")
-        authenticity = self._parse_criterion_score(response, "AUTHENTICITY")
-        narrative_specificity = self._parse_criterion_score(response, "NARRATIVE_SPECIFICITY")
-        voice = self._parse_criterion_score(response, "VOICE")
         engagement_potential = self._parse_criterion_score(response, "ENGAGEMENT_POTENTIAL")
+        groundedness = self._parse_criterion_score(response, "GROUNDEDNESS")
+        narrative_specificity = self._parse_criterion_score(response, "NARRATIVE_SPECIFICITY")
+        rawness = self._parse_criterion_score(response, "RAWNESS")
+        voice = self._parse_criterion_score(response, "VOICE")
 
-        # Compute weighted average — GROUNDEDNESS counts double
+        # Compute weighted average — ENGAGEMENT_POTENTIAL counts double
         best_score = (
-            groundedness * 2 + authenticity + narrative_specificity + voice + engagement_potential
+            engagement_potential * 2 + groundedness + narrative_specificity + rawness + voice
         ) / 6
 
         # Parse feedback
@@ -200,7 +232,7 @@ class CrossModelEvaluator:
             ranking=ranking,
             best_score=best_score,
             groundedness=groundedness,
-            authenticity=authenticity,
+            rawness=rawness,
             narrative_specificity=narrative_specificity,
             voice=voice,
             engagement_potential=engagement_potential,
