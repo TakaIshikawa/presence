@@ -12,6 +12,8 @@ The founder's voice characteristics:
 
 Given {commit_count} recent commits and the Claude Code prompts that drove them, synthesize ONE powerful X post (max 280 characters).
 
+{format_directive}
+
 IMPORTANT - Tell a SPECIFIC STORY:
 - What concrete problem did you hit during this work?
 - What surprised you or contradicted your assumption?

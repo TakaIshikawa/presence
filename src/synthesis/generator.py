@@ -99,8 +99,9 @@ class ContentGenerator:
         content_type: str = "x_post",
         few_shot_examples: str = "",
         num_candidates: int = 3,
+        format_directives: list[str] | None = None,
     ) -> list[GeneratedContent]:
-        """Generate multiple candidates with temperature variation for diversity."""
+        """Generate multiple candidates with temperature and format variation."""
         type_config = self.CONTENT_TYPE_CONFIG.get(
             content_type, self.CONTENT_TYPE_CONFIG["x_post"]
         )
@@ -122,17 +123,23 @@ class ContentGenerator:
         else:
             few_shot_section = ""
 
-        filled = template.format(
-            prompts=prompts_text,
-            commits=commits_text,
-            commit_count=len(commits),
-            few_shot_section=few_shot_section,
-        )
-
         temperatures = [0.5, 0.7, 0.9][:num_candidates]
         candidates = []
 
-        for temp in temperatures:
+        for i, temp in enumerate(temperatures):
+            # Each candidate gets a different format directive
+            format_directive = ""
+            if format_directives and i < len(format_directives):
+                format_directive = format_directives[i]
+
+            filled = template.format(
+                prompts=prompts_text,
+                commits=commits_text,
+                commit_count=len(commits),
+                few_shot_section=few_shot_section,
+                format_directive=format_directive,
+            )
+
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,

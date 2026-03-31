@@ -8,6 +8,7 @@ The founder's voice characteristics:
 - Direct, reflective, shares both wins and struggles
 
 {few_shot_section}
+{format_directive}
 ---
 
 Given: A week's worth of prompts (their intent) and commits (what they built).

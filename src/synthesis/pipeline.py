@@ -1,5 +1,6 @@
 """Multi-stage synthesis pipeline for content generation."""
 
+import random
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -40,6 +41,49 @@ class SynthesisPipeline:
     SKIP_REFINE_ABOVE = 9.0
     # Skip refinement if score is too low to be worth refining
     SKIP_REFINE_BELOW = 5.0
+
+    # Overused rhetorical patterns to reject
+    STALE_PATTERNS = [
+        re.compile(r"(?i)^AI\s"),
+        re.compile(r"(?i)isn.t about .{5,40}[—\-].{0,5}it.s about"),
+        re.compile(r"(?i)\bbreakthrough\b"),
+        re.compile(r"(?i)perfect (prompts?|memory|agents?|handoffs?|context)"),
+        re.compile(r"\d+ commits? across \d+"),
+    ]
+
+    # Post format directives for structural variety
+    POST_FORMATS = [
+        (
+            "micro_story",
+            "FORMAT: Micro-story. Start in the middle of the action. "
+            "'I was debugging X when I noticed...' or 'Three hours into refactoring, I realized...' "
+            "Show what happened — do NOT state a conclusion upfront.",
+        ),
+        (
+            "question",
+            "FORMAT: Open with a genuine question from your work today. "
+            "'Why does X always lead to Y?' or 'Has anyone else hit this?' "
+            "Then briefly share what you found. End with the question lingering.",
+        ),
+        (
+            "contrarian",
+            "FORMAT: Challenge a common belief. State what's conventionally believed, "
+            "then share what your specific experience showed differently. "
+            "'Everyone says X. I just spent 3 hours finding the opposite.'",
+        ),
+        (
+            "tip",
+            "FORMAT: One actionable tip someone can use in 5 minutes. "
+            "'Next time you hit X, try Y instead.' Ground it in what you just built. "
+            "No preamble — lead with the tip.",
+        ),
+        (
+            "observation",
+            "FORMAT: A surprising observation with no conclusion. "
+            "'Noticed something odd: when I X, Y happens consistently.' "
+            "Let the reader draw their own meaning. Resist explaining why.",
+        ),
+    ]
 
     def __init__(
         self,
@@ -95,6 +139,22 @@ class SynthesisPipeline:
                 filtered.append(candidate)
 
         return filtered if filtered else candidates[:1]  # keep at least one
+
+    def _filter_stale_patterns(self, candidates: list[str]) -> list[str]:
+        """Reject candidates matching overused rhetorical patterns."""
+        filtered = []
+        for candidate in candidates:
+            matches = [p.pattern for p in self.STALE_PATTERNS if p.search(candidate)]
+            if matches:
+                print(f"  Rejected stale pattern: {candidate[:50]}...")
+            else:
+                filtered.append(candidate)
+        return filtered if filtered else candidates[:1]
+
+    def _select_format_directives(self, num: int) -> list[str]:
+        """Select format directives for candidate generation, favoring variety."""
+        selected = random.sample(self.POST_FORMATS, min(num, len(self.POST_FORMATS)))
+        return [directive for _, directive in selected]
 
     def _enforce_char_limit(self, candidates: list[str], max_chars: int) -> list[str]:
         """Validate and condense candidates that exceed character limit."""
@@ -166,13 +226,15 @@ class SynthesisPipeline:
         few_shot_text = self.few_shot_selector.format_examples(examples)
         reference_examples = [ex.content for ex in examples] if examples else None
 
-        # Stage 2: Multi-candidate generation
+        # Stage 2: Multi-candidate generation with format variation
+        format_directives = self._select_format_directives(self.num_candidates)
         candidates = self.generator.generate_candidates(
             prompts=prompts,
             commits=commits,
             content_type=content_type,
             few_shot_examples=few_shot_text,
             num_candidates=self.num_candidates,
+            format_directives=format_directives,
         )
         candidate_texts = [c.content for c in candidates]
 
@@ -183,6 +245,9 @@ class SynthesisPipeline:
 
         # Stage 2.6: Repetition filter
         candidate_texts = self._filter_repetitive(candidate_texts, content_type)
+
+        # Stage 2.7: Stale pattern filter
+        candidate_texts = self._filter_stale_patterns(candidate_texts)
 
         # Stage 3: Cross-model evaluation
         comparison = self.evaluator.evaluate(
