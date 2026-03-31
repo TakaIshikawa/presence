@@ -1,8 +1,11 @@
-This X post is {char_count} characters but must be under 280.
+This X post is {char_count} characters but must be under 250.
 
 POST:
 {content}
 
-Condense it to under 280 characters while preserving the core insight.
-Do NOT add new claims or metrics. Only cut.
-Output only the condensed post text.
+Condense to under 250 characters. Be aggressive:
+- Cut adjectives, adverbs, and filler phrases
+- Merge two sentences into one if possible
+- Remove any "the key insight is" or "turns out" framing
+- Do NOT add new claims. Only cut and tighten.
+Output only the condensed post text, nothing else.

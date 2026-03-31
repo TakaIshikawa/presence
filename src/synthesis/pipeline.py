@@ -164,14 +164,17 @@ class SynthesisPipeline:
                 valid.append(text)
                 continue
 
-            # Try condensing once
-            print(f"  Candidate {i} is {len(text)} chars (limit {max_chars}), condensing...")
-            condensed = self.generator.condense(text, max_chars)
-            if len(condensed) <= max_chars:
-                print(f"  Condensed to {len(condensed)} chars")
-                valid.append(condensed)
+            # Try condensing up to 2 times
+            condensed = text
+            for attempt in range(2):
+                print(f"  Candidate {i} is {len(condensed)} chars (limit {max_chars}), condensing (attempt {attempt + 1})...")
+                condensed = self.generator.condense(condensed, max_chars)
+                if len(condensed) <= max_chars:
+                    print(f"  Condensed to {len(condensed)} chars")
+                    valid.append(condensed)
+                    break
             else:
-                print(f"  Still {len(condensed)} chars after condensing, discarding")
+                print(f"  Still {len(condensed)} chars after 2 condense attempts, discarding")
 
         if not valid:
             # Fallback: take shortest original, truncate at sentence boundary
