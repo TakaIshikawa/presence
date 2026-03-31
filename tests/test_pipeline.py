@@ -24,7 +24,7 @@ def _make_comparison(
         ranking=ranking or [0, 1, 2],
         best_score=best_score,
         groundedness=groundedness,
-        authenticity=7.0,
+        rawness=7.0,
         narrative_specificity=7.0,
         voice=7.0,
         engagement_potential=7.0,

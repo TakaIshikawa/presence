@@ -202,12 +202,15 @@ class SynthesisPipeline:
         """Execute the full multi-stage pipeline."""
         batch_id = str(uuid.uuid4())[:8]
 
-        # Stage 0: Load curation signals
+        # Stage 0: Load curation signals and engagement calibration
         too_specific_posts = self.db.get_curated_posts(
             quality="too_specific", content_type=content_type, limit=5
         )
         low_resonance_posts = self.db.get_auto_classified_posts(
             quality="low_resonance", content_type=content_type, limit=3
+        )
+        resonated_posts = self.db.get_auto_classified_posts(
+            quality="resonated", content_type=content_type, limit=3
         )
 
         # Build negative examples with source annotations for the evaluator
@@ -252,13 +255,15 @@ class SynthesisPipeline:
         # Stage 2.7: Stale pattern filter
         candidate_texts = self._filter_stale_patterns(candidate_texts)
 
-        # Stage 3: Cross-model evaluation
+        # Stage 3: Cross-model evaluation with engagement calibration
         comparison = self.evaluator.evaluate(
             candidates=candidate_texts,
             source_prompts=prompts,
             source_commits=[c["message"] for c in commits],
             reference_examples=reference_examples,
             negative_examples=negative_examples or None,
+            calibration_resonated=resonated_posts or None,
+            calibration_low_resonance=low_resonance_posts or None,
         )
 
         best_idx = comparison.ranking[0] if comparison.ranking else 0
