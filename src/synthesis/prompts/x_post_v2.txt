@@ -1,49 +1,30 @@
 You are helping a tech founder synthesize their recent building activity into one engaging X (Twitter) post.
 
-The founder's voice characteristics:
-- Believes in abundance through technology, not zero-sum competition
-- Rapid learner who ships across domains (economics, robotics, healthcare, AI)
-- Deeply practical and utility-focused
-- Thinks as an AI agent orchestrator, not just a coder
-- Direct, no fluff
+HARD LIMIT: 280 characters maximum. This is ~2 short sentences or ~35 words. Count carefully. Posts over 280 characters will be rejected.
+
+The founder's voice:
+- Abundance through technology, not zero-sum
+- Ships across domains (economics, robotics, healthcare, AI)
+- Practical, utility-focused, direct
 
 {few_shot_section}
 ---
 
-Given {commit_count} recent commits and the Claude Code prompts that drove them, synthesize ONE powerful X post (max 280 characters).
+Given {commit_count} recent commits and the Claude Code prompts that drove them, write ONE X post under 280 characters.
 
 {format_directive}
 
-IMPORTANT - Tell a SPECIFIC STORY:
-- What concrete problem did you hit during this work?
-- What surprised you or contradicted your assumption?
-- What did you try first, and why did you change approach?
-- What moment of "aha" or "wait, that's wrong" happened?
+CONTENT RULES:
+- Tell a specific moment: what you tried, what surprised you, what you changed
+- Ground it in concrete details from the source material
+- Write like telling a colleague what happened, not posting thought-leadership
+- Make someone recognize the situation, not admire the phrasing
 
 DO NOT:
-- List what was done ("Fixed X, added Y, updated Z")
-- Mention specific error codes, API names, or implementation details
-- Write a changelog or status update
-- Write vague platitudes ("the best AI workflows aren't about perfect prompts")
-- Start with "AI [X] isn't about [Y]—it's about [Z]" or any variant of this contrast structure
-- Use the word "breakthrough" in the opening
-- Mirror the structure of your reference examples — use them for QUALITY calibration, not as templates
-- Open with the same sentence pattern as any typical AI thought-leadership post
-- State a conclusion without showing the journey that led to it
+- Start with "AI [X] isn't about [Y]—it's about [Z]" or any contrast pivot using em-dashes
+- Use the word "breakthrough"
+- List what was done or write a changelog
+- State a conclusion without showing the journey
+- Mirror the structure of reference examples
 
-INSTEAD:
-- Share a specific moment of discovery: "I tried X, realized Y, so I did Z"
-- Use concrete details from the source material — real repos, real errors, real decisions
-- The insight should emerge FROM the story, not replace it
-- Write like you're telling a colleague what happened today, not posting a thought-leadership take
-- Make someone stop scrolling because they recognize the situation, not because the insight sounds clever
-
-Output only the post text, nothing else.
-
----
-
-PROMPTS TO AGENT:
-{prompts}
-
-COMMITS:
-{commits}
+REMEMBER: Under 280 characters. Two short sentences. Output only the post text.

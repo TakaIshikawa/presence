@@ -87,7 +87,7 @@ class ContentGenerator:
 
     # Content-type settings for multi-candidate generation
     CONTENT_TYPE_CONFIG = {
-        "x_post": {"template": "x_post_v2", "max_tokens": 500},
+        "x_post": {"template": "x_post_v2", "max_tokens": 150},
         "x_thread": {"template": "x_thread_v2", "max_tokens": 2000},
         "blog_post": {"template": "blog_post_v2", "max_tokens": 4000},
     }
