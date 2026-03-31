@@ -33,6 +33,11 @@ polling:
   max_post_gap_hours: 12  # force pipeline after this many hours without posting
   max_daily_posts: 3  # cap x_posts per day to prioritize quality over volume
 
+# Reply-to-reply engagement
+replies:
+  enabled: true
+  max_daily_replies: 10  # cap auto-drafted replies per day
+
 # Embeddings for semantic search
 embeddings:
   provider: "voyage"  # or "openai"

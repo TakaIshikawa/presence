@@ -151,3 +151,31 @@ CREATE INDEX IF NOT EXISTS idx_github_commits_timestamp ON github_commits(timest
 CREATE INDEX IF NOT EXISTS idx_generated_content_type ON generated_content(content_type);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_content ON post_engagement(content_id);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_tweet ON post_engagement(tweet_id);
+
+-- Reply queue for reply-to-reply engagement
+CREATE TABLE IF NOT EXISTS reply_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    inbound_tweet_id TEXT UNIQUE NOT NULL,  -- their reply tweet ID
+    inbound_author_handle TEXT,
+    inbound_author_id TEXT,
+    inbound_text TEXT NOT NULL,
+    our_tweet_id TEXT NOT NULL,              -- which of our posts they replied to
+    our_content_id INTEGER REFERENCES generated_content(id),
+    our_post_text TEXT,                      -- our original post content
+    draft_text TEXT,                         -- Claude-drafted reply
+    status TEXT DEFAULT 'pending',           -- pending | approved | posted | dismissed
+    posted_tweet_id TEXT,                    -- our reply's tweet ID after posting
+    detected_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at TEXT,
+    posted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_queue_status ON reply_queue(status);
+CREATE INDEX IF NOT EXISTS idx_reply_queue_inbound ON reply_queue(inbound_tweet_id);
+
+-- Reply poll state tracking (singleton)
+CREATE TABLE IF NOT EXISTS reply_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_mention_id TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);

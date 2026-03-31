@@ -412,6 +412,114 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    # Reply queue
+    def is_reply_processed(self, inbound_tweet_id: str) -> bool:
+        """Check if we've already processed a reply."""
+        cursor = self.conn.execute(
+            "SELECT 1 FROM reply_queue WHERE inbound_tweet_id = ?",
+            (inbound_tweet_id,)
+        )
+        return cursor.fetchone() is not None
+
+    def insert_reply_draft(
+        self,
+        inbound_tweet_id: str,
+        inbound_author_handle: str,
+        inbound_author_id: str,
+        inbound_text: str,
+        our_tweet_id: str,
+        our_content_id: Optional[int],
+        our_post_text: str,
+        draft_text: str,
+    ) -> int:
+        """Insert a drafted reply into the queue."""
+        cursor = self.conn.execute(
+            """INSERT INTO reply_queue
+               (inbound_tweet_id, inbound_author_handle, inbound_author_id,
+                inbound_text, our_tweet_id, our_content_id, our_post_text,
+                draft_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (inbound_tweet_id, inbound_author_handle, inbound_author_id,
+             inbound_text, our_tweet_id, our_content_id, our_post_text,
+             draft_text)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_pending_replies(self) -> list[dict]:
+        """Get all reply drafts awaiting review."""
+        cursor = self.conn.execute(
+            """SELECT * FROM reply_queue
+               WHERE status = 'pending'
+               ORDER BY detected_at ASC"""
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_reply_status(
+        self,
+        reply_id: int,
+        status: str,
+        posted_tweet_id: Optional[str] = None,
+    ) -> None:
+        """Update a reply's status (approved, posted, dismissed)."""
+        now = datetime.now(timezone.utc).isoformat()
+        if status == "posted" and posted_tweet_id:
+            self.conn.execute(
+                """UPDATE reply_queue
+                   SET status = ?, posted_tweet_id = ?, posted_at = ?, reviewed_at = ?
+                   WHERE id = ?""",
+                (status, posted_tweet_id, now, now, reply_id)
+            )
+        elif status == "dismissed":
+            self.conn.execute(
+                "UPDATE reply_queue SET status = ?, reviewed_at = ? WHERE id = ?",
+                (status, now, reply_id)
+            )
+        else:
+            self.conn.execute(
+                "UPDATE reply_queue SET status = ?, reviewed_at = ? WHERE id = ?",
+                (status, now, reply_id)
+            )
+        self.conn.commit()
+
+    def count_replies_today(self) -> int:
+        """Count replies posted today (UTC)."""
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) FROM reply_queue
+               WHERE status = 'posted'
+                 AND posted_at >= datetime('now', 'start of day')"""
+        )
+        return cursor.fetchone()[0]
+
+    def get_last_mention_id(self) -> Optional[str]:
+        """Get the last processed mention ID for reply polling."""
+        cursor = self.conn.execute(
+            "SELECT last_mention_id FROM reply_state WHERE id = 1"
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_last_mention_id(self, mention_id: str) -> None:
+        """Update the last processed mention ID."""
+        self.conn.execute(
+            """INSERT INTO reply_state (id, last_mention_id, updated_at)
+               VALUES (1, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(id) DO UPDATE SET
+               last_mention_id = excluded.last_mention_id,
+               updated_at = CURRENT_TIMESTAMP""",
+            (mention_id,)
+        )
+        self.conn.commit()
+
+    def get_content_by_tweet_id(self, tweet_id: str) -> Optional[dict]:
+        """Look up generated content by its published tweet ID."""
+        cursor = self.conn.execute(
+            "SELECT id, content, content_type FROM generated_content WHERE tweet_id = ?",
+            (tweet_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     # Pipeline runs
     def insert_pipeline_run(
         self,
