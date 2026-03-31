@@ -10,10 +10,11 @@ AGENTS=(
     "com.presence.daily"
     "com.presence.weekly"
     "com.presence.engagement"
+    "com.presence.replies"
 )
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|knowledge|curate}"
+    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|reply|knowledge|curate}"
     echo ""
     echo "Commands:"
     echo "  start     - Load and start all automation jobs"
@@ -21,8 +22,9 @@ usage() {
     echo "  restart   - Stop then start all jobs"
     echo "  status    - Show status of all jobs"
     echo "  logs      - Tail all log files"
-    echo "  run       - Run a specific job now (poll|daily|weekly)"
+    echo "  run       - Run a specific job now (poll|daily|weekly|replies)"
     echo "  retry     - Retry posting unpublished content"
+    echo "  reply     - Review and post pending reply drafts"
     echo "  knowledge - Knowledge base commands (build|fetch|stats)"
     echo "  curate    - Content quality curation (list|flag|clear|stats)"
     exit 1
@@ -108,8 +110,12 @@ run_job() {
             echo "Running weekly_digest.py..."
             cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/weekly_digest.py
             ;;
+        replies)
+            echo "Running poll_replies.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/poll_replies.py
+            ;;
         *)
-            echo "Usage: $0 run {poll|daily|weekly}"
+            echo "Usage: $0 run {poll|daily|weekly|replies}"
             exit 1
             ;;
     esac
@@ -170,6 +176,10 @@ conn.close()
                 exit 1
                 ;;
         esac
+        ;;
+    reply)
+        echo "Reviewing pending reply drafts..."
+        cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/review_replies.py
         ;;
     curate)
         cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/curate.py "${@:2}"

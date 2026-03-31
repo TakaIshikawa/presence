@@ -52,6 +52,12 @@ class PollingConfig:
 
 
 @dataclass
+class RepliesConfig:
+    enabled: bool
+    max_daily_replies: int
+
+
+@dataclass
 class EmbeddingsConfig:
     provider: str
     model: str
@@ -79,6 +85,7 @@ class Config:
     paths: PathsConfig
     synthesis: SynthesisConfig
     polling: PollingConfig
+    replies: Optional[RepliesConfig]
     embeddings: Optional[EmbeddingsConfig]
     curated_sources: Optional[CuratedSourcesConfig]
 
@@ -106,6 +113,16 @@ def load_config(config_path: Optional[str] = None) -> Config:
 
     with open(config_path, "r") as f:
         data = yaml.safe_load(f)
+
+    # Parse replies config
+    replies_config = None
+    if "replies" in data:
+        replies_config = RepliesConfig(
+            enabled=data["replies"].get("enabled", True),
+            max_daily_replies=data["replies"].get("max_daily_replies", 10),
+        )
+    else:
+        replies_config = RepliesConfig(enabled=True, max_daily_replies=10)
 
     # Parse embeddings config if present
     embeddings_config = None
@@ -173,6 +190,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_post_gap_hours=data["polling"].get("max_post_gap_hours", 12),
             max_daily_posts=data["polling"].get("max_daily_posts", 3),
         ),
+        replies=replies_config,
         embeddings=embeddings_config,
         curated_sources=curated_sources_config
     )

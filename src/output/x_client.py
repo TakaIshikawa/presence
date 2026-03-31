@@ -50,6 +50,64 @@ class XClient:
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=str(e))
 
+    def reply(self, text: str, reply_to_tweet_id: str) -> PostResult:
+        """Post a reply to a specific tweet."""
+        try:
+            response = self.client.create_tweet(
+                text=text,
+                in_reply_to_tweet_id=reply_to_tweet_id
+            )
+            tweet_id = response.data["id"]
+            return PostResult(
+                success=True,
+                tweet_id=tweet_id,
+                url=f"https://x.com/{self.username}/status/{tweet_id}"
+            )
+        except tweepy.TweepyException as e:
+            return PostResult(success=False, error=str(e))
+
+    def get_mentions(
+        self, since_id: Optional[str] = None, max_results: int = 50
+    ) -> tuple[list[dict], dict]:
+        """Fetch tweets mentioning us (includes replies to our posts).
+
+        Returns (mentions, users_by_id) where users_by_id maps author IDs
+        to user data for handle lookup.
+        """
+        me = self.client.get_me()
+        response = self.client.get_users_mentions(
+            me.data.id,
+            since_id=since_id,
+            max_results=min(max_results, 100),
+            tweet_fields=["author_id", "conversation_id",
+                          "in_reply_to_user_id", "created_at"],
+            expansions=["author_id"],
+        )
+
+        mentions = []
+        users_by_id = {}
+
+        if response.includes and "users" in response.includes:
+            for user in response.includes["users"]:
+                users_by_id[str(user.id)] = {
+                    "id": str(user.id),
+                    "username": user.username,
+                    "name": user.name,
+                }
+
+        if response.data:
+            for tweet in response.data:
+                mentions.append({
+                    "id": str(tweet.id),
+                    "text": tweet.text,
+                    "author_id": str(tweet.author_id),
+                    "conversation_id": str(tweet.conversation_id) if tweet.conversation_id else None,
+                    "in_reply_to_user_id": str(tweet.in_reply_to_user_id) if tweet.in_reply_to_user_id else None,
+                    "created_at": str(tweet.created_at) if tweet.created_at else None,
+                })
+
+        return mentions, users_by_id
+
     def post_thread(self, tweets: list[str]) -> PostResult:
         """Post a thread of tweets."""
         if not tweets:
