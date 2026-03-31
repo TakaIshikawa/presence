@@ -1,5 +1,6 @@
 """Few-shot example selection for content generation."""
 
+import re
 from dataclasses import dataclass
 from storage.db import Database
 
@@ -8,6 +9,21 @@ from storage.db import Database
 class FewShotExample:
     content: str
     engagement_score: float
+
+
+# Patterns that produce structural monotony — filter these from few-shot examples
+# so the generator doesn't learn to imitate them.
+_STALE_PATTERNS = [
+    re.compile(r"(?i)^AI\s"),
+    re.compile(r"(?i)isn.t about .{5,40}[—\-].{0,5}it.s about"),
+    re.compile(r"(?i)\bbreakthrough\b"),
+    re.compile(r"(?i)perfect (prompts?|memory|agents?|handoffs?|context)"),
+    re.compile(r"\d+ commits? across \d+"),
+]
+
+
+def _has_stale_pattern(text: str) -> bool:
+    return any(p.search(text) for p in _STALE_PATTERNS)
 
 
 class FewShotSelector:
@@ -26,21 +42,30 @@ class FewShotSelector:
 
         Uses engagement data when available, falls back to eval scores.
         Excludes posts flagged as too_specific via exclude_ids.
+        Filters out posts matching stale rhetorical patterns.
         """
-        # Try engagement-ranked posts first
-        top_posts = self.db.get_top_performing_posts(limit=limit, content_type=content_type)
+        # Fetch more than needed to allow for pattern filtering
+        fetch_limit = limit * 4
+        top_posts = self.db.get_top_performing_posts(
+            limit=fetch_limit, content_type=content_type
+        )
 
         if top_posts:
-            examples = [
-                FewShotExample(
+            examples = []
+            for p in top_posts:
+                if exclude_ids and p["id"] in exclude_ids:
+                    continue
+                if _has_stale_pattern(p["content"]):
+                    continue
+                examples.append(FewShotExample(
                     content=p["content"],
                     engagement_score=p["engagement_score"],
-                )
-                for p in top_posts
-                if not exclude_ids or p["id"] not in exclude_ids
-            ]
+                ))
+                if len(examples) >= limit:
+                    break
+
             if examples:
-                return examples[:limit]
+                return examples
 
         # Cold start: fall back to highest eval scores among published posts
         return self._fallback_by_eval_score(content_type, limit, exclude_ids)
@@ -49,17 +74,20 @@ class FewShotSelector:
         self, content_type: str, limit: int, exclude_ids: set[int] = None
     ) -> list[FewShotExample]:
         """Fallback: select examples by eval score when no engagement data exists."""
+        fetch_limit = limit * 4 + (len(exclude_ids) if exclude_ids else 0)
         cursor = self.db.conn.execute(
             """SELECT id, content, eval_score FROM generated_content
                WHERE content_type = ? AND published = 1
                  AND COALESCE(curation_quality, '') != 'too_specific'
                ORDER BY eval_score DESC
                LIMIT ?""",
-            (content_type, limit + (len(exclude_ids) if exclude_ids else 0)),
+            (content_type, fetch_limit),
         )
         examples = []
         for row in cursor.fetchall():
             if exclude_ids and row["id"] in exclude_ids:
+                continue
+            if _has_stale_pattern(row["content"]):
                 continue
             examples.append(FewShotExample(content=row["content"], engagement_score=0.0))
             if len(examples) >= limit:
