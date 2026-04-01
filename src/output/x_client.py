@@ -82,6 +82,7 @@ class XClient:
             tweet_fields=["author_id", "conversation_id",
                           "in_reply_to_user_id", "created_at"],
             expansions=["author_id"],
+            user_auth=True,
         )
 
         mentions = []
