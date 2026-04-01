@@ -86,6 +86,41 @@ class SynthesisPipeline:
         ),
     ]
 
+    # Thread format directives — control how TWEET 1 hooks the reader
+    THREAD_FORMATS = [
+        (
+            "mid_action",
+            "THREAD HOOK: Start Tweet 1 mid-action. Drop the reader into a moment. "
+            "'I was halfway through a refactor when the agent did something unexpected.' "
+            "No labels, no preamble — open with a scene.",
+        ),
+        (
+            "bold_claim",
+            "THREAD HOOK: Open Tweet 1 with a bold, specific claim the thread will prove. "
+            "'Most AI agent failures happen before a single line of code runs.' "
+            "Make it falsifiable and surprising. The thread is the evidence.",
+        ),
+        (
+            "question_hook",
+            "THREAD HOOK: Start Tweet 1 with a genuine question that came up in your work. "
+            "'Why do agents silently give up instead of asking for help?' "
+            "The thread walks through what you found. End with the question evolved, not answered.",
+        ),
+        (
+            "surprising_result",
+            "THREAD HOOK: Lead Tweet 1 with a concrete, unexpected result. "
+            "'Gave two agents the same task. One finished in 3 minutes, the other looped for an hour.' "
+            "State the outcome first — the thread explains why.",
+        ),
+        (
+            "contrarian_thread",
+            "THREAD HOOK: Open Tweet 1 by challenging a common practice. "
+            "'Stop giving your AI agent detailed instructions. Seriously.' "
+            "The thread unpacks what works better and why.",
+        ),
+    ]
+
+
     def __init__(
         self,
         api_key: str,
@@ -113,10 +148,15 @@ class SynthesisPipeline:
 
     @staticmethod
     def _extract_opening(text: str, max_len: int = 50) -> str:
-        """Extract the opening clause of a post for repetition comparison."""
+        """Extract the opening clause of a post for repetition comparison.
+
+        For threads, strips the 'TWEET 1:\n' prefix to compare actual content.
+        """
+        # Strip thread prefix to get to actual content
+        stripped = re.sub(r"^TWEET\s+\d+:\s*\n?", "", text).strip()
         # Split on em-dash, colon, or period — whichever comes first
-        match = re.split(r'[—:\.]', text, maxsplit=1)
-        opening = match[0].strip().lower() if match else text[:max_len].lower()
+        match = re.split(r'[—:\.]', stripped, maxsplit=1)
+        opening = match[0].strip().lower() if match else stripped[:max_len].lower()
         return opening[:max_len]
 
     def _filter_repetitive(self, candidates: list[str], content_type: str) -> list[str]:
@@ -152,9 +192,10 @@ class SynthesisPipeline:
                 filtered.append(candidate)
         return filtered if filtered else candidates[:1]
 
-    def _select_format_directives(self, num: int) -> list[str]:
+    def _select_format_directives(self, num: int, content_type: str = "x_post") -> list[str]:
         """Select format directives for candidate generation, favoring variety."""
-        selected = random.sample(self.POST_FORMATS, min(num, len(self.POST_FORMATS)))
+        formats = self.THREAD_FORMATS if content_type == "x_thread" else self.POST_FORMATS
+        selected = random.sample(formats, min(num, len(formats)))
         return [directive for _, directive in selected]
 
     def _enforce_char_limit(self, candidates: list[str], max_chars: int) -> list[str]:
@@ -234,7 +275,7 @@ class SynthesisPipeline:
         reference_examples = [ex.content for ex in examples] if examples else None
 
         # Stage 2: Multi-candidate generation with format variation
-        format_directives = self._select_format_directives(self.num_candidates)
+        format_directives = self._select_format_directives(self.num_candidates, content_type)
         candidates = self.generator.generate_candidates(
             prompts=prompts,
             commits=commits,
