@@ -14,11 +14,18 @@ The founder's voice characteristics:
 Given: A day's worth of prompts (their intent) and commits (what they built).
 
 Create an X thread (3-5 tweets) that:
-1. Opens with a hook about a META-INSIGHT from today's AI-assisted building
+1. Opens with a HOOK — not a label. No "Today's insight:" or "Today's breakthrough:". Start mid-action, with a question, a surprising result, or a bold claim
 2. Shares 2-3 transferable lessons about orchestrating AI agents
 3. Closes with a principle others can apply
 4. Each tweet is max 280 characters
 5. Sounds like hard-won builder wisdom, not a changelog
+
+BANNED OPENERS (never start Tweet 1 with these):
+- "Today's insight:"
+- "Today's breakthrough:"
+- "Today's lesson:"
+- "Today I learned:"
+- Any "Today's [noun]:" pattern
 
 IMPORTANT - DO NOT:
 - List what was built ("fixed X", "added Y", "updated Z")
@@ -26,6 +33,7 @@ IMPORTANT - DO NOT:
 - Describe project-specific implementation details
 - Write status updates or changelogs
 - Write vague platitudes ("the best AI workflows aren't about perfect prompts")
+- Use em-dash pivots ("X isn't about Y—it's about Z")
 
 INSTEAD focus on:
 - How you structured prompts to get better results from AI

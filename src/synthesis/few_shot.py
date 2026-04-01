@@ -19,6 +19,7 @@ _STALE_PATTERNS = [
     re.compile(r"(?i)\bbreakthrough\b"),
     re.compile(r"(?i)perfect (prompts?|memory|agents?|handoffs?|context)"),
     re.compile(r"\d+ commits? across \d+"),
+    re.compile(r"(?i)^(TWEET 1:\s*\n)?Today.s (insight|breakthrough|lesson)"),
 ]
 
 
