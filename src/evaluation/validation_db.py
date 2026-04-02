@@ -201,6 +201,22 @@ class ValidationDatabase:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_purged_tweet_ids(self, limit: int = 500) -> list[str]:
+        """Get tweet IDs that have been purged (empty text)."""
+        cursor = self.conn.execute(
+            "SELECT tweet_id FROM tweets WHERE text = '' LIMIT ?",
+            (limit,),
+        )
+        return [row["tweet_id"] for row in cursor.fetchall()]
+
+    def update_tweet_text(self, tweet_id: str, text: str) -> None:
+        """Restore text for a previously purged tweet."""
+        self.conn.execute(
+            "UPDATE tweets SET text = ? WHERE tweet_id = ?",
+            (text, tweet_id),
+        )
+        self.conn.commit()
+
     def get_all_tweets_with_accounts(self) -> list[dict]:
         cursor = self.conn.execute(
             """SELECT t.*, a.username, a.follower_count
@@ -263,17 +279,15 @@ class ValidationDatabase:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    def purge_tweet_text(self, keep_chars: int = 80) -> int:
-        """Replace stored tweet text with a truncated snippet.
+    def purge_tweet_text(self) -> int:
+        """Clear stored tweet text, keeping only IDs and metrics.
 
         Call after evaluation to comply with X data retention policy.
-        Keeps first `keep_chars` characters for debugging in analysis output.
+        Text can be refetched via API if needed for future evaluations.
         Returns number of rows updated.
         """
         cursor = self.conn.execute(
-            """UPDATE tweets SET text = substr(text, 1, ?)
-               WHERE length(text) > ?""",
-            (keep_chars, keep_chars),
+            "UPDATE tweets SET text = '' WHERE text != ''"
         )
         self.conn.commit()
         return cursor.rowcount
