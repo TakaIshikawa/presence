@@ -12,6 +12,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from evaluation.validation_db import ValidationDatabase
 
+import re
+
+_URL_PATTERN = re.compile(r"https?://\S+")
+
+
+def _is_link_only(text: str) -> bool:
+    """True if tweet is primarily a URL with minimal original text."""
+    stripped = _URL_PATTERN.sub("", text).strip()
+    # Minimal text: 3 or fewer non-URL words
+    return len(stripped.split()) <= 3
+
 
 def spearman_rank_correlation(x: list[float], y: list[float]) -> float:
     """Compute Spearman rank correlation coefficient."""
@@ -87,6 +98,10 @@ def main():
         "--save-run", action="store_true",
         help="Save results as a backtest_run record",
     )
+    parser.add_argument(
+        "--text-only", action="store_true",
+        help="Exclude link-only tweets (URLs with minimal text) from analysis",
+    )
     args = parser.parse_args()
 
     db = ValidationDatabase(args.db_path)
@@ -97,6 +112,12 @@ def main():
         print(f"No evaluations found for version '{args.version}'")
         db.close()
         return
+
+    if args.text_only:
+        total_before = len(evals)
+        evals = [e for e in evals if not _is_link_only(e.get("text", ""))]
+        excluded = total_before - len(evals)
+        print(f"Excluded {excluded} link-only tweets ({total_before} → {len(evals)})")
 
     print(f"Analyzing {len(evals)} evaluations for version '{args.version}'")
     print("=" * 70)
