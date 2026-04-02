@@ -274,6 +274,21 @@ class TestValidationDatabase:
         row = dict(cursor.fetchone())
         assert row["spearman_overall"] == 0.35
 
+    def test_purge_tweet_text(self, db):
+        acct = self._create_account(db)
+        long_text = "A" * 200
+        db.insert_tweet("t1", acct["id"], long_text, 5, 1, 0, 0, 8.0, "2025-01-01")
+        db.insert_tweet("t2", acct["id"], "short", 1, 0, 0, 0, 1.0, "2025-01-02")
+
+        purged = db.purge_tweet_text(keep_chars=80)
+        assert purged == 1  # only the long one
+
+        tweets = db.get_tweets_for_account(acct["id"])
+        long_tweet = [t for t in tweets if t["tweet_id"] == "t1"][0]
+        short_tweet = [t for t in tweets if t["tweet_id"] == "t2"][0]
+        assert len(long_tweet["text"]) == 80
+        assert short_tweet["text"] == "short"
+
     def test_get_all_accounts(self, db):
         self._create_account(db, "1", "alice")
         self._create_account(db, "2", "bob")

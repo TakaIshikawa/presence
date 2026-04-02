@@ -36,6 +36,10 @@ def main():
         "--db-path", default="./validation.db",
         help="Path to validation database (default: ./validation.db)",
     )
+    parser.add_argument(
+        "--no-purge", action="store_true",
+        help="Skip purging full tweet text after evaluation",
+    )
     args = parser.parse_args()
 
     config = load_config()
@@ -109,6 +113,12 @@ def main():
 
             scores = [f"{p.predicted_score:.0f}" for p in predictions]
             print(f"  Batch {i // BATCH_SIZE + 1}: scores {scores}")
+
+    # Purge full tweet text after evaluation (X data retention compliance)
+    if not args.no_purge:
+        purged = db.purge_tweet_text(keep_chars=80)
+        if purged:
+            print(f"Purged full text from {purged} tweets (kept first 80 chars)")
 
     db.close()
     print(f"\nDone. Evaluated {evaluated} tweets.")
