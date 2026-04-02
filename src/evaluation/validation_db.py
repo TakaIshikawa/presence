@@ -263,6 +263,21 @@ class ValidationDatabase:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def purge_tweet_text(self, keep_chars: int = 80) -> int:
+        """Replace stored tweet text with a truncated snippet.
+
+        Call after evaluation to comply with X data retention policy.
+        Keeps first `keep_chars` characters for debugging in analysis output.
+        Returns number of rows updated.
+        """
+        cursor = self.conn.execute(
+            """UPDATE tweets SET text = substr(text, 1, ?)
+               WHERE length(text) > ?""",
+            (keep_chars, keep_chars),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     # --- Backtest run operations ---
 
     def insert_backtest_run(
