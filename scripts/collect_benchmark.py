@@ -97,6 +97,8 @@ def fetch_account_tweets(
 
     while remaining > 0:
         batch_size = min(remaining, 100)
+        if batch_size < 5:
+            break  # X API requires min 5 per request
         try:
             response = client.get_users_tweets(
                 id=user_id,
@@ -175,6 +177,10 @@ def main():
         access_token_secret=config.x.access_token_secret,
     )
 
+    # Bearer-token client for reading other users' tweets
+    bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
+    read_client = tweepy.Client(bearer_token=bearer_token)
+
     db = ValidationDatabase(args.db_path)
     db.connect()
     db.init_schema()
@@ -210,9 +216,9 @@ def main():
         acct_row = db.get_account_by_user_id(account["user_id"])
         account_id = acct_row["id"]
 
-        # Fetch tweets
+        # Fetch tweets (bearer token for reading other users' timelines)
         tweets = fetch_account_tweets(
-            client, account["user_id"], args.tweets_per_account
+            read_client, account["user_id"], args.tweets_per_account
         )
 
         inserted = 0
