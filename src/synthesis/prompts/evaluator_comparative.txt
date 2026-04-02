@@ -23,11 +23,13 @@ COMMITS (what emerged from the collaboration):
 
 Rank these candidates from best to worst. For each candidate, assess:
 
-1. ENGAGEMENT_POTENTIAL (most important): Would a busy developer actually stop scrolling for this?
-   - Score 9-10: Makes you think "I need to reply" or "I need to share this with my team"
-   - Score 7-8: Interesting enough to read fully and maybe like
-   - Score 5-6: Reads fine but provokes nothing — you'd keep scrolling
+1. ENGAGEMENT_POTENTIAL (most important — counts double): Does this provoke a reaction that demands response?
+   - Score 9-10: You feel something — recognition, surprise, disagreement, excitement. You MUST reply or share this with your team.
+   - Score 7-8: Strong "yes, exactly" or "wait, no" reaction. You'd like, reply, or bookmark it.
+   - Score 5-6: Reads fine but provokes nothing — you'd keep scrolling. No emotional reaction.
    - Score 1-4: Generic wisdom that blends into the feed
+   - HOOK: Does the opening line create tension, curiosity, or surprise? A strong hook is essential — if the first line doesn't stop scrolling, nothing else matters.
+   - SHAREABILITY: Would someone quote-tweet this or send it to a friend? This matters more than whether the reader can "apply" the insight.
    - PENALIZE: Posts that sound like AI-generated thought-leadership content
 
 2. GROUNDEDNESS: Are all factual claims traceable to the source material?
@@ -35,9 +37,10 @@ Rank these candidates from best to worst. For each candidate, assess:
    - Score LOW: Invents metrics, fabricates outcomes
    - AUTOMATIC REJECT: Any post with fabricated statistics not present in source material
 
-3. NARRATIVE_SPECIFICITY: Does the post show the work, not just the conclusion?
-   - Score HIGH: Names what went wrong, what was tried, what surprised you
+3. NARRATIVE_SPECIFICITY: Does the post show a journey the reader can connect with?
+   - Score HIGH: Shows the process — what went wrong, what was tried, what surprised you. The reader can see themselves in the story.
    - Score LOW: States a takeaway without showing how you got there
+   - NOTE: Concrete details alone don't drive engagement. What matters is whether the details serve a narrative that provokes recognition or surprise.
    - PENALIZE: "AI isn't about X—it's about Y" or any abstract aphorism
 
 4. RAWNESS: Does it feel like a real person, not a content machine?
@@ -55,6 +58,8 @@ Score calibration (apply strictly):
 
 IMPORTANT: Posts that are polished and well-structured but generic should score 5-6, NOT 7-8.
 A raw, specific, slightly messy post that tells a real story should outscore a polished aphorism.
+
+Posts that make people FEEL something (recognition, surprise, disagreement) outperform posts that inform without provoking a reaction. When in doubt, ask: "Would someone share this?" not "Is this well-written?"
 
 Provide your evaluation in this exact format:
 
