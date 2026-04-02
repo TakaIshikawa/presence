@@ -1,0 +1,79 @@
+You are predicting which tweets will get the most engagement (likes, replies, retweets, quotes) on X/Twitter.
+
+You are predicting audience BEHAVIOR, not evaluating writing quality. A tweet can be well-written and get zero engagement. A bold one-liner can go viral.
+
+{account_context}
+
+---
+
+TWEETS TO SCORE (score each independently):
+
+{tweets}
+
+---
+
+LINK-ONLY TWEETS: If a tweet is primarily a link/URL with minimal original text (e.g., "Wow https://t.co/..." or just a bare URL), score PREDICTED_ENGAGEMENT as 5. You cannot evaluate content you cannot see — don't penalize or reward what's behind the link.
+
+For EACH tweet, provide scores on these criteria (1-10 scale):
+
+1. HOOK_STRENGTH: Does the opening line make you stop scrolling?
+   - 9-10: You physically cannot scroll past. "Wait, what?" reaction.
+   - 7-8: Interesting enough to stop and read the whole thing.
+   - 5-6: You might read it if you're not busy.
+   - 1-4: Your eyes glaze over. Blends into the feed.
+   - PENALIZE: Generic openings ("I've been thinking about...", "Here's why...")
+
+2. SPECIFICITY: Is this grounded in a concrete situation or floating in abstraction?
+   - 9-10: Names exact things — products, numbers, people, moments. You can picture it.
+   - 5-6: Somewhat grounded but could apply to many situations.
+   - 1-4: Pure abstraction. "AI is changing everything." Could be anyone's tweet.
+   - NOTE: Specificity is diagnostic, not predictive. Score it honestly but don't weight it heavily in your final prediction.
+
+3. EMOTIONAL_RESONANCE: Does this provoke a reaction that demands response?
+   - 9-10: Visceral reaction — outrage, excitement, recognition, fear, amusement, fascination. You MUST respond.
+   - 7-8: Strong "yes, exactly" or "wait, no" or "I didn't know that!" reaction. You'd like or reply.
+   - 5-6: Mild head-nod. No urge to interact.
+   - 1-4: Emotionally inert. Information without feeling.
+   - IMPORTANT: "Emotional" includes intellectual surprise and fascination. A startling fact or counterintuitive data point that makes you go "wait, really?" counts as high resonance. Don't limit this to feelings like anger or joy.
+   - This is the most important criterion. Weight it heavily in your final prediction.
+
+4. NOVELTY: Would this tweet stand out in a feed full of similar accounts?
+   - 9-10: Genuinely surprising framing. You'd screenshot this.
+   - 7-8: Fresh angle on a known topic.
+   - 5-6: Familiar territory, competent execution.
+   - 1-4: Seen this exact take 50 times. "AI will change X" or "most people don't realize Y."
+
+5. ACTIONABILITY: Would someone share, save, or quote-tweet this?
+   - 9-10: You'd immediately send this to a friend or quote-tweet with your take.
+   - 7-8: You'd bookmark it or like it publicly.
+   - 5-6: You'd read and move on. No action taken.
+   - 1-4: You'd scroll past.
+   - This measures shareability — "would I forward this?" — not "can I apply this to my work."
+
+6. PREDICTED_ENGAGEMENT: Your overall prediction (1-10).
+   This is NOT an average of the above. Use your judgment about what actually drives engagement:
+   - Emotional resonance matters most — tweets that make people FEEL something get shared
+   - News and announcements with high stakes get outsized engagement
+   - Contrarian or surprising takes get quote-tweeted (agreement AND disagreement drive engagement)
+   - Startling facts, counterintuitive data, or "did you know?" content can go viral even without strong opinion
+   - Well-crafted niche content often gets low engagement despite high quality — don't confuse quality with virality
+
+Score calibration (apply strictly — use the full range):
+- 9-10: Would go viral. Quote-tweeted widely. Extremely rare — max 1 per batch.
+- 7-8: Would get meaningful engagement. Replies, likes, some shares.
+- 5-6: Average. Gets a few likes from loyal followers.
+- 3-4: Below average. Most followers scroll past.
+- 1-2: Substance-free or incoherent. No reason to interact.
+
+Respond with scores for each tweet in this exact format:
+
+TWEET_1 (id={first_tweet_id}):
+HOOK_STRENGTH: [1-10]
+SPECIFICITY: [1-10]
+EMOTIONAL_RESONANCE: [1-10]
+NOVELTY: [1-10]
+ACTIONABILITY: [1-10]
+PREDICTED_ENGAGEMENT: [1-10]
+
+TWEET_2 (id=...):
+...repeat for all {num_tweets} tweets
