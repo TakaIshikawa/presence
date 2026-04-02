@@ -276,18 +276,37 @@ class TestValidationDatabase:
 
     def test_purge_tweet_text(self, db):
         acct = self._create_account(db)
-        long_text = "A" * 200
-        db.insert_tweet("t1", acct["id"], long_text, 5, 1, 0, 0, 8.0, "2025-01-01")
-        db.insert_tweet("t2", acct["id"], "short", 1, 0, 0, 0, 1.0, "2025-01-02")
+        db.insert_tweet("t1", acct["id"], "hello world", 5, 1, 0, 0, 8.0, "2025-01-01")
+        db.insert_tweet("t2", acct["id"], "another tweet", 1, 0, 0, 0, 1.0, "2025-01-02")
 
-        purged = db.purge_tweet_text(keep_chars=80)
-        assert purged == 1  # only the long one
+        purged = db.purge_tweet_text()
+        assert purged == 2
 
         tweets = db.get_tweets_for_account(acct["id"])
-        long_tweet = [t for t in tweets if t["tweet_id"] == "t1"][0]
-        short_tweet = [t for t in tweets if t["tweet_id"] == "t2"][0]
-        assert len(long_tweet["text"]) == 80
-        assert short_tweet["text"] == "short"
+        assert all(t["text"] == "" for t in tweets)
+        # IDs and metrics preserved
+        assert all(t["tweet_id"] in ("t1", "t2") for t in tweets)
+        assert any(t["engagement_score"] == 8.0 for t in tweets)
+
+    def test_purge_idempotent(self, db):
+        acct = self._create_account(db)
+        db.insert_tweet("t1", acct["id"], "hello", 5, 1, 0, 0, 8.0, "2025-01-01")
+        db.purge_tweet_text()
+        purged_again = db.purge_tweet_text()
+        assert purged_again == 0
+
+    def test_purged_tweet_ids_and_restore(self, db):
+        acct = self._create_account(db)
+        db.insert_tweet("t1", acct["id"], "hello", 5, 1, 0, 0, 8.0, "2025-01-01")
+        db.purge_tweet_text()
+
+        purged_ids = db.get_purged_tweet_ids()
+        assert purged_ids == ["t1"]
+
+        db.update_tweet_text("t1", "restored text")
+        tweets = db.get_tweets_for_account(acct["id"])
+        assert tweets[0]["text"] == "restored text"
+        assert db.get_purged_tweet_ids() == []
 
     def test_get_all_accounts(self, db):
         self._create_account(db, "1", "alice")
