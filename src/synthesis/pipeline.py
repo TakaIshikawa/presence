@@ -147,7 +147,7 @@ class SynthesisPipeline:
     }
 
     @staticmethod
-    def _extract_opening(text: str, max_len: int = 50) -> str:
+    def _extract_opening(text: str, max_len: int = 100) -> str:
         """Extract the opening clause of a post for repetition comparison.
 
         For threads, strips the 'TWEET 1:\n' prefix to compare actual content.
@@ -161,7 +161,7 @@ class SynthesisPipeline:
 
     def _filter_repetitive(self, candidates: list[str], content_type: str) -> list[str]:
         """Remove candidates whose opening is too similar to recent posts."""
-        recent = self.db.get_recent_published_content(content_type, limit=10)
+        recent = self.db.get_recent_published_content(content_type, limit=20)
         if not recent:
             return candidates
 
@@ -171,7 +171,7 @@ class SynthesisPipeline:
         for candidate in candidates:
             opening = self._extract_opening(candidate)
             is_repetitive = any(
-                SequenceMatcher(None, opening, ro).ratio() > 0.6
+                SequenceMatcher(None, opening, ro).ratio() > 0.55
                 for ro in recent_openings
             )
             if is_repetitive:
@@ -179,7 +179,7 @@ class SynthesisPipeline:
             else:
                 filtered.append(candidate)
 
-        return filtered if filtered else candidates[:1]  # keep at least one
+        return filtered
 
     def _filter_stale_patterns(self, candidates: list[str]) -> list[str]:
         """Reject candidates matching overused rhetorical patterns."""
@@ -190,7 +190,7 @@ class SynthesisPipeline:
                 print(f"  Rejected stale pattern: {candidate[:50]}...")
             else:
                 filtered.append(candidate)
-        return filtered if filtered else candidates[:1]
+        return filtered
 
     def _select_format_directives(self, num: int, content_type: str = "x_post") -> list[str]:
         """Select format directives for candidate generation, favoring variety."""
@@ -296,6 +296,32 @@ class SynthesisPipeline:
 
         # Stage 2.7: Stale pattern filter
         candidate_texts = self._filter_stale_patterns(candidate_texts)
+
+        # All candidates filtered — reject rather than publish stale/repetitive content
+        if not candidate_texts:
+            print("  All candidates filtered (repetitive or stale patterns)")
+            return PipelineResult(
+                batch_id=batch_id,
+                candidates=[],
+                comparison=ComparisonResult(
+                    ranking=[],
+                    best_score=0,
+                    groundedness=0,
+                    rawness=0,
+                    narrative_specificity=0,
+                    voice=0,
+                    engagement_potential=0,
+                    best_feedback="",
+                    improvement="",
+                    reject_reason="All candidates filtered (repetitive or stale patterns)",
+                    raw_response="",
+                ),
+                refinement=None,
+                final_content="",
+                final_score=0,
+                source_prompts=prompts,
+                source_commits=[c["message"] for c in commits],
+            )
 
         # Stage 3: Cross-model evaluation with engagement calibration
         comparison = self.evaluator.evaluate(
