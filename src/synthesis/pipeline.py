@@ -50,6 +50,14 @@ class SynthesisPipeline:
         re.compile(r"(?i)perfect (prompts?|memory|agents?|handoffs?|context)"),
         re.compile(r"\d+ commits? across \d+"),
         re.compile(r"(?i)^(TWEET 1:\s*\n)?Today.s (insight|breakthrough|lesson)"),
+        # Engagement-bait openings
+        re.compile(r"(?i)^(unpopular opinion|controversial take)\s*[:\-–—]"),
+        re.compile(r"(?i)\bnobody (is )?(talk(s|ing) about|mentions?)"),
+        re.compile(r"(?i)^the (secret|trick) to\b"),
+        re.compile(r"(?i)^stop \w[\w ]{0,30}\.\s*start \w"),
+        re.compile(r"(?i)\w[\w ]{0,30} (is|are) dead\.\s*long live\b"),
+        re.compile(r"(?i)^I spent \d+\s*(hours?|days?|weeks?|months?)"),
+        re.compile(r"(?i)^most (people|developers?|devs|engineers?) don.t\b"),
     ]
 
     # Post format directives for structural variety
