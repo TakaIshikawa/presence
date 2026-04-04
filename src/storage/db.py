@@ -357,12 +357,15 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     # Auto-classification
-    def auto_classify_posts(self, min_age_hours: int = 48) -> dict:
+    def auto_classify_posts(
+        self, min_age_hours: int = 48, min_engagement: float = 5.0
+    ) -> dict:
         """Auto-classify published posts based on engagement after settling period.
 
         Posts >= min_age_hours old with auto_quality IS NULL get classified:
-        - 'resonated' if latest engagement_score > 0
+        - 'resonated' if latest engagement_score >= min_engagement
         - 'low_resonance' if latest engagement_score == 0
+        - Left as NULL if 0 < engagement_score < min_engagement (ambiguous)
         """
         cursor = self.conn.execute(
             """SELECT gc.id, gc.content,
@@ -382,9 +385,16 @@ class Database:
             (f'-{min_age_hours} hours',)
         )
 
-        results = {"resonated": 0, "low_resonance": 0}
+        results = {"resonated": 0, "low_resonance": 0, "ambiguous": 0}
         for row in cursor.fetchall():
-            quality = "resonated" if row[2] > 0 else "low_resonance"
+            score = row[2]
+            if score >= min_engagement:
+                quality = "resonated"
+            elif score == 0:
+                quality = "low_resonance"
+            else:
+                results["ambiguous"] += 1
+                continue  # Leave as NULL — don't use for calibration
             self.conn.execute(
                 "UPDATE generated_content SET auto_quality = ? WHERE id = ?",
                 (quality, row[0])

@@ -325,7 +325,7 @@ class TestRepetitionFilter:
     @patch("synthesis.pipeline.CrossModelEvaluator")
     @patch("synthesis.pipeline.ContentGenerator")
     @patch("synthesis.pipeline.FewShotSelector")
-    def test_keeps_at_least_one_if_all_repetitive(self, MockFS, MockGen, MockEval, MockRefiner):
+    def test_rejects_when_all_candidates_repetitive(self, MockFS, MockGen, MockEval, MockRefiner):
         db = MagicMock()
         db.get_curated_posts.return_value = []
         db.get_auto_classified_posts.return_value = []
@@ -341,18 +341,17 @@ class TestRepetitionFilter:
             "Same opening everywhere—version C.",
         ]
         pipeline.generator.generate_candidates.return_value = _make_candidates(all_similar)
-        pipeline.evaluator.evaluate.return_value = _make_comparison(
-            best_score=9.5, ranking=[0]
-        )
         pipeline.few_shot_selector.get_examples.return_value = []
         pipeline.few_shot_selector.format_examples.return_value = ""
 
         result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
 
-        # Should keep at least one candidate (first one)
-        eval_call_args = pipeline.evaluator.evaluate.call_args
-        evaluated_candidates = eval_call_args[1]["candidates"]
-        assert len(evaluated_candidates) >= 1
+        # Should reject — no candidates survive filtering
+        assert result.final_score == 0
+        assert result.comparison.reject_reason is not None
+        assert "filtered" in result.comparison.reject_reason
+        # Evaluator should NOT be called
+        pipeline.evaluator.evaluate.assert_not_called()
 
 
 # --- Curation signals ---
