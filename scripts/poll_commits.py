@@ -30,6 +30,33 @@ def estimate_tokens(texts: list[str]) -> int:
     return sum(len(t) for t in texts) // 4
 
 
+def check_readiness(
+    accumulated_tokens: int,
+    threshold: int,
+    hours_since_post: float,
+    max_gap_hours: int,
+    has_prompts: bool,
+) -> bool:
+    """Decide whether enough material has accumulated to run the pipeline.
+
+    Returns True when:
+    - Token count meets or exceeds the threshold, OR
+    - Time since last post meets or exceeds the gap cap AND there are prompts.
+    """
+    gap_exceeded = hours_since_post >= max_gap_hours
+    return accumulated_tokens >= threshold or (gap_exceeded and has_prompts)
+
+
+def is_daily_cap_reached(posts_today: int, max_daily: int) -> bool:
+    """Return True if the daily post limit has been reached."""
+    return posts_today >= max_daily
+
+
+def get_retryable_content(db, min_score: float, content_type: str = "x_post") -> list[dict]:
+    """Return unpublished content eligible for retry (retry_count < MAX_RETRIES)."""
+    return db.get_unpublished_content(content_type, min_score)
+
+
 def main():
     signal.signal(signal.SIGALRM, _timeout_handler)
     signal.alarm(WATCHDOG_TIMEOUT)
@@ -74,7 +101,7 @@ def main():
 
     # First, try to post any unpublished content from previous runs
     min_score = config.synthesis.eval_threshold * 10
-    unpublished = db.get_unpublished_content("x_post", min_score)
+    unpublished = get_retryable_content(db, min_score)
     if unpublished:
         print(f"Retrying {len(unpublished)} unpublished posts...")
         item = unpublished[0]
@@ -120,7 +147,7 @@ def main():
     # Daily post cap
     posts_today = db.count_posts_today("x_post")
     max_daily = config.polling.max_daily_posts
-    if posts_today >= max_daily:
+    if is_daily_cap_reached(posts_today, max_daily):
         print(f"Daily post limit reached ({posts_today}/{max_daily}), waiting for tomorrow")
         db.set_last_poll_time(current_poll_time)
         _update_monitoring()
@@ -158,12 +185,11 @@ def main():
 
     threshold = config.polling.readiness_token_threshold
     max_gap = config.polling.max_post_gap_hours
-    gap_exceeded = hours_since_post >= max_gap
 
     print(f"Readiness: {accumulated_tokens} tokens (threshold: {threshold}), "
           f"{hours_since_post:.1f}h since last post (cap: {max_gap}h)")
 
-    ready = accumulated_tokens >= threshold or (gap_exceeded and prompts_since)
+    ready = check_readiness(accumulated_tokens, threshold, hours_since_post, max_gap, bool(prompts_since))
 
     if not ready:
         print(f"Not ready — waiting for more material")
@@ -172,6 +198,8 @@ def main():
         db.close()
         print("Done. No posts made.")
         return
+
+    gap_exceeded = hours_since_post >= max_gap
 
     if gap_exceeded:
         print(f"Time cap exceeded ({hours_since_post:.1f}h >= {max_gap}h), forcing pipeline")
