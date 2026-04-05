@@ -96,6 +96,16 @@ class HistoricalConfig:
 
 
 @dataclass
+class CultivateIntegrationConfig:
+    enabled: bool
+    db_path: str
+    forward_mentions: bool
+    enrich_replies: bool
+    proactive_review: bool
+    reply_quality_threshold: float
+
+
+@dataclass
 class Config:
     github: GitHubConfig
     x: XConfig
@@ -108,6 +118,7 @@ class Config:
     curated_sources: Optional[CuratedSourcesConfig]
     newsletter: Optional[NewsletterConfig]
     historical: Optional[HistoricalConfig]
+    cultivate: Optional[CultivateIntegrationConfig]
 
 
 def _resolve_env_var(value: str) -> str:
@@ -199,6 +210,18 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_historical_commits=data["historical"].get("max_historical_commits", 5),
         )
 
+    # Parse cultivate integration config if present
+    cultivate_config = None
+    if "cultivate" in data:
+        cultivate_config = CultivateIntegrationConfig(
+            enabled=data["cultivate"].get("enabled", True),
+            db_path=data["cultivate"].get("db_path", "~/.cultivate/cultivate.db"),
+            forward_mentions=data["cultivate"].get("forward_mentions", True),
+            enrich_replies=data["cultivate"].get("enrich_replies", True),
+            proactive_review=data["cultivate"].get("proactive_review", True),
+            reply_quality_threshold=data["cultivate"].get("reply_quality_threshold", 6.0),
+        )
+
     return Config(
         github=GitHubConfig(
             username=data["github"]["username"],
@@ -237,4 +260,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         curated_sources=curated_sources_config,
         newsletter=newsletter_config,
         historical=historical_config,
+        cultivate=cultivate_config,
     )

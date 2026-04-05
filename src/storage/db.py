@@ -50,6 +50,14 @@ class Database:
         if "auto_quality" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN auto_quality TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_auto_quality ON generated_content(auto_quality)")
+        # Migrate reply_queue for cultivate enrichment
+        rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
+        if rq_cols and "relationship_context" not in rq_cols:
+            self.conn.execute("ALTER TABLE reply_queue ADD COLUMN relationship_context TEXT")
+        if rq_cols and "quality_score" not in rq_cols:
+            self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_score REAL")
+        if rq_cols and "quality_flags" not in rq_cols:
+            self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_flags TEXT")
         self.conn.commit()
 
     # Claude messages
@@ -441,17 +449,20 @@ class Database:
         our_content_id: Optional[int],
         our_post_text: str,
         draft_text: str,
+        relationship_context: Optional[str] = None,
+        quality_score: Optional[float] = None,
+        quality_flags: Optional[str] = None,
     ) -> int:
         """Insert a drafted reply into the queue."""
         cursor = self.conn.execute(
             """INSERT INTO reply_queue
                (inbound_tweet_id, inbound_author_handle, inbound_author_id,
                 inbound_text, our_tweet_id, our_content_id, our_post_text,
-                draft_text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                draft_text, relationship_context, quality_score, quality_flags)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (inbound_tweet_id, inbound_author_handle, inbound_author_id,
              inbound_text, our_tweet_id, our_content_id, our_post_text,
-             draft_text)
+             draft_text, relationship_context, quality_score, quality_flags)
         )
         self.conn.commit()
         return cursor.lastrowid
