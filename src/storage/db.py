@@ -530,6 +530,87 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    # Newsletter
+    def insert_newsletter_send(
+        self,
+        issue_id: str,
+        subject: str,
+        content_ids: list[int],
+        subscriber_count: int = 0,
+        status: str = "sent",
+    ) -> int:
+        """Record a newsletter send."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO newsletter_sends
+               (issue_id, subject, source_content_ids, subscriber_count, status, sent_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (issue_id, subject, json.dumps(content_ids), subscriber_count, status, now)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_last_newsletter_send(self) -> Optional[datetime]:
+        """Get the most recent newsletter send timestamp."""
+        cursor = self.conn.execute(
+            "SELECT sent_at FROM newsletter_sends ORDER BY sent_at DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            dt = datetime.fromisoformat(row[0])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return None
+
+    def get_published_content_in_range(
+        self,
+        content_type: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[dict]:
+        """Get published content within a date range."""
+        cursor = self.conn.execute(
+            """SELECT id, content, content_type, eval_score, published_url,
+                      tweet_id, published_at
+               FROM generated_content
+               WHERE content_type = ? AND published = 1
+                 AND published_at >= ? AND published_at < ?
+               ORDER BY published_at DESC""",
+            (content_type, start.isoformat(), end.isoformat())
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    # Historical commit queries
+    def get_commits_by_repo(
+        self,
+        repo_name: str,
+        limit: int = 20,
+        min_age_days: int = 30,
+        max_age_days: int = 365,
+    ) -> list[dict]:
+        """Get historical commits for a repository, filtered by age."""
+        cursor = self.conn.execute(
+            """SELECT * FROM github_commits
+               WHERE repo_name = ?
+                 AND timestamp <= datetime('now', ?)
+                 AND timestamp >= datetime('now', ?)
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (repo_name, f'-{min_age_days} days', f'-{max_age_days} days', limit)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def count_pipeline_runs(self, content_type: str, since_days: int = 30) -> int:
+        """Count pipeline runs for a content type within a period."""
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) FROM pipeline_runs
+               WHERE content_type = ?
+                 AND created_at >= datetime('now', ?)""",
+            (content_type, f'-{since_days} days')
+        )
+        return cursor.fetchone()[0]
+
     # Pipeline runs
     def insert_pipeline_run(
         self,

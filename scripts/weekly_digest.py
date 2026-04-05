@@ -70,6 +70,23 @@ def main():
         for c in commits
     ]
 
+    # Inject historical context if configured
+    if config.historical and config.historical.enabled:
+        from synthesis.theme_selector import ThemeSelector
+        theme_selector = ThemeSelector(db)
+        if theme_selector.should_inject("blog_post", config.historical.injection_frequency):
+            ctx = theme_selector.select(
+                commit_dicts, "blog_post",
+                lookback_days=config.historical.lookback_days,
+                min_age_days=config.historical.min_age_days,
+                max_commits=config.historical.max_historical_commits,
+            )
+            if ctx:
+                print(f"  Historical context: {ctx.theme_description}")
+                for hc in ctx.commits:
+                    hc["historical"] = True
+                    commit_dicts.append(hc)
+
     # Run pipeline
     print(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
     result = pipeline.run(

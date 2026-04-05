@@ -33,6 +33,22 @@ polling:
   max_post_gap_hours: 12  # force pipeline after this many hours without posting
   max_daily_posts: 3  # cap x_posts per day to prioritize quality over volume
 
+# Newsletter distribution
+newsletter:
+  enabled: true
+  provider: "buttondown"
+  api_key: "${BUTTONDOWN_API_KEY}"
+  send_day: "monday"
+  send_hour: 9  # UTC
+
+# Historical theme injection
+historical:
+  enabled: true
+  lookback_days: 180          # How far back to search for historical commits
+  injection_frequency: 3      # Every Nth post includes historical context
+  min_age_days: 30            # Commits must be at least this old
+  max_historical_commits: 5   # Max historical commits to inject
+
 # Reply-to-reply engagement
 replies:
   enabled: true

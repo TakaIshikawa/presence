@@ -109,10 +109,31 @@ class ContentGenerator:
         max_tokens = type_config["max_tokens"]
 
         prompts_text = "\n\n".join(f"- {p[:500]}" for p in prompts[:5])
+
+        # Split current vs historical commits
+        current_commits = [c for c in commits if not c.get("historical")]
+        historical_commits = [c for c in commits if c.get("historical")]
+
         commits_text = "\n\n".join(
             f"- [{c.get('repo_name', '')}] {c.get('message') or c.get('commit_message', '')}"
-            for c in commits[:10]
+            for c in current_commits[:10]
         )
+
+        if historical_commits:
+            historical_text = "\n".join(
+                f"- [{c.get('repo_name', '')}] {c.get('message') or c.get('commit_message', '')}"
+                for c in historical_commits[:5]
+            )
+            historical_section = (
+                "HISTORICAL CONTEXT (from your past work):\n"
+                "These relate to what you're building now. "
+                "Draw connections or contrast past vs present.\n\n"
+                f"{historical_text}\n\n"
+                "The post should still be grounded in CURRENT activity. "
+                "Use history for depth, not replacement.\n"
+            )
+        else:
+            historical_section = ""
 
         if few_shot_examples:
             few_shot_section = (
@@ -135,9 +156,10 @@ class ContentGenerator:
             filled = template.format(
                 prompts=prompts_text,
                 commits=commits_text,
-                commit_count=len(commits),
+                commit_count=len(current_commits),
                 few_shot_section=few_shot_section,
                 format_directive=format_directive,
+                historical_section=historical_section,
             )
 
             response = self.client.messages.create(
