@@ -11,11 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config import load_config
 from evaluation.validation_db import ValidationDatabase
-
-WEIGHT_LIKE = 1.0
-WEIGHT_RETWEET = 3.0
-WEIGHT_REPLY = 4.0
-WEIGHT_QUOTE = 5.0
+from evaluation.engagement_scorer import compute_engagement_score
 
 RATE_LIMIT_SLEEP = 60
 
@@ -36,15 +32,6 @@ def get_bearer_token(api_key: str, api_secret: str) -> str:
     )
     resp.raise_for_status()
     return resp.json()["access_token"]
-
-
-def compute_engagement_score(like, rt, reply, quote) -> float:
-    return (
-        like * WEIGHT_LIKE
-        + rt * WEIGHT_RETWEET
-        + reply * WEIGHT_REPLY
-        + quote * WEIGHT_QUOTE
-    )
 
 
 def fetch_following(client: tweepy.Client, user_id: str) -> list[dict]:

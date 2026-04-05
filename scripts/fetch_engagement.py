@@ -10,12 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config import load_config
 from storage.db import Database
-
-# Engagement score weights (absolute counts, no impression normalization)
-WEIGHT_LIKE = 1.0
-WEIGHT_RETWEET = 3.0
-WEIGHT_REPLY = 4.0
-WEIGHT_QUOTE = 5.0
+from evaluation.engagement_scorer import compute_engagement_score
 
 # Max tweets to fetch per batch (X API limit for GET /2/tweets)
 BATCH_SIZE = 100
@@ -37,20 +32,6 @@ def get_bearer_token(api_key: str, api_secret: str) -> str:
     )
     resp.raise_for_status()
     return resp.json()["access_token"]
-
-
-def compute_engagement_score(
-    like_count: int,
-    retweet_count: int,
-    reply_count: int,
-    quote_count: int,
-) -> float:
-    return (
-        like_count * WEIGHT_LIKE
-        + retweet_count * WEIGHT_RETWEET
-        + reply_count * WEIGHT_REPLY
-        + quote_count * WEIGHT_QUOTE
-    )
 
 
 def backfill_tweet_ids(db) -> int:
