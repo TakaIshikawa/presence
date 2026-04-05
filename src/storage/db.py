@@ -58,6 +58,12 @@ class Database:
             self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_score REAL")
         if rq_cols and "quality_flags" not in rq_cols:
             self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_flags TEXT")
+        # Migrate pipeline_runs for outcome tracking
+        pr_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pipeline_runs)")}
+        if pr_cols and "outcome" not in pr_cols:
+            self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN outcome TEXT")
+        if pr_cols and "rejection_reason" not in pr_cols:
+            self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
         self.conn.commit()
 
     # Claude messages
@@ -694,6 +700,8 @@ class Database:
         final_score: float = None,
         published: bool = False,
         content_id: int = None,
+        outcome: str = None,
+        rejection_reason: str = None,
     ) -> int:
         """Record a pipeline run for observability."""
         cursor = self.conn.execute(
@@ -701,12 +709,14 @@ class Database:
                (batch_id, content_type, candidates_generated,
                 best_candidate_index, best_score_before_refine,
                 best_score_after_refine, refinement_picked,
-                final_score, published, content_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                final_score, published, content_id,
+                outcome, rejection_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (batch_id, content_type, candidates_generated,
              best_candidate_index, best_score_before_refine,
              best_score_after_refine, refinement_picked,
-             final_score, 1 if published else 0, content_id)
+             final_score, 1 if published else 0, content_id,
+             outcome, rejection_reason)
         )
         self.conn.commit()
         return cursor.lastrowid
