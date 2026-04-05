@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     final_score REAL,
     published INTEGER DEFAULT 0,
     content_id INTEGER REFERENCES generated_content(id),
+    filter_stats TEXT,  -- JSON: rejection counts per filter stage
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

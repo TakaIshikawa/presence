@@ -124,6 +124,7 @@ def main():
         refinement_picked=result.refinement.picked if result.refinement else None,
         final_score=result.final_score,
         content_id=content_id,
+        filter_stats=result.filter_stats,
     )
 
     # Publish if passes threshold

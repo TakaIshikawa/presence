@@ -280,6 +280,7 @@ def main():
         refinement_picked=pipeline_result.refinement.picked if pipeline_result.refinement else None,
         final_score=pipeline_result.final_score,
         content_id=content_id,
+        filter_stats=pipeline_result.filter_stats,
     )
 
     # Post if passes threshold

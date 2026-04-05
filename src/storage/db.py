@@ -50,6 +50,10 @@ class Database:
         if "auto_quality" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN auto_quality TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_auto_quality ON generated_content(auto_quality)")
+        # Migrate pipeline_runs: add filter_stats column
+        pr_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pipeline_runs)")}
+        if "filter_stats" not in pr_cols:
+            self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
         self.conn.commit()
 
     # Claude messages
@@ -624,6 +628,7 @@ class Database:
         final_score: float = None,
         published: bool = False,
         content_id: int = None,
+        filter_stats: dict = None,
     ) -> int:
         """Record a pipeline run for observability."""
         cursor = self.conn.execute(
@@ -631,12 +636,13 @@ class Database:
                (batch_id, content_type, candidates_generated,
                 best_candidate_index, best_score_before_refine,
                 best_score_after_refine, refinement_picked,
-                final_score, published, content_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                final_score, published, content_id, filter_stats)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (batch_id, content_type, candidates_generated,
              best_candidate_index, best_score_before_refine,
              best_score_after_refine, refinement_picked,
-             final_score, 1 if published else 0, content_id)
+             final_score, 1 if published else 0, content_id,
+             json.dumps(filter_stats) if filter_stats else None)
         )
         self.conn.commit()
         return cursor.lastrowid
