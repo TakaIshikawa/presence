@@ -58,6 +58,7 @@ class SynthesisPipeline:
         re.compile(r"(?i)\w[\w ]{0,30} (is|are) dead\.\s*long live\b"),
         re.compile(r"(?i)^I spent \d+\s*(hours?|days?|weeks?|months?)"),
         re.compile(r"(?i)^most (people|developers?|devs|engineers?) don.t\b"),
+        re.compile(r"(?i)^everyone (says|preaches|thinks|knows|believes)\b"),
     ]
 
     # Post format directives for structural variety
