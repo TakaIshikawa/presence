@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 # Add src/ to import path
+# Also configured in pyproject.toml [tool.pytest.ini_options] pythonpath
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from storage.db import Database
