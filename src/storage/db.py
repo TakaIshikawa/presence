@@ -4,7 +4,7 @@ import sqlite3
 import json
 from pathlib import Path
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 MAX_RETRIES = 3
 
@@ -125,6 +125,65 @@ class Database:
                WHERE timestamp >= ? AND timestamp < ?
                ORDER BY timestamp""",
             (start.isoformat(), end.isoformat())
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    # Commit-prompt correlation
+    def link_commit_to_prompts(
+        self,
+        commit_id: int,
+        commit_timestamp: datetime,
+        window_minutes: int = 30,
+        min_confidence: float = 0.5,
+    ) -> list[int]:
+        """Find claude_messages within ±window_minutes of the commit and insert links.
+
+        Confidence = 1.0 - (time_delta_minutes / window_minutes), clamped to [0, 1].
+        Only links with confidence >= min_confidence are inserted.
+
+        Returns list of inserted link IDs.
+        """
+        window_start = commit_timestamp - timedelta(minutes=window_minutes)
+        window_end = commit_timestamp + timedelta(minutes=window_minutes)
+
+        cursor = self.conn.execute(
+            """SELECT id, timestamp FROM claude_messages
+               WHERE timestamp >= ? AND timestamp <= ?""",
+            (window_start.isoformat(), window_end.isoformat())
+        )
+
+        link_ids = []
+        for row in cursor.fetchall():
+            msg_ts = datetime.fromisoformat(row["timestamp"])
+            delta_minutes = abs((commit_timestamp - msg_ts).total_seconds()) / 60
+            confidence = 1.0 - (delta_minutes / window_minutes)
+            confidence = max(0.0, min(1.0, confidence))
+
+            if confidence < min_confidence:
+                continue
+
+            result = self.conn.execute(
+                """INSERT INTO commit_prompt_links (commit_id, message_id, confidence)
+                   VALUES (?, ?, ?)""",
+                (commit_id, row["id"], round(confidence, 4))
+            )
+            link_ids.append(result.lastrowid)
+
+        if link_ids:
+            self.conn.commit()
+        return link_ids
+
+    def get_prompts_for_commit(self, commit_sha: str) -> list[dict]:
+        """Return linked prompts for a commit, ordered by confidence descending."""
+        cursor = self.conn.execute(
+            """SELECT cm.id, cm.session_id, cm.message_uuid, cm.project_path,
+                      cm.timestamp, cm.prompt_text, cpl.confidence
+               FROM commit_prompt_links cpl
+               JOIN claude_messages cm ON cm.id = cpl.message_id
+               JOIN github_commits gc ON gc.id = cpl.commit_id
+               WHERE gc.commit_sha = ?
+               ORDER BY cpl.confidence DESC""",
+            (commit_sha,)
         )
         return [dict(row) for row in cursor.fetchall()]
 

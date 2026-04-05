@@ -129,13 +129,19 @@ def main():
 
         print(f"New commit: [{commit.repo_name}] {commit.sha[:8]} - {commit.message[:50]}")
 
-        db.insert_commit(
+        commit_id = db.insert_commit(
             repo_name=commit.repo_name,
             commit_sha=commit.sha,
             commit_message=commit.message,
             timestamp=commit.timestamp.isoformat(),
             author=commit.author
         )
+
+        # Correlate commit with nearby Claude prompts
+        link_ids = db.link_commit_to_prompts(commit_id, commit.timestamp)
+        if link_ids:
+            print(f"  Linked to {len(link_ids)} prompt(s)")
+
         new_commit_count += 1
 
     if new_commit_count:

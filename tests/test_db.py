@@ -146,6 +146,117 @@ class TestGitHubCommits:
         assert results[0]["commit_message"] == "commit 1"
 
 
+# --- Commit-prompt correlation ---
+
+
+class TestCommitPromptLinks:
+    """Tests for link_commit_to_prompts and get_prompts_for_commit."""
+
+    def _setup_commit_and_prompts(self, db, commit_ts="2026-03-30T12:00:00", prompt_offsets_min=None):
+        """Insert a commit and prompts at various offsets from the commit timestamp.
+
+        prompt_offsets_min: list of minute offsets from commit_ts (negative = before).
+        Returns (commit_id, commit_sha, commit_datetime).
+        """
+        if prompt_offsets_min is None:
+            prompt_offsets_min = [-10, -5, 0, 5, 10]
+
+        commit_dt = datetime.fromisoformat(commit_ts)
+        commit_id = db.insert_commit(
+            repo_name="test-repo",
+            commit_sha="abc123",
+            commit_message="feat: add feature",
+            timestamp=commit_ts,
+            author="taka",
+        )
+
+        for i, offset in enumerate(prompt_offsets_min):
+            prompt_ts = commit_dt + timedelta(minutes=offset)
+            db.insert_claude_message(
+                session_id="session-1",
+                message_uuid=f"uuid-{i}",
+                project_path="/projects/test",
+                timestamp=prompt_ts.isoformat(),
+                prompt_text=f"prompt at offset {offset}m",
+            )
+
+        return commit_id, "abc123", commit_dt
+
+    def test_links_prompts_within_window(self, db):
+        commit_id, _, commit_dt = self._setup_commit_and_prompts(
+            db, prompt_offsets_min=[-10, -5, 0, 5, 10]
+        )
+        link_ids = db.link_commit_to_prompts(commit_id, commit_dt, window_minutes=30)
+        assert len(link_ids) == 5
+
+    def test_ignores_prompts_outside_window(self, db):
+        commit_id, _, commit_dt = self._setup_commit_and_prompts(
+            db, prompt_offsets_min=[-60, -31, 0, 31, 60]
+        )
+        link_ids = db.link_commit_to_prompts(commit_id, commit_dt, window_minutes=30)
+        # Only the prompt at offset 0 is within ±30 min with confidence >= 0.5
+        # offset 0: confidence = 1.0
+        # offset ±31: confidence = 1 - 31/30 < 0 → clamped to 0 → below 0.5
+        # offset ±60: confidence = 1 - 60/30 < 0 → clamped to 0 → below 0.5
+        assert len(link_ids) == 1
+
+    def test_confidence_decreases_with_distance(self, db):
+        commit_id, sha, commit_dt = self._setup_commit_and_prompts(
+            db, prompt_offsets_min=[0, -5, -10]
+        )
+        db.link_commit_to_prompts(commit_id, commit_dt, window_minutes=30)
+
+        prompts = db.get_prompts_for_commit(sha)
+        assert len(prompts) == 3
+        # Ordered by confidence descending
+        confidences = [p["confidence"] for p in prompts]
+        assert confidences == sorted(confidences, reverse=True)
+        # Closest (offset 0) should have highest confidence
+        assert prompts[0]["confidence"] == 1.0
+        assert prompts[0]["prompt_text"] == "prompt at offset 0m"
+
+    def test_get_prompts_for_commit_ordered_by_confidence(self, db):
+        commit_id, sha, commit_dt = self._setup_commit_and_prompts(
+            db, prompt_offsets_min=[-20, -10, -1, 5, 15]
+        )
+        db.link_commit_to_prompts(commit_id, commit_dt, window_minutes=30)
+
+        prompts = db.get_prompts_for_commit(sha)
+        confidences = [p["confidence"] for p in prompts]
+        assert confidences == sorted(confidences, reverse=True)
+
+    def test_no_prompts_in_window_returns_empty(self, db):
+        commit_dt = datetime.fromisoformat("2026-03-30T12:00:00")
+        commit_id = db.insert_commit(
+            "test-repo", "sha-lonely", "fix: solo commit",
+            "2026-03-30T12:00:00", "taka",
+        )
+        # Insert a prompt far outside the window
+        db.insert_claude_message(
+            "s1", "uuid-far", "/p",
+            "2026-03-29T10:00:00",  # ~26 hours before
+            "unrelated prompt",
+        )
+        link_ids = db.link_commit_to_prompts(commit_id, commit_dt, window_minutes=30)
+        assert link_ids == []
+
+        prompts = db.get_prompts_for_commit("sha-lonely")
+        assert prompts == []
+
+    def test_min_confidence_filters_low_scores(self, db):
+        commit_id, sha, commit_dt = self._setup_commit_and_prompts(
+            db, prompt_offsets_min=[0, -14, -28]
+        )
+        # window=30, offset -28 → confidence = 1 - 28/30 ≈ 0.067 → below default 0.5
+        # offset -14 → confidence = 1 - 14/30 ≈ 0.533 → above 0.5
+        # offset 0 → confidence = 1.0
+        link_ids = db.link_commit_to_prompts(commit_id, commit_dt, window_minutes=30, min_confidence=0.5)
+        assert len(link_ids) == 2
+
+        prompts = db.get_prompts_for_commit(sha)
+        assert all(p["confidence"] >= 0.5 for p in prompts)
+
+
 # --- Generated content CRUD ---
 
 
