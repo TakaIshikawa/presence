@@ -152,6 +152,19 @@ CREATE INDEX IF NOT EXISTS idx_generated_content_type ON generated_content(conte
 CREATE INDEX IF NOT EXISTS idx_post_engagement_content ON post_engagement(content_id);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_tweet ON post_engagement(tweet_id);
 
+-- Newsletter send tracking
+CREATE TABLE IF NOT EXISTS newsletter_sends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id TEXT,
+    subject TEXT NOT NULL,
+    source_content_ids TEXT,   -- JSON array of generated_content IDs
+    subscriber_count INTEGER,
+    status TEXT DEFAULT 'sent',
+    sent_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_newsletter_sends_sent_at ON newsletter_sends(sent_at);
+
 -- Reply queue for reply-to-reply engagement
 CREATE TABLE IF NOT EXISTS reply_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

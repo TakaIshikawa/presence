@@ -11,6 +11,7 @@ AGENTS=(
     "com.presence.weekly"
     "com.presence.engagement"
     "com.presence.replies"
+    "com.presence.newsletter"
 )
 
 usage() {
@@ -22,7 +23,7 @@ usage() {
     echo "  restart   - Stop then start all jobs"
     echo "  status    - Show status of all jobs"
     echo "  logs      - Tail all log files"
-    echo "  run       - Run a specific job now (poll|daily|weekly|replies)"
+    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter)"
     echo "  retry     - Retry posting unpublished content"
     echo "  reply     - Review and post pending reply drafts"
     echo "  knowledge - Knowledge base commands (build|fetch|stats)"
@@ -114,8 +115,12 @@ run_job() {
             echo "Running poll_replies.py..."
             cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/poll_replies.py
             ;;
+        newsletter)
+            echo "Running send_newsletter.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/send_newsletter.py
+            ;;
         *)
-            echo "Usage: $0 run {poll|daily|weekly|replies}"
+            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter}"
             exit 1
             ;;
     esac

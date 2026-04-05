@@ -9,6 +9,7 @@ The founder's voice characteristics:
 
 {few_shot_section}
 {format_directive}
+{historical_section}
 ---
 
 Given: A day's worth of prompts (their intent) and commits (what they built).

@@ -223,6 +223,23 @@ def main():
     prompt_text_list = [p.prompt_text for p in prompts_since]
     prompt_uuids = [p.message_uuid for p in prompts_since]
 
+    # Inject historical context if configured
+    if config.historical and config.historical.enabled:
+        from synthesis.theme_selector import ThemeSelector
+        theme_selector = ThemeSelector(db)
+        if theme_selector.should_inject("x_post", config.historical.injection_frequency):
+            ctx = theme_selector.select(
+                commit_dicts, "x_post",
+                lookback_days=config.historical.lookback_days,
+                min_age_days=config.historical.min_age_days,
+                max_commits=config.historical.max_historical_commits,
+            )
+            if ctx:
+                print(f"  Historical context: {ctx.theme_description}")
+                for hc in ctx.commits:
+                    hc["historical"] = True
+                    commit_dicts.append(hc)
+
     print(f"\nRunning pipeline: {len(commit_dicts)} commits, {len(prompt_text_list)} prompts, "
           f"{config.synthesis.num_candidates} candidates...")
     pipeline_result = pipeline.run(

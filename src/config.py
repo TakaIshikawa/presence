@@ -78,6 +78,24 @@ class CuratedSourcesConfig:
 
 
 @dataclass
+class NewsletterConfig:
+    enabled: bool
+    provider: str
+    api_key: str
+    send_day: str
+    send_hour: int
+
+
+@dataclass
+class HistoricalConfig:
+    enabled: bool
+    lookback_days: int
+    injection_frequency: int
+    min_age_days: int
+    max_historical_commits: int
+
+
+@dataclass
 class Config:
     github: GitHubConfig
     x: XConfig
@@ -88,6 +106,8 @@ class Config:
     replies: Optional[RepliesConfig]
     embeddings: Optional[EmbeddingsConfig]
     curated_sources: Optional[CuratedSourcesConfig]
+    newsletter: Optional[NewsletterConfig]
+    historical: Optional[HistoricalConfig]
 
 
 def _resolve_env_var(value: str) -> str:
@@ -157,6 +177,28 @@ def load_config(config_path: Optional[str] = None) -> Config:
             blogs=blogs
         )
 
+    # Parse newsletter config if present
+    newsletter_config = None
+    if "newsletter" in data:
+        newsletter_config = NewsletterConfig(
+            enabled=data["newsletter"].get("enabled", True),
+            provider=data["newsletter"].get("provider", "buttondown"),
+            api_key=_resolve_env_var(data["newsletter"].get("api_key", "")),
+            send_day=data["newsletter"].get("send_day", "monday"),
+            send_hour=data["newsletter"].get("send_hour", 9),
+        )
+
+    # Parse historical config if present
+    historical_config = None
+    if "historical" in data:
+        historical_config = HistoricalConfig(
+            enabled=data["historical"].get("enabled", True),
+            lookback_days=data["historical"].get("lookback_days", 180),
+            injection_frequency=data["historical"].get("injection_frequency", 3),
+            min_age_days=data["historical"].get("min_age_days", 30),
+            max_historical_commits=data["historical"].get("max_historical_commits", 5),
+        )
+
     return Config(
         github=GitHubConfig(
             username=data["github"]["username"],
@@ -192,5 +234,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         ),
         replies=replies_config,
         embeddings=embeddings_config,
-        curated_sources=curated_sources_config
+        curated_sources=curated_sources_config,
+        newsletter=newsletter_config,
+        historical=historical_config,
     )
