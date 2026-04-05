@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Interactive review of pending reply drafts."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -42,7 +43,40 @@ def main():
             break
 
         print(f"{'─' * 60}")
-        print(f"{i + 1}/{len(pending)}  @{reply['inbound_author_handle']} replied to your post\n")
+        header = f"{i + 1}/{len(pending)}  @{reply['inbound_author_handle']} replied to your post"
+
+        # Relationship context (from cultivate enrichment stored at poll time)
+        context_parts = []
+        if reply["relationship_context"]:
+            try:
+                ctx = json.loads(reply["relationship_context"])
+                if ctx.get("engagement_stage") is not None:
+                    context_parts.append(f"{ctx.get('stage_name', '?')} (stage {ctx['engagement_stage']})")
+                if ctx.get("dunbar_tier") is not None:
+                    context_parts.append(f"{ctx.get('tier_name', '?')} (tier {ctx['dunbar_tier']})")
+                if ctx.get("relationship_strength") is not None:
+                    context_parts.append(f"strength: {ctx['relationship_strength']:.2f}")
+            except (json.JSONDecodeError, KeyError):
+                pass
+        if context_parts:
+            header += f"\n     [{' | '.join(context_parts)}]"
+
+        # Quality score
+        if reply["quality_score"] is not None:
+            score = reply["quality_score"]
+            flags = []
+            if reply["quality_flags"]:
+                try:
+                    flags = json.loads(reply["quality_flags"])
+                except json.JSONDecodeError:
+                    pass
+            quality_str = f"Quality: {score:.1f}/10"
+            if flags:
+                quality_str += f" ⚠ {', '.join(flags)}"
+            header += f"\n     [{quality_str}]"
+
+        print(header)
+        print()
         print(f"  Your post:   \"{_truncate(reply['our_post_text'], 120)}\"")
         print(f"  Their reply: \"{_truncate(reply['inbound_text'], 120)}\"")
         print(f"  Draft:       \"{_truncate(reply['draft_text'], 120)}\"")

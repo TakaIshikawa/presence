@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Poll for replies to our published posts and draft responses."""
 
+import json
 import signal
 import sys
 from pathlib import Path
@@ -47,8 +48,25 @@ def main():
 
     drafter = ReplyDrafter(
         api_key=config.anthropic.api_key,
-        model=config.synthesis.model,  # Use Sonnet for drafting
+        model=config.synthesis.model,
     )
+
+    # Cultivate integration (optional — works without it)
+    bridge = None
+    evaluator = None
+    if config.cultivate and config.cultivate.enabled:
+        from engagement.cultivate_bridge import CultivateBridge
+        bridge = CultivateBridge.try_connect(config.cultivate.db_path)
+        if bridge:
+            print("Cultivate integration active")
+        else:
+            print("Cultivate DB not found, continuing without enrichment")
+
+        from engagement.reply_evaluator import ReplyEvaluator
+        evaluator = ReplyEvaluator(
+            api_key=config.anthropic.api_key,
+            model=config.synthesis.model,
+        )
 
     # Check daily reply cap
     max_daily = config.replies.max_daily_replies if config.replies else 10
@@ -139,7 +157,28 @@ def main():
         if author_id in users_by_id:
             author_handle = users_by_id[author_id]["username"]
 
-        # Draft reply
+        # Cultivate: look up relationship context
+        person_context = None
+        if bridge and config.cultivate.enrich_replies:
+            person_context = bridge.get_person_context(author_handle)
+            if person_context:
+                print(f"  Context: {person_context.stage_name} (stage {person_context.engagement_stage}), "
+                      f"{person_context.tier_name} (tier {person_context.dunbar_tier})")
+
+        # Cultivate: forward mention event
+        if bridge and config.cultivate.forward_mentions:
+            try:
+                bridge.record_mention_event(
+                    tweet_id=tweet_id,
+                    author_x_id=author_id,
+                    author_handle=author_handle,
+                    text=mention["text"],
+                    created_at=mention.get("created_at", ""),
+                )
+            except Exception as e:
+                print(f"  Warning: failed to forward mention to cultivate: {e}")
+
+        # Draft reply (enriched with relationship context if available)
         print(f"  Drafting reply to @{author_handle}: \"{mention['text'][:60]}...\"")
         try:
             draft = drafter.draft(
@@ -147,10 +186,32 @@ def main():
                 their_reply=mention["text"],
                 their_handle=author_handle,
                 self_handle=my_handle,
+                person_context=person_context,
             )
         except Exception as e:
             print(f"  Error drafting reply: {e}")
             continue
+
+        # Quality evaluation (if evaluator configured)
+        relationship_context = None
+        quality_score = None
+        quality_flags = None
+        if person_context:
+            relationship_context = person_context.to_json()
+        if evaluator:
+            threshold = config.cultivate.reply_quality_threshold
+            eval_result = evaluator.evaluate(
+                draft=draft,
+                our_post=our_content["content"],
+                their_reply=mention["text"],
+                threshold=threshold,
+                person_context=person_context,
+            )
+            quality_score = eval_result.score
+            quality_flags = json.dumps(eval_result.flags) if eval_result.flags else None
+            if not eval_result.passes:
+                flag_str = ", ".join(eval_result.flags) if eval_result.flags else "low score"
+                print(f"  Quality flag: {eval_result.score:.1f}/10 ({flag_str})")
 
         # Store in queue
         db.insert_reply_draft(
@@ -162,6 +223,9 @@ def main():
             our_content_id=our_content["id"],
             our_post_text=our_content["content"],
             draft_text=draft,
+            relationship_context=relationship_context,
+            quality_score=quality_score,
+            quality_flags=quality_flags,
         )
 
         print(f"  Draft: \"{draft[:80]}...\"" if len(draft) > 80 else f"  Draft: \"{draft}\"")
@@ -171,6 +235,8 @@ def main():
     if max_mention_id and max_mention_id != since_id:
         db.set_last_mention_id(max_mention_id)
 
+    if bridge:
+        bridge.close()
     db.close()
     print(f"\nDone. {drafted} drafted, {skipped} skipped.")
 

@@ -66,6 +66,45 @@ class XClient:
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=str(e))
 
+    def quote_tweet(self, text: str, quote_tweet_id: str) -> PostResult:
+        """Post a quote tweet."""
+        try:
+            response = self.client.create_tweet(
+                text=text, quote_tweet_id=quote_tweet_id
+            )
+            tweet_id = response.data["id"]
+            return PostResult(
+                success=True,
+                tweet_id=tweet_id,
+                url=f"https://x.com/{self.username}/status/{tweet_id}",
+            )
+        except tweepy.TweepyException as e:
+            return PostResult(success=False, error=str(e))
+
+    def like(self, tweet_id: str) -> PostResult:
+        """Like a tweet."""
+        try:
+            self.client.like(tweet_id)
+            return PostResult(success=True, tweet_id=tweet_id)
+        except tweepy.TweepyException as e:
+            return PostResult(success=False, error=str(e))
+
+    def retweet(self, tweet_id: str) -> PostResult:
+        """Retweet a tweet."""
+        try:
+            self.client.retweet(tweet_id)
+            return PostResult(success=True, tweet_id=tweet_id)
+        except tweepy.TweepyException as e:
+            return PostResult(success=False, error=str(e))
+
+    def follow(self, user_id: str) -> PostResult:
+        """Follow a user by ID."""
+        try:
+            self.client.follow_user(user_id)
+            return PostResult(success=True)
+        except tweepy.TweepyException as e:
+            return PostResult(success=False, error=str(e))
+
     def get_mentions(
         self, since_id: Optional[str] = None, max_results: int = 50
     ) -> tuple[list[dict], dict]:

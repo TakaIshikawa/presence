@@ -49,6 +49,15 @@ historical:
   min_age_days: 30            # Commits must be at least this old
   max_historical_commits: 5   # Max historical commits to inject
 
+# Cultivate integration (relationship-aware engagement)
+cultivate:
+  enabled: true
+  db_path: "~/.cultivate/cultivate.db"
+  forward_mentions: true           # Write mentions to cultivate events table
+  enrich_replies: true             # Look up person context for reply drafting
+  proactive_review: true           # Enable review_proactive.py
+  reply_quality_threshold: 6.0     # Flag threshold for quality evaluation (0-10)
+
 # Reply-to-reply engagement
 replies:
   enabled: true
