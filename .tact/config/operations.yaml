@@ -195,17 +195,6 @@ operations:
   - monitoring
   runtimeType: check
 runs:
-- runId: run-1775314788766
-  operationId: run-daily
-  sessionId: launchd-automated
-  startedAt: '2026-04-04 14:59:46'
-  completedAt: '2026-04-04 14:59:46'
-  status: completed
-  summary: Daily digest via launchd (state synced from database)
-  costUsd: 0.0
-  agent:
-    agentType: launchd
-    model: n/a
 - runId: run-1775366206259
   operationId: run-weekly
   sessionId: launchd-automated
@@ -217,11 +206,22 @@ runs:
   agent:
     agentType: launchd
     model: n/a
-- runId: run-1775399744642
+- runId: run-1775401200866
+  operationId: run-daily
+  sessionId: launchd-automated
+  startedAt: '2026-04-05 14:59:58'
+  completedAt: '2026-04-05 14:59:58'
+  status: completed
+  summary: Daily digest via launchd (state synced from database)
+  costUsd: 0.0
+  agent:
+    agentType: launchd
+    model: n/a
+- runId: run-1775401575957
   operationId: run-poll
   sessionId: launchd-automated
-  startedAt: '2026-04-05T14:35:15.488321+00:00'
-  completedAt: '2026-04-05T14:35:15.488321+00:00'
+  startedAt: '2026-04-05T15:05:45.204229+00:00'
+  completedAt: '2026-04-05T15:05:45.204229+00:00'
   status: completed
   summary: Automated poll via launchd (state synced from database)
   costUsd: 0.0
