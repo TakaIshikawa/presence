@@ -3,6 +3,7 @@
 
 import sys
 import time
+import logging
 from pathlib import Path
 
 # Add src to path
@@ -15,8 +16,14 @@ from output.x_client import XClient
 # Rate limiting: seconds between X posts
 POST_DELAY_SECONDS = 30
 
+logger = logging.getLogger(__name__)
+
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(message)s'
+    )
     config = load_config()
 
     db = Database(config.paths.database)
@@ -33,35 +40,35 @@ def main():
     min_score = config.synthesis.eval_threshold * 10
     unpublished = db.get_unpublished_content("x_post", min_score)
 
-    print(f"Found {len(unpublished)} unpublished posts to retry")
+    logger.info("Found %d unpublished posts to retry", len(unpublished))
 
     posts_made = 0
     for item in unpublished:
         retry_num = (item.get("retry_count") or 0) + 1
-        print(f"\nRetrying (attempt {retry_num}/3): {item['content'][:60]}...")
+        logger.info("Retrying (attempt %d/3): %s", retry_num, item['content'][:60])
 
         # Rate limiting
         if posts_made > 0:
-            print(f"  Waiting {POST_DELAY_SECONDS}s...")
+            logger.info("Waiting %ds", POST_DELAY_SECONDS)
             time.sleep(POST_DELAY_SECONDS)
 
         result = x_client.post(item['content'])
         if result.success:
             db.mark_published(item['id'], result.url, tweet_id=result.tweet_id)
-            print(f"  Posted: {result.url}")
+            logger.info("Posted: %s", result.url)
             posts_made += 1
         else:
             count = db.increment_retry(item['id'])
             if count >= 3:
-                print(f"  Failed: {result.error} — abandoned after 3 attempts")
+                logger.warning("Failed: %s — abandoned after 3 attempts", result.error)
             else:
-                print(f"  Failed: {result.error}")
+                logger.warning("Failed: %s", result.error)
             if "429" in str(result.error):
-                print("  Rate limited, stopping")
+                logger.warning("Rate limited, stopping")
                 break
 
     db.close()
-    print(f"\nDone. {posts_made} posts made.")
+    logger.info("Done. %d posts made.", posts_made)
 
 
 if __name__ == "__main__":

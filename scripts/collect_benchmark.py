@@ -3,6 +3,7 @@
 
 import sys
 import time
+import logging
 import argparse
 import tweepy
 from pathlib import Path
@@ -14,6 +15,8 @@ from evaluation.validation_db import ValidationDatabase
 from evaluation.engagement_scorer import compute_engagement_score
 
 RATE_LIMIT_SLEEP = 60
+
+logger = logging.getLogger(__name__)
 
 
 def get_bearer_token(api_key: str, api_secret: str) -> str:
@@ -49,7 +52,7 @@ def fetch_following(client: tweepy.Client, user_id: str) -> list[dict]:
                 user_auth=True,
             )
         except tweepy.TooManyRequests:
-            print(f"  Rate limited on following list, sleeping {RATE_LIMIT_SLEEP}s...")
+            logger.warning("Rate limited on following list, sleeping %ds", RATE_LIMIT_SLEEP)
             time.sleep(RATE_LIMIT_SLEEP)
             continue
 
@@ -95,11 +98,11 @@ def fetch_account_tweets(
                 exclude=["retweets", "replies"],
             )
         except tweepy.TooManyRequests:
-            print(f"    Rate limited, sleeping {RATE_LIMIT_SLEEP}s...")
+            logger.warning("Rate limited, sleeping %ds", RATE_LIMIT_SLEEP)
             time.sleep(RATE_LIMIT_SLEEP)
             continue
         except tweepy.TweepyException as e:
-            print(f"    API error: {e}")
+            logger.error("API error: %s", e)
             break
 
         if not response.data:
@@ -133,6 +136,11 @@ def fetch_account_tweets(
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(message)s'
+    )
+
     parser = argparse.ArgumentParser(
         description="Collect benchmark tweets from followed accounts"
     )
@@ -175,27 +183,27 @@ def main():
     # Get authenticated user's ID
     me = client.get_me()
     my_id = str(me.data.id)
-    print(f"Authenticated as @{me.data.username} (id={my_id})")
+    logger.info("Authenticated as @%s (id=%s)", me.data.username, my_id)
 
     # Fetch following list
-    print("Fetching following list...")
+    logger.info("Fetching following list...")
     following = fetch_following(client, my_id)
-    print(f"Found {len(following)} accounts")
+    logger.info("Found %d accounts", len(following))
 
     # Filter by follower count and take top N
     following = [a for a in following if a["follower_count"] >= args.min_followers]
     following.sort(key=lambda a: a["follower_count"], reverse=True)
     following = following[: args.max_accounts]
-    print(
-        f"Selected {len(following)} accounts "
-        f"(min {args.min_followers} followers)"
+    logger.info(
+        "Selected %d accounts (min %d followers)",
+        len(following), args.min_followers
     )
 
     total_tweets = 0
     for i, account in enumerate(following):
-        print(
-            f"\n[{i + 1}/{len(following)}] @{account['username']} "
-            f"({account['follower_count']:,} followers)"
+        logger.info(
+            "[%d/%d] @%s (%d followers)",
+            i + 1, len(following), account['username'], account['follower_count']
         )
 
         # Upsert account
@@ -215,11 +223,11 @@ def main():
                 inserted += 1
 
         total_tweets += inserted
-        print(f"  Collected {inserted} new tweets (of {len(tweets)} fetched)")
+        logger.info("Collected %d new tweets (of %d fetched)", inserted, len(tweets))
         time.sleep(1)
 
     db.close()
-    print(f"\nDone. Total new tweets: {total_tweets}")
+    logger.info("Done. Total new tweets: %d", total_tweets)
 
 
 if __name__ == "__main__":
