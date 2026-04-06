@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from output.newsletter import (
     NewsletterAssembler,
@@ -135,6 +136,18 @@ class TestNewsletterAssemblerHelpers:
         content = "TWEET 1:\nFirst tweet text\n\nTWEET 2:\nSecond tweet"
         assert NewsletterAssembler._extract_first_tweet(content) == "First tweet text"
 
+    def test_extract_first_tweet_no_markers(self):
+        """Fallback to first non-empty line when no TWEET markers."""
+        content = "This is a regular post.\nSecond line."
+        assert NewsletterAssembler._extract_first_tweet(content) == "This is a regular post."
+
+    def test_extract_first_tweet_all_tweet_prefix(self):
+        """Fallback to content[:100] when all lines start with TWEET."""
+        content = "TWEET: line 1\nTWEET: line 2\nTWEET: line 3"
+        result = NewsletterAssembler._extract_first_tweet(content)
+        assert result == content[:100]
+        assert len(result) <= 100
+
     def test_extract_blog_excerpt(self):
         content = "TITLE: Title\n\n## Header\n\nFirst paragraph.\n\nSecond paragraph."
         excerpt = NewsletterAssembler._extract_blog_excerpt(content, max_lines=2)
@@ -195,6 +208,65 @@ class TestButtondownClient:
 
         call_kwargs = mock_session.post.call_args
         assert call_kwargs[1]["json"]["status"] == "draft"
+
+    @patch("output.newsletter.requests.Session")
+    def test_send_request_exception(self, MockSession):
+        """Test send() handles RequestException correctly."""
+        mock_session = MockSession.return_value
+        mock_session.post.side_effect = requests.RequestException("Network error")
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        result = client.send("Subject", "Body")
+
+        assert result.success is False
+        assert "Network error" in result.error
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_subscriber_count_success(self, MockSession):
+        """Test get_subscriber_count() with successful response."""
+        mock_session = MockSession.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"count": 150}
+        mock_session.get.return_value = mock_response
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        count = client.get_subscriber_count()
+
+        assert count == 150
+        mock_session.get.assert_called_once_with(
+            f"{ButtondownClient.BASE_URL}/subscribers",
+            params={"type": "regular"},
+            timeout=15,
+        )
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_subscriber_count_http_error(self, MockSession):
+        """Test get_subscriber_count() returns 0 on HTTP error."""
+        mock_session = MockSession.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_session.get.return_value = mock_response
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        count = client.get_subscriber_count()
+
+        assert count == 0
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_subscriber_count_request_exception(self, MockSession):
+        """Test get_subscriber_count() returns 0 on RequestException."""
+        mock_session = MockSession.return_value
+        mock_session.get.side_effect = requests.RequestException("Timeout")
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        count = client.get_subscriber_count()
+
+        assert count == 0
 
 
 # --- DB Methods ---
