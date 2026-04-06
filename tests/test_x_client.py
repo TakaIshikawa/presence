@@ -189,6 +189,118 @@ class TestPostThread:
         assert "Rate limit on second tweet" in result.error
 
 
+# --- XClient.quote_tweet() ---
+
+
+class TestQuoteTweet:
+    def test_success_returns_post_result(self):
+        client, mock_tweepy = make_x_client()
+        mock_get_me(mock_tweepy, username="alice")
+        mock_create_tweet(mock_tweepy, tweet_id="333")
+
+        result = client.quote_tweet("Great thread", quote_tweet_id="original_100")
+
+        assert result.success is True
+        assert result.tweet_id == "333"
+        assert result.url == "https://x.com/alice/status/333"
+
+    def test_calls_create_tweet_with_quote_param(self):
+        client, mock_tweepy = make_x_client()
+        mock_get_me(mock_tweepy)
+        mock_create_tweet(mock_tweepy)
+
+        client.quote_tweet("Commentary", quote_tweet_id="qt_200")
+
+        mock_tweepy.create_tweet.assert_called_once_with(
+            text="Commentary", quote_tweet_id="qt_200"
+        )
+
+    def test_tweepy_exception_returns_failure(self):
+        import tweepy
+
+        client, mock_tweepy = make_x_client()
+        mock_tweepy.create_tweet.side_effect = tweepy.TweepyException("Forbidden")
+
+        result = client.quote_tweet("text", quote_tweet_id="100")
+
+        assert result.success is False
+        assert "Forbidden" in result.error
+
+
+# --- XClient.like() ---
+
+
+class TestLike:
+    def test_success(self):
+        client, mock_tweepy = make_x_client()
+
+        result = client.like("tweet_500")
+
+        assert result.success is True
+        assert result.tweet_id == "tweet_500"
+        mock_tweepy.like.assert_called_once_with("tweet_500")
+
+    def test_tweepy_exception_returns_failure(self):
+        import tweepy
+
+        client, mock_tweepy = make_x_client()
+        mock_tweepy.like.side_effect = tweepy.TweepyException("Rate limit")
+
+        result = client.like("tweet_500")
+
+        assert result.success is False
+        assert "Rate limit" in result.error
+
+
+# --- XClient.retweet() ---
+
+
+class TestRetweet:
+    def test_success(self):
+        client, mock_tweepy = make_x_client()
+
+        result = client.retweet("tweet_600")
+
+        assert result.success is True
+        assert result.tweet_id == "tweet_600"
+        mock_tweepy.retweet.assert_called_once_with("tweet_600")
+
+    def test_tweepy_exception_returns_failure(self):
+        import tweepy
+
+        client, mock_tweepy = make_x_client()
+        mock_tweepy.retweet.side_effect = tweepy.TweepyException("Duplicate")
+
+        result = client.retweet("tweet_600")
+
+        assert result.success is False
+        assert "Duplicate" in result.error
+
+
+# --- XClient.follow() ---
+
+
+class TestFollow:
+    def test_success(self):
+        client, mock_tweepy = make_x_client()
+
+        result = client.follow("user_700")
+
+        assert result.success is True
+        mock_tweepy.follow_user.assert_called_once_with("user_700")
+
+    def test_tweepy_exception_returns_failure(self):
+        import tweepy
+
+        client, mock_tweepy = make_x_client()
+        mock_tweepy.follow_user.side_effect = tweepy.TweepyException("Blocked")
+
+        result = client.follow("user_700")
+
+        assert result.success is False
+        assert "Blocked" in result.error
+
+
 # --- XClient.get_mentions() ---
 
 

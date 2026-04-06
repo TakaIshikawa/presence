@@ -150,3 +150,117 @@ class TestDraft:
         drafter._mock_client.messages.create.side_effect = Exception("API connection failed")
         with pytest.raises(Exception, match="API connection failed"):
             drafter.draft("my post", "their reply", "them", "me")
+
+
+# --- person_context enrichment ---
+
+
+from engagement.cultivate_bridge import PersonContext
+
+
+def _make_person_context(**overrides):
+    """Build a PersonContext with sensible defaults."""
+    defaults = dict(
+        x_handle="dev_jane",
+        display_name="Jane Dev",
+        bio="Building AI tools",
+        relationship_strength=0.42,
+        engagement_stage=3,
+        dunbar_tier=2,
+        authenticity_score=0.85,
+        content_quality_score=0.7,
+        content_relevance_score=0.6,
+        recent_interactions=[],
+        is_known=True,
+    )
+    defaults.update(overrides)
+    return PersonContext(**defaults)
+
+
+class TestContextSection:
+    def test_build_context_section_full(self):
+        ctx = _make_person_context(
+            recent_interactions=[
+                {"type": "reply", "direction": "them → me", "date": "2026-03-28", "snippet": "interesting take"},
+                {"type": "like", "direction": "me → them", "date": "2026-03-20", "snippet": ""},
+            ]
+        )
+        section = ReplyDrafter._build_context_section(ctx)
+        assert "## Relationship Context for @dev_jane" in section
+        assert "Bio: Building AI tools" in section
+        assert "Active (stage 3)" in section
+        assert "Key Network (tier 2)" in section
+        assert "Relationship strength: 0.42" in section
+        assert "[2026-03-28] reply (them → me): interesting take" in section
+        assert "[2026-03-20] like (me → them)" in section
+
+    def test_build_context_section_minimal(self):
+        ctx = _make_person_context(
+            bio=None,
+            relationship_strength=None,
+            engagement_stage=None,
+            dunbar_tier=None,
+            recent_interactions=[],
+        )
+        section = ReplyDrafter._build_context_section(ctx)
+        assert "## Relationship Context for @dev_jane" in section
+        assert "Bio:" not in section
+        assert "stage" not in section
+        assert "tier" not in section
+        assert "strength" not in section
+
+    def test_build_context_section_limits_interactions(self):
+        interactions = [
+            {"type": "reply", "direction": "them → me", "date": f"2026-03-{i:02d}", "snippet": f"msg {i}"}
+            for i in range(1, 11)
+        ]
+        ctx = _make_person_context(recent_interactions=interactions)
+        section = ReplyDrafter._build_context_section(ctx)
+        # Only first 5 should be included
+        assert "msg 5" in section
+        assert "msg 6" not in section
+
+    def test_draft_with_person_context_injects_section(self):
+        with patch("engagement.reply_drafter.anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="Nice insight")]
+            mock_client.messages.create.return_value = mock_response
+
+            drafter = ReplyDrafter(api_key="sk-test", model="test-model")
+            ctx = _make_person_context()
+            drafter.draft("my post", "their reply", "them", "me", person_context=ctx)
+
+            prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
+            assert "Relationship Context for @dev_jane" in prompt
+            assert "Active (stage 3)" in prompt
+
+    def test_draft_with_unknown_person_skips_context(self):
+        with patch("engagement.reply_drafter.anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="Nice insight")]
+            mock_client.messages.create.return_value = mock_response
+
+            drafter = ReplyDrafter(api_key="sk-test", model="test-model")
+            ctx = _make_person_context(is_known=False)
+            drafter.draft("my post", "their reply", "them", "me", person_context=ctx)
+
+            prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
+            assert "Relationship Context" not in prompt
+
+    def test_draft_without_person_context_no_section(self):
+        with patch("engagement.reply_drafter.anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="Nice insight")]
+            mock_client.messages.create.return_value = mock_response
+
+            drafter = ReplyDrafter(api_key="sk-test", model="test-model")
+            drafter.draft("my post", "their reply", "them", "me")
+
+            prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
+            assert "Relationship Context" not in prompt

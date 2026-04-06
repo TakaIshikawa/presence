@@ -792,3 +792,84 @@ class TestPipelineRuns:
         db.insert_pipeline_run("batch-dup", "x_post", 3, 0, 7.0)
         with pytest.raises(Exception):
             db.insert_pipeline_run("batch-dup", "x_post", 3, 0, 7.0)
+
+
+# --- Reply queue ---
+
+
+class TestReplyQueue:
+    def _insert_reply(self, db, tweet_id="tw-100", **kwargs):
+        defaults = dict(
+            inbound_tweet_id=tweet_id,
+            inbound_author_handle="alice",
+            inbound_author_id="user_A",
+            inbound_text="Nice post!",
+            our_tweet_id="our_tw_1",
+            our_content_id=1,
+            our_post_text="Our original post",
+            draft_text="Thanks for the kind words",
+        )
+        defaults.update(kwargs)
+        return db.insert_reply_draft(**defaults)
+
+    def test_insert_and_get_pending_with_enrichment(self, db):
+        ctx_json = '{"x_handle":"alice","engagement_stage":3,"dunbar_tier":2}'
+        self._insert_reply(
+            db,
+            relationship_context=ctx_json,
+            quality_score=7.5,
+            quality_flags='["clean"]',
+        )
+
+        pending = db.get_pending_replies()
+        assert len(pending) == 1
+        r = pending[0]
+        assert r["relationship_context"] == ctx_json
+        assert r["quality_score"] == 7.5
+        assert r["quality_flags"] == '["clean"]'
+
+    def test_insert_without_enrichment_returns_none_columns(self, db):
+        self._insert_reply(db)
+
+        pending = db.get_pending_replies()
+        assert len(pending) == 1
+        r = pending[0]
+        assert r["relationship_context"] is None
+        assert r["quality_score"] is None
+        assert r["quality_flags"] is None
+
+    def test_quality_flags_json_roundtrip(self, db):
+        flags = ["sycophantic", "generic"]
+        self._insert_reply(db, quality_flags=json.dumps(flags))
+
+        pending = db.get_pending_replies()
+        assert json.loads(pending[0]["quality_flags"]) == flags
+
+    def test_relationship_context_json_roundtrip(self, db):
+        from engagement.cultivate_bridge import PersonContext
+
+        ctx = PersonContext(
+            x_handle="alice",
+            display_name="Alice",
+            bio="dev",
+            relationship_strength=0.5,
+            engagement_stage=2,
+            dunbar_tier=3,
+            authenticity_score=0.8,
+            content_quality_score=0.7,
+            content_relevance_score=0.6,
+            is_known=True,
+        )
+        self._insert_reply(db, relationship_context=ctx.to_json())
+
+        pending = db.get_pending_replies()
+        restored = PersonContext.from_json(pending[0]["relationship_context"])
+        assert restored.x_handle == "alice"
+        assert restored.engagement_stage == 2
+        assert restored.stage_name == "Light"
+
+    def test_reply_queue_columns_exist(self, db):
+        cols = {row[1] for row in db.conn.execute("PRAGMA table_info(reply_queue)")}
+        assert "relationship_context" in cols
+        assert "quality_score" in cols
+        assert "quality_flags" in cols

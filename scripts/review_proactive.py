@@ -61,21 +61,7 @@ def main():
 
         ctx = action.person_context
         print(f"{'─' * 60}")
-        print(f"{i + 1}/{len(actions)}  {action.action_type.upper()} -> @{action.target_handle}")
-
-        # Relationship context
-        if ctx:
-            parts = []
-            if ctx.engagement_stage is not None:
-                parts.append(f"{ctx.stage_name} (stage {ctx.engagement_stage})")
-            if ctx.dunbar_tier is not None:
-                parts.append(f"{ctx.tier_name} (tier {ctx.dunbar_tier})")
-            if ctx.relationship_strength is not None:
-                parts.append(f"strength: {ctx.relationship_strength:.2f}")
-            if parts:
-                print(f"     [{' | '.join(parts)}]")
-            if ctx.bio:
-                print(f"     Bio: {_truncate(ctx.bio, 100)}")
+        print(f"{i + 1}/{len(actions)}  {_format_action_context(action)}")
 
         print(f"\n  Reason: {action.description}")
 
@@ -239,6 +225,25 @@ def main():
 
     print(f"\nDone. {completed} actions completed.")
     bridge.close()
+
+
+def _format_action_context(action) -> str:
+    """Format action header with relationship context lines."""
+    lines = [f"{action.action_type.upper()} -> @{action.target_handle}"]
+    ctx = action.person_context
+    if ctx:
+        parts = []
+        if ctx.engagement_stage is not None:
+            parts.append(f"{ctx.stage_name} (stage {ctx.engagement_stage})")
+        if ctx.dunbar_tier is not None:
+            parts.append(f"{ctx.tier_name} (tier {ctx.dunbar_tier})")
+        if ctx.relationship_strength is not None:
+            parts.append(f"strength: {ctx.relationship_strength:.2f}")
+        if parts:
+            lines.append(f"     [{' | '.join(parts)}]")
+        if ctx.bio:
+            lines.append(f"     Bio: {_truncate(ctx.bio, 100)}")
+    return "\n".join(lines)
 
 
 def _get_x_user_id(bridge, person_id: str) -> str | None:
