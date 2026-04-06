@@ -294,6 +294,82 @@ class TestNegativeExamples:
         assert "JSON fallback parsing" in section
 
 
+# --- Calibration section ---
+
+
+class TestCalibrationSection:
+    @pytest.fixture
+    def evaluator(self):
+        with patch("synthesis.evaluator_v2.anthropic.Anthropic"):
+            return CrossModelEvaluator(api_key="test-key")
+
+    def test_both_none_returns_empty(self, evaluator):
+        assert evaluator._build_calibration_section(None, None) == ""
+
+    def test_both_empty_returns_empty(self, evaluator):
+        assert evaluator._build_calibration_section([], []) == ""
+
+    def test_header_present_with_resonated(self, evaluator):
+        resonated = [{"content": "A post that got likes"}]
+        section = evaluator._build_calibration_section(resonated=resonated)
+        assert "ENGAGEMENT REALITY CHECK" in section
+
+    def test_got_engagement_section(self, evaluator):
+        resonated = [{"content": "People loved this take on async patterns"}]
+        section = evaluator._build_calibration_section(resonated=resonated)
+        assert "GOT engagement" in section
+        assert "People loved this take on async patterns" in section
+
+    def test_zero_engagement_section(self, evaluator):
+        low_resonance = [{"content": "A bland generic post nobody cared about"}]
+        section = evaluator._build_calibration_section(low_resonance=low_resonance)
+        assert "ZERO engagement" in section
+        assert "A bland generic post nobody cared about" in section
+
+    def test_limits_to_three_posts_per_category(self, evaluator):
+        resonated = [{"content": f"resonated post {i}"} for i in range(5)]
+        low_resonance = [{"content": f"low res post {i}"} for i in range(5)]
+        section = evaluator._build_calibration_section(resonated, low_resonance)
+        # First 3 appear
+        for i in range(3):
+            assert f"resonated post {i}" in section
+            assert f"low res post {i}" in section
+        # 4th and 5th do not
+        for i in range(3, 5):
+            assert f"resonated post {i}" not in section
+            assert f"low res post {i}" not in section
+
+    def test_truncates_content_at_200_chars(self, evaluator):
+        long_content = "x" * 300
+        resonated = [{"content": long_content}]
+        section = evaluator._build_calibration_section(resonated=resonated)
+        # Truncated to 200 chars — the quoted content should be exactly 200 x's
+        assert "x" * 200 in section
+        assert "x" * 201 not in section
+
+    def test_calibration_instruction_at_end(self, evaluator):
+        resonated = [{"content": "good post"}]
+        section = evaluator._build_calibration_section(resonated=resonated)
+        assert section.endswith(
+            "Use these to calibrate: if a candidate resembles the zero-engagement "
+            "posts, score ENGAGEMENT_POTENTIAL 5 or below regardless of writing quality."
+        )
+
+    def test_only_resonated_no_low_resonance(self, evaluator):
+        resonated = [{"content": "a hit post"}]
+        section = evaluator._build_calibration_section(resonated=resonated, low_resonance=None)
+        assert "GOT engagement" in section
+        assert "ZERO engagement" not in section
+        assert "a hit post" in section
+
+    def test_only_low_resonance_no_resonated(self, evaluator):
+        low_resonance = [{"content": "a flop post"}]
+        section = evaluator._build_calibration_section(resonated=None, low_resonance=low_resonance)
+        assert "ZERO engagement" in section
+        assert "GOT engagement" not in section
+        assert "a flop post" in section
+
+
 # --- End-to-end evaluate() with mocked Claude API ---
 
 
