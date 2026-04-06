@@ -113,22 +113,27 @@ def main():
         eval_feedback=result.comparison.best_feedback,
     )
 
-    # Record pipeline run
-    db.insert_pipeline_run(
-        batch_id=result.batch_id,
-        content_type="blog_post",
-        candidates_generated=len(result.candidates),
-        best_candidate_index=best_idx,
-        best_score_before_refine=result.comparison.best_score,
-        best_score_after_refine=result.refinement.final_score if result.refinement else None,
-        refinement_picked=result.refinement.picked if result.refinement else None,
-        final_score=result.final_score,
-        content_id=content_id,
-    )
-
-    # Publish if passes threshold
+    # Determine outcome and publish if passes threshold
     passes = result.final_score >= config.synthesis.eval_threshold * 10
-    if passes:
+    outcome = None
+    rejection_reason = None
+
+    if not result.candidates:
+        outcome = "all_filtered"
+        rejection_reason = result.comparison.reject_reason
+    elif not passes:
+        outcome = "below_threshold"
+        rejection_reason = result.comparison.reject_reason or (
+            f"Score {result.final_score:.1f} below threshold "
+            f"{config.synthesis.eval_threshold * 10}"
+        )
+        if result.comparison.reject_reason:
+            print(f"Rejected: {result.comparison.reject_reason}")
+        else:
+            print("Below threshold, not publishing")
+        print("Generated content:")
+        print(result.final_content[:500] + "...")
+    else:
         print("Writing blog post...")
         write_result = blog_writer.write_post(result.final_content)
 
@@ -141,17 +146,30 @@ def main():
             if blog_writer.commit_and_push(title):
                 db.mark_published(content_id, write_result.url)
                 print(f"Published: {write_result.url}")
+                outcome = "published"
             else:
                 print("Git push failed")
+                outcome = "below_threshold"
+                rejection_reason = "Git push failed"
         else:
             print(f"Write failed: {write_result.error}")
-    else:
-        if result.comparison.reject_reason:
-            print(f"Rejected: {result.comparison.reject_reason}")
-        else:
-            print("Below threshold, not publishing")
-        print("Generated content:")
-        print(result.final_content[:500] + "...")
+            outcome = "below_threshold"
+            rejection_reason = f"Write failed: {write_result.error}"
+
+    # Record pipeline run
+    db.insert_pipeline_run(
+        batch_id=result.batch_id,
+        content_type="blog_post",
+        candidates_generated=len(result.candidates),
+        best_candidate_index=best_idx,
+        best_score_before_refine=result.comparison.best_score,
+        best_score_after_refine=result.refinement.final_score if result.refinement else None,
+        refinement_picked=result.refinement.picked if result.refinement else None,
+        final_score=result.final_score,
+        content_id=content_id,
+        outcome=outcome,
+        rejection_reason=rejection_reason,
+    )
 
     db.close()
     _update_monitoring()
