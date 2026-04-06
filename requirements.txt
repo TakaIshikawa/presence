@@ -4,3 +4,4 @@ tweepy>=4.14.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
 voyageai>=0.2.0
+pytest-cov>=4.0.0
