@@ -9,10 +9,11 @@ import pytest
 # Add scripts/ to path so we can import the module under test
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from review_replies import _format_context_line, _format_quality_line
+from review_helpers import format_relationship_context
+from review_replies import _format_quality_line
 
 
-# --- _format_context_line ---
+# --- format_relationship_context ---
 
 
 class TestFormatContextLine:
@@ -24,30 +25,30 @@ class TestFormatContextLine:
             "tier_name": "Key Network",
             "relationship_strength": 0.42,
         }
-        result = _format_context_line(json.dumps(ctx))
+        result = format_relationship_context(json.dumps(ctx))
         assert result == "Active (stage 3) | Key Network (tier 2) | strength: 0.42"
 
     def test_partial_context_stage_only(self):
         ctx = {"engagement_stage": 1, "stage_name": "Ambient"}
-        result = _format_context_line(json.dumps(ctx))
+        result = format_relationship_context(json.dumps(ctx))
         assert result == "Ambient (stage 1)"
 
     def test_missing_stage_name_shows_question_mark(self):
         ctx = {"engagement_stage": 3}
-        result = _format_context_line(json.dumps(ctx))
+        result = format_relationship_context(json.dumps(ctx))
         assert result == "? (stage 3)"
 
     def test_none_input_returns_none(self):
-        assert _format_context_line(None) is None
+        assert format_relationship_context(None) is None
 
     def test_empty_string_returns_none(self):
-        assert _format_context_line("") is None
+        assert format_relationship_context("") is None
 
     def test_malformed_json_returns_none(self):
-        assert _format_context_line("not json{") is None
+        assert format_relationship_context("not json{") is None
 
     def test_empty_object_returns_none(self):
-        assert _format_context_line("{}") is None
+        assert format_relationship_context("{}") is None
 
 
 # --- _format_quality_line ---

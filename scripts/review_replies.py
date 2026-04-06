@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config import load_config
 from storage.db import Database
 from output.x_client import XClient
+from review_helpers import truncate, read_char, format_relationship_context
 
 
 def main():
@@ -46,7 +47,7 @@ def main():
         header = f"{i + 1}/{len(pending)}  @{reply['inbound_author_handle']} replied to your post"
 
         # Relationship context (from cultivate enrichment stored at poll time)
-        ctx_line = _format_context_line(reply["relationship_context"])
+        ctx_line = format_relationship_context(reply["relationship_context"])
         if ctx_line:
             header += f"\n     [{ctx_line}]"
 
@@ -57,16 +58,16 @@ def main():
 
         print(header)
         print()
-        print(f"  Your post:   \"{_truncate(reply['our_post_text'], 120)}\"")
-        print(f"  Their reply: \"{_truncate(reply['inbound_text'], 120)}\"")
-        print(f"  Draft:       \"{_truncate(reply['draft_text'], 120)}\"")
+        print(f"  Your post:   \"{truncate(reply['our_post_text'], 120)}\"")
+        print(f"  Their reply: \"{truncate(reply['inbound_text'], 120)}\"")
+        print(f"  Draft:       \"{truncate(reply['draft_text'], 120)}\"")
         print()
 
         while True:
             sys.stdout.write("  [a]pprove  [e]dit  [d]ismiss  [s]kip  [q]uit > ")
             sys.stdout.flush()
 
-            choice = _read_char().lower()
+            choice = read_char().lower()
             print(choice)
 
             if choice == "q":
@@ -122,24 +123,6 @@ def main():
     db.close()
 
 
-def _format_context_line(relationship_context_json):
-    """Parse relationship context JSON and format for display. Returns None if no context."""
-    if not relationship_context_json:
-        return None
-    try:
-        ctx = json.loads(relationship_context_json)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    parts = []
-    if ctx.get("engagement_stage") is not None:
-        parts.append(f"{ctx.get('stage_name', '?')} (stage {ctx['engagement_stage']})")
-    if ctx.get("dunbar_tier") is not None:
-        parts.append(f"{ctx.get('tier_name', '?')} (tier {ctx['dunbar_tier']})")
-    if ctx.get("relationship_strength") is not None:
-        parts.append(f"strength: {ctx['relationship_strength']:.2f}")
-    return " | ".join(parts) if parts else None
-
-
 def _format_quality_line(quality_score, quality_flags_json):
     """Format quality score and flags for display. Returns None if no score."""
     if quality_score is None:
@@ -154,33 +137,6 @@ def _format_quality_line(quality_score, quality_flags_json):
     if flags:
         result += f" ⚠ {', '.join(flags)}"
     return result
-
-
-def _truncate(text: str, max_len: int) -> str:
-    """Truncate text with ellipsis."""
-    if not text:
-        return ""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len - 3] + "..."
-
-
-def _read_char() -> str:
-    """Read a single character from stdin without requiring Enter."""
-    try:
-        import tty
-        import termios
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        return ch
-    except (ImportError, termios.error):
-        # Fallback for non-terminal environments
-        return input().strip()[:1] if True else ""
 
 
 if __name__ == "__main__":
