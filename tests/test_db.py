@@ -1,6 +1,7 @@
 """Tests for the SQLite storage layer (storage/db.py) using in-memory databases."""
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -61,6 +62,147 @@ class TestContextManager:
             assert db.conn is not None
             db.conn.execute("SELECT 1")
         assert db.conn is None
+
+
+# --- Connection management ---
+
+
+class TestDatabaseConnectionManagement:
+    """Tests for Database context manager protocol and connection edge cases."""
+
+    def test_context_manager_connects_on_entry(self, schema_path):
+        database = Database(":memory:")
+        assert database.conn is None
+        with database as db:
+            assert db.conn is not None
+            db.init_schema(schema_path)
+            db.conn.execute("SELECT 1")
+
+    def test_context_manager_closes_on_exit(self, schema_path):
+        database = Database(":memory:")
+        with database as db:
+            db.init_schema(schema_path)
+        assert database.conn is None
+
+    def test_context_manager_closes_on_exception(self, schema_path):
+        database = Database(":memory:")
+        with pytest.raises(RuntimeError, match="boom"):
+            with database as db:
+                db.init_schema(schema_path)
+                raise RuntimeError("boom")
+        assert database.conn is None
+
+    def test_close_sets_conn_to_none(self):
+        database = Database(":memory:")
+        database.connect()
+        assert database.conn is not None
+        database.close()
+        assert database.conn is None
+
+    def test_close_is_idempotent(self):
+        database = Database(":memory:")
+        database.connect()
+        database.close()
+        database.close()  # second call should not raise
+        assert database.conn is None
+
+    def test_connect_sets_row_factory(self):
+        database = Database(":memory:")
+        database.connect()
+        assert database.conn.row_factory is sqlite3.Row
+        database.close()
+
+    def test_init_schema_idempotent(self, schema_path):
+        with Database(":memory:") as db:
+            db.init_schema(schema_path)
+            db.init_schema(schema_path)  # second call should not raise
+            tables = {
+                row[0]
+                for row in db.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "generated_content" in tables
+
+    def test_init_schema_migration_columns(self, schema_path):
+        with Database(":memory:") as db:
+            db.init_schema(schema_path)
+            cols = {
+                row[1]
+                for row in db.conn.execute("PRAGMA table_info(generated_content)")
+            }
+            for col in ("retry_count", "tweet_id", "published_at", "curation_quality", "auto_quality"):
+                assert col in cols, f"migration column '{col}' missing"
+
+    def test_context_manager_with_tmp_path(self, tmp_path, schema_path):
+        db_file = tmp_path / "test.db"
+        with Database(str(db_file)) as db:
+            db.init_schema(schema_path)
+            db.insert_claude_message("s1", "uuid-1", "/p", "2026-04-01T10:00:00", "hi")
+        assert db.conn is None
+        # Re-open and verify data persisted
+        with Database(str(db_file)) as db:
+            db.init_schema(schema_path)
+            assert db.is_message_processed("uuid-1") is True
+
+    def test_auto_classify_posts_mixed_engagement(self, db):
+        """Classify posts with engagement >= threshold as 'resonated',
+        engagement == 0 as 'low_resonance', and 0 < engagement < threshold as 'ambiguous'."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        # High engagement post (resonated)
+        cid_high = db.insert_generated_content("x_post", ["sha"], ["uuid"], "high post", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-high', published_at = ? WHERE id = ?",
+            (old_ts, cid_high),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid_high, "tw-high", 50, 10, 5, 3, 20.0)
+
+        # Zero engagement post (low_resonance)
+        cid_zero = db.insert_generated_content("x_post", ["sha"], ["uuid"], "zero post", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-zero', published_at = ? WHERE id = ?",
+            (old_ts, cid_zero),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid_zero, "tw-zero", 0, 0, 0, 0, 0.0)
+
+        # Ambiguous engagement post (between 0 and threshold)
+        cid_mid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "mid post", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-mid', published_at = ? WHERE id = ?",
+            (old_ts, cid_mid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid_mid, "tw-mid", 2, 0, 0, 0, 2.0)
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+        assert results["resonated"] == 1
+        assert results["low_resonance"] == 1
+        assert results["ambiguous"] == 1
+
+    def test_increment_retry_abandons_at_max(self, db):
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "retry post", 8.0, "ok")
+        for i in range(MAX_RETRIES):
+            count = db.increment_retry(cid)
+            assert count == i + 1
+
+        row = db.conn.execute(
+            "SELECT published FROM generated_content WHERE id = ?", (cid,)
+        ).fetchone()
+        assert row[0] == -1  # abandoned after MAX_RETRIES
+
+    def test_mark_abandoned_sets_published_minus_one(self, db):
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "abandon post", 8.0, "ok")
+        assert db.conn.execute(
+            "SELECT published FROM generated_content WHERE id = ?", (cid,)
+        ).fetchone()[0] == 0
+        db.mark_abandoned(cid)
+        assert db.conn.execute(
+            "SELECT published FROM generated_content WHERE id = ?", (cid,)
+        ).fetchone()[0] == -1
 
 
 # --- Claude messages CRUD ---
