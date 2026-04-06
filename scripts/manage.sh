@@ -12,6 +12,10 @@ AGENTS=(
     "com.presence.engagement"
     "com.presence.replies"
     "com.presence.newsletter"
+    "com.presence.retry"
+    "com.presence.knowledge"
+    "com.presence.curated"
+    "com.presence.ops-sync"
 )
 
 usage() {
@@ -23,7 +27,7 @@ usage() {
     echo "  restart   - Stop then start all jobs"
     echo "  status    - Show status of all jobs"
     echo "  logs      - Tail all log files"
-    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter)"
+    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync)"
     echo "  retry     - Retry posting unpublished content"
     echo "  reply     - Review and post pending reply drafts"
     echo "  knowledge - Knowledge base commands (build|fetch|stats)"
@@ -119,8 +123,24 @@ run_job() {
             echo "Running send_newsletter.py..."
             cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/send_newsletter.py
             ;;
+        retry)
+            echo "Running retry_unpublished.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/retry_unpublished.py
+            ;;
+        knowledge)
+            echo "Running build_knowledge.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/build_knowledge.py
+            ;;
+        curated)
+            echo "Running fetch_curated.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/fetch_curated.py
+            ;;
+        ops-sync)
+            echo "Running update_operations_state.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/update_operations_state.py
+            ;;
         *)
-            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter}"
+            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync}"
             exit 1
             ;;
     esac
