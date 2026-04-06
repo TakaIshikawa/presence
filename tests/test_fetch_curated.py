@@ -147,7 +147,7 @@ class TestMainFiltering:
 
         mock_ingest.assert_not_called()
 
-    def test_no_embeddings_exits(self, capsys):
+    def test_no_embeddings_exits(self, caplog):
         with patch("fetch_curated.load_config") as mock_config:
             config = MagicMock()
             config.embeddings = None
@@ -156,3 +156,4 @@ class TestMainFiltering:
             from fetch_curated import main
             with pytest.raises(SystemExit):
                 main()
+            assert "embeddings not configured" in caplog.text
