@@ -1,6 +1,7 @@
 """Tests for retry_unpublished.py main orchestration."""
 
 import sys
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -85,7 +86,8 @@ class TestMain:
         mocks.db.increment_retry.assert_called_once()
         mocks.db.mark_published.assert_not_called()
 
-    def test_abandoned_after_three_attempts(self, mocks, capsys):
+    def test_abandoned_after_three_attempts(self, mocks, caplog):
+        caplog.set_level(logging.INFO)
         mocks.db.get_unpublished_content.return_value = [
             _make_content_item(retry_count=2)
         ]
@@ -97,10 +99,11 @@ class TestMain:
         from retry_unpublished import main
         main()
 
-        output = capsys.readouterr().out
+        output = caplog.text
         assert "abandoned after 3 attempts" in output
 
-    def test_rate_limit_breaks_loop(self, mocks, capsys):
+    def test_rate_limit_breaks_loop(self, mocks, caplog):
+        caplog.set_level(logging.INFO)
         mocks.db.get_unpublished_content.return_value = [
             _make_content_item(content_id=1),
             _make_content_item(content_id=2),
@@ -113,7 +116,7 @@ class TestMain:
         from retry_unpublished import main
         main()
 
-        output = capsys.readouterr().out
+        output = caplog.text
         assert "Rate limited" in output
         # Only first post attempted (loop breaks on 429)
         assert mocks.x_client.post.call_count == 1
@@ -140,7 +143,8 @@ class TestMain:
 
         mocks.sleep.assert_not_called()
 
-    def test_null_retry_count_treated_as_zero(self, mocks, capsys):
+    def test_null_retry_count_treated_as_zero(self, mocks, caplog):
+        caplog.set_level(logging.INFO)
         mocks.db.get_unpublished_content.return_value = [
             _make_content_item(retry_count=None)
         ]
@@ -152,5 +156,5 @@ class TestMain:
         from retry_unpublished import main
         main()
 
-        output = capsys.readouterr().out
+        output = caplog.text
         assert "attempt 1/3" in output
