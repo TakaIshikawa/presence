@@ -46,34 +46,14 @@ def main():
         header = f"{i + 1}/{len(pending)}  @{reply['inbound_author_handle']} replied to your post"
 
         # Relationship context (from cultivate enrichment stored at poll time)
-        context_parts = []
-        if reply["relationship_context"]:
-            try:
-                ctx = json.loads(reply["relationship_context"])
-                if ctx.get("engagement_stage") is not None:
-                    context_parts.append(f"{ctx.get('stage_name', '?')} (stage {ctx['engagement_stage']})")
-                if ctx.get("dunbar_tier") is not None:
-                    context_parts.append(f"{ctx.get('tier_name', '?')} (tier {ctx['dunbar_tier']})")
-                if ctx.get("relationship_strength") is not None:
-                    context_parts.append(f"strength: {ctx['relationship_strength']:.2f}")
-            except (json.JSONDecodeError, KeyError):
-                pass
-        if context_parts:
-            header += f"\n     [{' | '.join(context_parts)}]"
+        ctx_line = _format_context_line(reply["relationship_context"])
+        if ctx_line:
+            header += f"\n     [{ctx_line}]"
 
         # Quality score
-        if reply["quality_score"] is not None:
-            score = reply["quality_score"]
-            flags = []
-            if reply["quality_flags"]:
-                try:
-                    flags = json.loads(reply["quality_flags"])
-                except json.JSONDecodeError:
-                    pass
-            quality_str = f"Quality: {score:.1f}/10"
-            if flags:
-                quality_str += f" ⚠ {', '.join(flags)}"
-            header += f"\n     [{quality_str}]"
+        quality_line = _format_quality_line(reply["quality_score"], reply["quality_flags"])
+        if quality_line:
+            header += f"\n     [{quality_line}]"
 
         print(header)
         print()
@@ -140,6 +120,40 @@ def main():
 
     print(f"\nDone. {posted} replies posted.")
     db.close()
+
+
+def _format_context_line(relationship_context_json):
+    """Parse relationship context JSON and format for display. Returns None if no context."""
+    if not relationship_context_json:
+        return None
+    try:
+        ctx = json.loads(relationship_context_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    parts = []
+    if ctx.get("engagement_stage") is not None:
+        parts.append(f"{ctx.get('stage_name', '?')} (stage {ctx['engagement_stage']})")
+    if ctx.get("dunbar_tier") is not None:
+        parts.append(f"{ctx.get('tier_name', '?')} (tier {ctx['dunbar_tier']})")
+    if ctx.get("relationship_strength") is not None:
+        parts.append(f"strength: {ctx['relationship_strength']:.2f}")
+    return " | ".join(parts) if parts else None
+
+
+def _format_quality_line(quality_score, quality_flags_json):
+    """Format quality score and flags for display. Returns None if no score."""
+    if quality_score is None:
+        return None
+    flags = []
+    if quality_flags_json:
+        try:
+            flags = json.loads(quality_flags_json)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    result = f"Quality: {quality_score:.1f}/10"
+    if flags:
+        result += f" ⚠ {', '.join(flags)}"
+    return result
 
 
 def _truncate(text: str, max_len: int) -> str:

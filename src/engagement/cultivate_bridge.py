@@ -72,12 +72,17 @@ class PersonContext:
             "content_relevance_score": self.content_relevance_score,
             "recent_interactions": self.recent_interactions,
             "is_known": self.is_known,
+            "stage_name": self.stage_name,
+            "tier_name": self.tier_name,
         })
 
     @classmethod
     def from_json(cls, data: str) -> "PersonContext":
         """Deserialize from reply_queue storage."""
         d = json.loads(data)
+        # Remove computed properties that aren't constructor args
+        d.pop("stage_name", None)
+        d.pop("tier_name", None)
         return cls(**d)
 
 
