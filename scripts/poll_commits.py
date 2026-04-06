@@ -275,6 +275,48 @@ def main():
         eval_feedback=pipeline_result.comparison.best_feedback,
     )
 
+    # Determine outcome and post if passes threshold
+    passes = pipeline_result.final_score >= config.synthesis.eval_threshold * 10
+    outcome = None
+    rejection_reason = None
+
+    if not pipeline_result.candidates:
+        outcome = "all_filtered"
+        rejection_reason = pipeline_result.comparison.reject_reason
+    elif not passes:
+        outcome = "below_threshold"
+        rejection_reason = pipeline_result.comparison.reject_reason or (
+            f"Score {pipeline_result.final_score:.1f} below threshold "
+            f"{config.synthesis.eval_threshold * 10}"
+        )
+    elif passes:
+        if rate_limited:
+            print("Rate limited, queued for later")
+            outcome = "below_threshold"
+            rejection_reason = "Rate limited, queued for retry"
+        elif posted:
+            print("Already posted this cycle, queued for next")
+            outcome = "below_threshold"
+            rejection_reason = "Already posted this cycle"
+        else:
+            print("Posting to X...")
+            result = x_client.post(pipeline_result.final_content)
+            if result.success:
+                db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
+                print(f"Posted: {result.url}")
+                posted = True
+                outcome = "published"
+            else:
+                print(f"Post failed: {result.error}")
+                outcome = "below_threshold"
+                rejection_reason = f"Post failed: {result.error}"
+
+    if outcome != "published":
+        if pipeline_result.comparison.reject_reason:
+            print(f"Rejected: {pipeline_result.comparison.reject_reason}")
+        elif outcome == "below_threshold" and not rejection_reason:
+            print("Below threshold, not posting")
+
     # Record pipeline run
     db.insert_pipeline_run(
         batch_id=pipeline_result.batch_id,
@@ -286,29 +328,9 @@ def main():
         refinement_picked=pipeline_result.refinement.picked if pipeline_result.refinement else None,
         final_score=pipeline_result.final_score,
         content_id=content_id,
+        outcome=outcome,
+        rejection_reason=rejection_reason,
     )
-
-    # Post if passes threshold
-    passes = pipeline_result.final_score >= config.synthesis.eval_threshold * 10
-    if passes:
-        if rate_limited:
-            print("Rate limited, queued for later")
-        elif posted:
-            print("Already posted this cycle, queued for next")
-        else:
-            print("Posting to X...")
-            result = x_client.post(pipeline_result.final_content)
-            if result.success:
-                db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
-                print(f"Posted: {result.url}")
-                posted = True
-            else:
-                print(f"Post failed: {result.error}")
-    else:
-        if pipeline_result.comparison.reject_reason:
-            print(f"Rejected: {pipeline_result.comparison.reject_reason}")
-        else:
-            print("Below threshold, not posting")
 
     # Update last poll time
     db.set_last_poll_time(current_poll_time)

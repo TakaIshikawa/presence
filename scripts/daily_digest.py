@@ -118,6 +118,39 @@ def main():
         eval_feedback=result.comparison.best_feedback,
     )
 
+    # Determine outcome and post if passes threshold
+    passes = result.final_score >= config.synthesis.eval_threshold * 10
+    outcome = None
+    rejection_reason = None
+
+    if not result.candidates:
+        outcome = "all_filtered"
+        rejection_reason = result.comparison.reject_reason
+    elif not passes:
+        outcome = "below_threshold"
+        rejection_reason = result.comparison.reject_reason or (
+            f"Score {result.final_score:.1f} below threshold "
+            f"{config.synthesis.eval_threshold * 10}"
+        )
+        if result.comparison.reject_reason:
+            print(f"Rejected: {result.comparison.reject_reason}")
+        else:
+            print("Below threshold, not posting")
+        print("Generated content:")
+        print(result.final_content)
+    else:
+        print("Posting thread to X...")
+        tweets = parse_thread_content(result.final_content)
+        post_result = x_client.post_thread(tweets)
+        if post_result.success:
+            db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)
+            print(f"Posted: {post_result.url}")
+            outcome = "published"
+        else:
+            print(f"Post failed: {post_result.error}")
+            outcome = "below_threshold"
+            rejection_reason = f"Post failed: {post_result.error}"
+
     # Record pipeline run
     db.insert_pipeline_run(
         batch_id=result.batch_id,
@@ -129,26 +162,9 @@ def main():
         refinement_picked=result.refinement.picked if result.refinement else None,
         final_score=result.final_score,
         content_id=content_id,
+        outcome=outcome,
+        rejection_reason=rejection_reason,
     )
-
-    # Post if passes threshold
-    passes = result.final_score >= config.synthesis.eval_threshold * 10
-    if passes:
-        print("Posting thread to X...")
-        tweets = parse_thread_content(result.final_content)
-        post_result = x_client.post_thread(tweets)
-        if post_result.success:
-            db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)
-            print(f"Posted: {post_result.url}")
-        else:
-            print(f"Post failed: {post_result.error}")
-    else:
-        if result.comparison.reject_reason:
-            print(f"Rejected: {result.comparison.reject_reason}")
-        else:
-            print("Below threshold, not posting")
-        print("Generated content:")
-        print(result.final_content)
 
     db.close()
     _update_monitoring()

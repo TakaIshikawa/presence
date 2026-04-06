@@ -47,6 +47,14 @@ class TestSchemaInit:
         assert "curation_quality" in cols
         assert "auto_quality" in cols
 
+    def test_pipeline_runs_columns_exist(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")
+        }
+        assert "outcome" in cols
+        assert "rejection_reason" in cols
+
     def test_idempotent_init(self, db, schema_path):
         # Running init_schema again should not raise
         db.init_schema(schema_path)
@@ -724,6 +732,61 @@ class TestPipelineRuns:
             content_id=1,
         )
         assert run_id > 0
+
+    def test_insert_pipeline_run_with_outcome(self, db):
+        run_id = db.insert_pipeline_run(
+            batch_id="batch-002",
+            content_type="x_thread",
+            candidates_generated=3,
+            best_candidate_index=0,
+            best_score_before_refine=6.0,
+            final_score=6.0,
+            outcome="below_threshold",
+            rejection_reason="Score 6.0 below threshold 7.0",
+        )
+        assert run_id > 0
+
+        row = db.conn.execute(
+            "SELECT outcome, rejection_reason FROM pipeline_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        assert row[0] == "below_threshold"
+        assert row[1] == "Score 6.0 below threshold 7.0"
+
+    def test_insert_pipeline_run_published_no_rejection(self, db):
+        run_id = db.insert_pipeline_run(
+            batch_id="batch-003",
+            content_type="blog_post",
+            candidates_generated=3,
+            best_candidate_index=1,
+            best_score_before_refine=8.5,
+            final_score=8.5,
+            outcome="published",
+        )
+        row = db.conn.execute(
+            "SELECT outcome, rejection_reason FROM pipeline_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        assert row[0] == "published"
+        assert row[1] is None
+
+    def test_insert_pipeline_run_all_filtered(self, db):
+        run_id = db.insert_pipeline_run(
+            batch_id="batch-004",
+            content_type="x_post",
+            candidates_generated=0,
+            best_candidate_index=0,
+            best_score_before_refine=0,
+            final_score=0,
+            outcome="all_filtered",
+            rejection_reason="All candidates filtered (repetitive or stale patterns)",
+        )
+        row = db.conn.execute(
+            "SELECT outcome, rejection_reason FROM pipeline_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        assert row[0] == "all_filtered"
+        assert "filtered" in row[1]
 
     def test_duplicate_batch_id_raises(self, db):
         db.insert_pipeline_run("batch-dup", "x_post", 3, 0, 7.0)
