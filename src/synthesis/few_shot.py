@@ -1,39 +1,14 @@
 """Few-shot example selection for content generation."""
 
-import re
 from dataclasses import dataclass
 from storage.db import Database
+from synthesis.stale_patterns import has_stale_pattern
 
 
 @dataclass
 class FewShotExample:
     content: str
     engagement_score: float
-
-
-# Patterns that produce structural monotony — filter these from few-shot examples
-# so the generator doesn't learn to imitate them.
-_STALE_PATTERNS = [
-    re.compile(r"(?i)^AI\s"),
-    re.compile(r"(?i)isn.t about .{5,40}[—\-].{0,5}it.s about"),
-    re.compile(r"(?i)\bbreakthrough\b"),
-    re.compile(r"(?i)perfect (prompts?|memory|agents?|handoffs?|context)"),
-    re.compile(r"\d+ commits? across \d+"),
-    re.compile(r"(?i)^(TWEET 1:\s*\n)?Today.s (insight|breakthrough|lesson)"),
-    # Engagement-bait openings
-    re.compile(r"(?i)^(unpopular opinion|controversial take)\s*[:\-–—]"),
-    re.compile(r"(?i)\bnobody (is )?(talk(s|ing) about|mentions?)"),
-    re.compile(r"(?i)^the (secret|trick) to\b"),
-    re.compile(r"(?i)^stop \w[\w ]{0,30}\.\s*start \w"),
-    re.compile(r"(?i)\w[\w ]{0,30} (is|are) dead\.\s*long live\b"),
-    re.compile(r"(?i)^I spent \d+\s*(hours?|days?|weeks?|months?)"),
-    re.compile(r"(?i)^most (people|developers?|devs|engineers?) don.t\b"),
-    re.compile(r"(?i)^everyone (says|preaches|thinks|knows|believes)\b"),
-]
-
-
-def _has_stale_pattern(text: str) -> bool:
-    return any(p.search(text) for p in _STALE_PATTERNS)
 
 
 class FewShotSelector:
@@ -65,7 +40,7 @@ class FewShotSelector:
             for p in top_posts:
                 if exclude_ids and p["id"] in exclude_ids:
                     continue
-                if _has_stale_pattern(p["content"]):
+                if has_stale_pattern(p["content"]):
                     continue
                 examples.append(FewShotExample(
                     content=p["content"],
