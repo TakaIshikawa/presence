@@ -2,7 +2,7 @@
 
 import pytest
 
-from synthesis.few_shot import _has_stale_pattern
+from synthesis.few_shot import _has_stale_pattern, FewShotSelector, FewShotExample
 from synthesis.pipeline import SynthesisPipeline
 
 
