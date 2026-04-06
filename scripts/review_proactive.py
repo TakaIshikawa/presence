@@ -11,6 +11,7 @@ from config import load_config
 from output.x_client import XClient
 from engagement.cultivate_bridge import CultivateBridge
 from engagement.reply_drafter import ReplyDrafter
+from review_helpers import truncate, read_char
 
 
 def main():
@@ -72,7 +73,7 @@ def main():
             tweet_id = action.payload.get("tweet_id")
             tweet_content = action.payload.get("tweet_content")
             if tweet_content:
-                print(f"  Tweet:  \"{_truncate(tweet_content, 120)}\"")
+                print(f"  Tweet:  \"{truncate(tweet_content, 120)}\"")
             if tweet_id:
                 print(f"  Link:   https://x.com/{action.target_handle}/status/{tweet_id}")
         print()
@@ -84,7 +85,7 @@ def main():
                     break
                 sys.stdout.write("  [a]pprove  [d]ismiss  [s]kip  [q]uit > ")
                 sys.stdout.flush()
-                choice = _read_char().lower()
+                choice = read_char().lower()
                 print(choice)
 
                 if choice == "q":
@@ -113,7 +114,7 @@ def main():
             elif action.action_type == "follow":
                 sys.stdout.write("  [a]pprove  [d]ismiss  [s]kip  [q]uit > ")
                 sys.stdout.flush()
-                choice = _read_char().lower()
+                choice = read_char().lower()
                 print(choice)
 
                 if choice == "q":
@@ -165,7 +166,7 @@ def main():
                 print()
                 sys.stdout.write("  [a]pprove  [e]dit  [d]ismiss  [s]kip  [q]uit > ")
                 sys.stdout.flush()
-                choice = _read_char().lower()
+                choice = read_char().lower()
                 print(choice)
 
                 if choice == "q":
@@ -214,7 +215,7 @@ def main():
                 # Unknown action type — show and let user decide
                 sys.stdout.write("  [d]ismiss  [s]kip  [q]uit > ")
                 sys.stdout.flush()
-                choice = _read_char().lower()
+                choice = read_char().lower()
                 print(choice)
                 if choice == "q":
                     quit_requested = True
@@ -242,7 +243,7 @@ def _format_action_context(action) -> str:
         if parts:
             lines.append(f"     [{' | '.join(parts)}]")
         if ctx.bio:
-            lines.append(f"     Bio: {_truncate(ctx.bio, 100)}")
+            lines.append(f"     Bio: {truncate(ctx.bio, 100)}")
     return "\n".join(lines)
 
 
@@ -252,32 +253,6 @@ def _get_x_user_id(bridge, person_id: str) -> str | None:
         "SELECT x_user_id FROM people WHERE id = ?", (person_id,)
     ).fetchone()
     return row["x_user_id"] if row and row["x_user_id"] else None
-
-
-def _truncate(text: str, max_len: int) -> str:
-    if not text:
-        return ""
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3] + "..."
-
-
-def _read_char() -> str:
-    """Read a single character from stdin without requiring Enter."""
-    try:
-        import tty
-        import termios
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        return ch
-    except (ImportError, termios.error):
-        return input().strip()[:1] if True else ""
 
 
 if __name__ == "__main__":
