@@ -3,6 +3,7 @@
 
 import sys
 import time
+import logging
 import argparse
 import tweepy
 from pathlib import Path
@@ -16,8 +17,14 @@ from evaluation.validation_db import ValidationDatabase
 BATCH_SIZE = 5
 TWEET_FETCH_BATCH = 100
 
+logger = logging.getLogger(__name__)
+
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(message)s'
+    )
     parser = argparse.ArgumentParser(description="Run evaluator backtest")
     parser.add_argument(
         "--version", required=True,
@@ -59,7 +66,7 @@ def main():
     # Refetch text for any previously purged tweets
     purged_ids = db.get_purged_tweet_ids()
     if purged_ids:
-        print(f"Refetching text for {len(purged_ids)} purged tweets...")
+        logger.info("Refetching text for %d purged tweets", len(purged_ids))
         bearer_client = tweepy.Client(
             consumer_key=config.x.api_key,
             consumer_secret=config.x.api_secret,
@@ -76,22 +83,22 @@ def main():
                         db.update_tweet_text(str(tweet.id), tweet.text)
                         refetched += 1
             except tweepy.TooManyRequests:
-                print("  Rate limited, waiting 60s...")
+                logger.warning("Rate limited, waiting 60s")
                 time.sleep(60)
             except tweepy.TweepyException as e:
-                print(f"  API error: {e}")
-        print(f"  Restored text for {refetched} tweets")
+                logger.error("API error: %s", e)
+        logger.info("Restored text for %d tweets", refetched)
 
     tweets = db.get_unevaluated_tweets(args.version, limit=args.limit)
     tweets = [t for t in tweets if t["text"]]
     if not tweets:
-        print(f"No unevaluated tweets for version '{args.version}'")
+        logger.info("No unevaluated tweets for version '%s'", args.version)
         db.close()
         return
 
-    print(
-        f"Evaluating {len(tweets)} tweets with version '{args.version}' "
-        f"using {model}"
+    logger.info(
+        "Evaluating %d tweets with version '%s' using %s",
+        len(tweets), args.version, model
     )
 
     # Group by account for context
@@ -108,7 +115,7 @@ def main():
             f"Bio: {bio[:200]}"
         )
 
-        print(f"\n@{username} ({len(account_tweets)} tweets)")
+        logger.info("@%s (%d tweets)", username, len(account_tweets))
 
         for i in range(0, len(account_tweets), BATCH_SIZE):
             batch = account_tweets[i : i + BATCH_SIZE]
@@ -123,7 +130,7 @@ def main():
                     prompt_version=args.prompt_version,
                 )
             except Exception as e:
-                print(f"  Error on batch {i // BATCH_SIZE + 1}: {e}")
+                logger.error("Error on batch %d: %s", i // BATCH_SIZE + 1, e)
                 continue
 
             for pred in predictions:
@@ -142,16 +149,16 @@ def main():
                 evaluated += 1
 
             scores = [f"{p.predicted_score:.0f}" for p in predictions]
-            print(f"  Batch {i // BATCH_SIZE + 1}: scores {scores}")
+            logger.info("Batch %d: scores %s", i // BATCH_SIZE + 1, scores)
 
     # Purge tweet text after evaluation (X data retention compliance)
     if not args.no_purge:
         purged = db.purge_tweet_text()
         if purged:
-            print(f"Purged text from {purged} tweets (IDs + metrics retained)")
+            logger.info("Purged text from %d tweets (IDs + metrics retained)", purged)
 
     db.close()
-    print(f"\nDone. Evaluated {evaluated} tweets.")
+    logger.info("Done. Evaluated %d tweets.", evaluated)
 
 
 if __name__ == "__main__":
