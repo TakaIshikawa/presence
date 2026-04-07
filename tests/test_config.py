@@ -416,8 +416,46 @@ class TestEdgeCases:
         assert cfg.curated_sources.blogs[0].license == "attribution_required"
 
     def test_missing_required_section_raises(self, tmp_path):
-        """Omitting a required top-level section raises KeyError."""
+        """Omitting a required top-level section raises ValueError."""
         data = _minimal_config_dict()
         del data["github"]
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError, match="Missing required config field: github"):
+            load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+    def test_missing_required_field_in_section(self, tmp_path):
+        """Missing required field within a section raises descriptive ValueError."""
+        data = _minimal_config_dict()
+        del data["github"]["username"]
+        with pytest.raises(ValueError, match="Missing required config field: github.username"):
+            load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        # Test another section
+        data = _minimal_config_dict()
+        del data["x"]["api_key"]
+        with pytest.raises(ValueError, match="Missing required config field: x.api_key"):
+            load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+    def test_missing_multiple_required_sections(self, tmp_path):
+        """Missing entire required section raises descriptive ValueError."""
+        data = _minimal_config_dict()
+        del data["x"]
+        with pytest.raises(ValueError, match="Missing required config field: x"):
+            load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        data = _minimal_config_dict()
+        del data["anthropic"]
+        with pytest.raises(ValueError, match="Missing required config field: anthropic"):
+            load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+    def test_section_is_not_dict(self, tmp_path):
+        """Section that is not a dict raises descriptive ValueError."""
+        data = _minimal_config_dict()
+        data["github"] = "invalid"
+        with pytest.raises(ValueError, match="Invalid config section: 'github' must be a dictionary"):
+            load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        # Test nested case - section is dict but field within should be dict
+        data = _minimal_config_dict()
+        data["paths"] = ["not", "a", "dict"]
+        with pytest.raises(ValueError, match="Invalid config section: 'paths' must be a dictionary"):
             load_config(_write_yaml(tmp_path / "c.yaml", data))
