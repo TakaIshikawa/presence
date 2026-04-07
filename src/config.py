@@ -129,6 +129,35 @@ def _resolve_env_var(value: str) -> str:
     return value
 
 
+def _require(data: dict, *keys: str, section: str) -> any:
+    """Traverse nested keys and return the value, raising ValueError if missing.
+
+    Args:
+        data: The root config dictionary
+        *keys: Sequence of keys to traverse (e.g., 'github', 'username')
+        section: Human-readable section name for error messages
+
+    Returns:
+        The value at the nested key path
+
+    Raises:
+        ValueError: If any key is missing or if a parent is not a dict
+    """
+    current = data
+    for i, key in enumerate(keys):
+        if not isinstance(current, dict):
+            # Parent exists but isn't a dict
+            parent_path = '.'.join(keys[:i])
+            raise ValueError(
+                f"Invalid config section: '{parent_path}' must be a dictionary"
+            )
+        if key not in current:
+            key_path = '.'.join(keys)
+            raise ValueError(f"Missing required config field: {key_path}")
+        current = current[key]
+    return current
+
+
 def load_config(config_path: Optional[str] = None) -> Config:
     """Load configuration from YAML file."""
     if config_path is None:
@@ -222,35 +251,43 @@ def load_config(config_path: Optional[str] = None) -> Config:
             reply_quality_threshold=data["cultivate"].get("reply_quality_threshold", 6.0),
         )
 
+    # Validate required sections exist and are dictionaries
+    _require(data, "github", section="github")
+    _require(data, "x", section="x")
+    _require(data, "anthropic", section="anthropic")
+    _require(data, "paths", section="paths")
+    _require(data, "synthesis", section="synthesis")
+    _require(data, "polling", section="polling")
+
     return Config(
         github=GitHubConfig(
-            username=data["github"]["username"],
-            token=_resolve_env_var(data["github"]["token"])
+            username=_require(data, "github", "username", section="github"),
+            token=_resolve_env_var(_require(data, "github", "token", section="github"))
         ),
         x=XConfig(
-            api_key=_resolve_env_var(data["x"]["api_key"]),
-            api_secret=_resolve_env_var(data["x"]["api_secret"]),
-            access_token=_resolve_env_var(data["x"]["access_token"]),
-            access_token_secret=_resolve_env_var(data["x"]["access_token_secret"])
+            api_key=_resolve_env_var(_require(data, "x", "api_key", section="x")),
+            api_secret=_resolve_env_var(_require(data, "x", "api_secret", section="x")),
+            access_token=_resolve_env_var(_require(data, "x", "access_token", section="x")),
+            access_token_secret=_resolve_env_var(_require(data, "x", "access_token_secret", section="x"))
         ),
         anthropic=AnthropicConfig(
-            api_key=_resolve_env_var(data["anthropic"]["api_key"])
+            api_key=_resolve_env_var(_require(data, "anthropic", "api_key", section="anthropic"))
         ),
         paths=PathsConfig(
-            claude_logs=data["paths"]["claude_logs"],
-            static_site=data["paths"]["static_site"],
-            database=data["paths"]["database"]
+            claude_logs=_require(data, "paths", "claude_logs", section="paths"),
+            static_site=_require(data, "paths", "static_site", section="paths"),
+            database=_require(data, "paths", "database", section="paths")
         ),
         synthesis=SynthesisConfig(
-            model=data["synthesis"]["model"],
-            eval_model=data["synthesis"].get("eval_model", data["synthesis"]["model"]),
-            eval_threshold=data["synthesis"]["eval_threshold"],
+            model=_require(data, "synthesis", "model", section="synthesis"),
+            eval_model=data["synthesis"].get("eval_model", _require(data, "synthesis", "model", section="synthesis")),
+            eval_threshold=_require(data, "synthesis", "eval_threshold", section="synthesis"),
             num_candidates=data["synthesis"].get("num_candidates", 3),
         ),
         polling=PollingConfig(
-            interval_minutes=data["polling"]["interval_minutes"],
-            daily_digest_hour=data["polling"]["daily_digest_hour"],
-            weekly_digest_day=data["polling"]["weekly_digest_day"],
+            interval_minutes=_require(data, "polling", "interval_minutes", section="polling"),
+            daily_digest_hour=_require(data, "polling", "daily_digest_hour", section="polling"),
+            weekly_digest_day=_require(data, "polling", "weekly_digest_day", section="polling"),
             readiness_token_threshold=data["polling"].get("readiness_token_threshold", 500),
             max_post_gap_hours=data["polling"].get("max_post_gap_hours", 12),
             max_daily_posts=data["polling"].get("max_daily_posts", 3),
