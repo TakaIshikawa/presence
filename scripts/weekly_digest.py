@@ -2,6 +2,7 @@
 """Generate and publish weekly blog post via multi-stage pipeline."""
 
 import sys
+import logging
 import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -15,8 +16,11 @@ from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.blog_writer import BlogWriter
 
+logger = logging.getLogger(__name__)
+
 
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     config = load_config()
 
     # Initialize components
@@ -37,16 +41,16 @@ def main():
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     week_ago = today - timedelta(days=7)
 
-    print(f"Generating weekly digest for {week_ago.date()} to {today.date()}")
+    logger.info(f"Generating weekly digest for {week_ago.date()} to {today.date()}")
 
     # Get this week's commits
     commits = db.get_commits_in_range(week_ago, today)
     if not commits:
-        print("No commits this week, skipping digest")
+        logger.info("No commits this week, skipping digest")
         db.close()
         return
 
-    print(f"Found {len(commits)} commits")
+    logger.info(f"Found {len(commits)} commits")
 
     # Get this week's Claude prompts
     parser = ClaudeLogParser(config.paths.claude_logs)
@@ -56,10 +60,10 @@ def main():
     ]
     prompt_texts = [p.prompt_text for p in prompts]
 
-    print(f"Found {len(prompts)} prompts")
+    logger.info(f"Found {len(prompts)} prompts")
 
     if not prompt_texts:
-        print("No prompts found, skipping digest")
+        logger.info("No prompts found, skipping digest")
         db.close()
         return
 
@@ -82,13 +86,13 @@ def main():
                 max_commits=config.historical.max_historical_commits,
             )
             if ctx:
-                print(f"  Historical context: {ctx.theme_description}")
+                logger.info(f"  Historical context: {ctx.theme_description}")
                 for hc in ctx.commits:
                     hc["historical"] = True
                     commit_dicts.append(hc)
 
     # Run pipeline
-    print(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
+    logger.info(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
     result = pipeline.run(
         prompts=prompt_texts,
         commits=commit_dicts,
@@ -98,10 +102,10 @@ def main():
 
     # Log pipeline stages
     best_idx = result.comparison.ranking[0] if result.comparison.ranking else 0
-    print(f"  Best candidate: {chr(65 + best_idx)} (score: {result.comparison.best_score}/10)")
+    logger.info(f"  Best candidate: {chr(65 + best_idx)} (score: {result.comparison.best_score}/10)")
     if result.refinement:
-        print(f"  Refinement: picked {result.refinement.picked} (score: {result.refinement.final_score}/10)")
-    print(f"  Final score: {result.final_score}/10")
+        logger.info(f"  Refinement: picked {result.refinement.picked} (score: {result.refinement.final_score}/10)")
+    logger.info(f"  Final score: {result.final_score}/10")
 
     # Store
     content_id = db.insert_generated_content(
@@ -128,31 +132,31 @@ def main():
             f"{config.synthesis.eval_threshold * 10}"
         )
         if result.comparison.reject_reason:
-            print(f"Rejected: {result.comparison.reject_reason}")
+            logger.warning(f"Rejected: {result.comparison.reject_reason}")
         else:
-            print("Below threshold, not publishing")
-        print("Generated content:")
-        print(result.final_content[:500] + "...")
+            logger.warning("Below threshold, not publishing")
+        logger.debug("Generated content:")
+        logger.debug(result.final_content[:500] + "...")
     else:
-        print("Writing blog post...")
+        logger.info("Writing blog post...")
         write_result = blog_writer.write_post(result.final_content)
 
         if write_result.success:
-            print(f"Blog post written: {write_result.file_path}")
+            logger.info(f"Blog post written: {write_result.file_path}")
 
             # Commit and push
-            print("Committing and pushing...")
+            logger.info("Committing and pushing...")
             title = result.final_content.split("\n")[0].replace("TITLE:", "").strip()
             if blog_writer.commit_and_push(title):
                 db.mark_published(content_id, write_result.url)
-                print(f"Published: {write_result.url}")
+                logger.info(f"Published: {write_result.url}")
                 outcome = "published"
             else:
-                print("Git push failed")
+                logger.error("Git push failed")
                 outcome = "below_threshold"
                 rejection_reason = "Git push failed"
         else:
-            print(f"Write failed: {write_result.error}")
+            logger.error(f"Write failed: {write_result.error}")
             outcome = "below_threshold"
             rejection_reason = f"Write failed: {write_result.error}"
 
@@ -173,7 +177,7 @@ def main():
 
     db.close()
     _update_monitoring()
-    print("Done")
+    logger.info("Done")
 
 
 def _update_monitoring():
