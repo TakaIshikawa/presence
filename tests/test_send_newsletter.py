@@ -1,6 +1,7 @@
 """Tests for scripts/send_newsletter.py — weekly newsletter delivery orchestration."""
 
 import sys
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,7 +13,7 @@ _project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_project_root / "scripts"))
 sys.path.insert(0, str(_project_root / "src"))
 
-from send_newsletter import main, _update_monitoring
+from send_newsletter import main
 from output.newsletter import NewsletterContent, NewsletterResult
 
 
@@ -28,43 +29,50 @@ def _make_config(enabled=True, api_key="test-key"):
 class TestEarlyExits:
     """Tests for conditions that cause main() to return before sending."""
 
-    @patch("send_newsletter.load_config")
-    def test_exits_when_newsletter_disabled(self, mock_load_config, capsys):
-        mock_load_config.return_value = _make_config(enabled=False)
+    @patch("send_newsletter.script_context")
+    def test_exits_when_newsletter_disabled(self, mock_script_context, caplog):
+        caplog.set_level(logging.INFO)
+        config = _make_config(enabled=False)
+        db = MagicMock()
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         main()
 
-        out = capsys.readouterr().out
-        assert "not enabled" in out
+        assert "not enabled" in caplog.text
 
-    @patch("send_newsletter.load_config")
-    def test_exits_when_newsletter_is_none(self, mock_load_config, capsys):
+    @patch("send_newsletter.script_context")
+    def test_exits_when_newsletter_is_none(self, mock_script_context, caplog):
+        caplog.set_level(logging.INFO)
         config = MagicMock()
         config.newsletter = None
-        mock_load_config.return_value = config
+        db = MagicMock()
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         main()
 
-        out = capsys.readouterr().out
-        assert "not enabled" in out
+        assert "not enabled" in caplog.text
 
-    @patch("send_newsletter.load_config")
-    def test_exits_when_api_key_empty(self, mock_load_config, capsys):
-        mock_load_config.return_value = _make_config(api_key="")
-
-        main()
-
-        out = capsys.readouterr().out
-        assert "API key not configured" in out
-
-    @patch("send_newsletter.load_config")
-    def test_exits_when_api_key_none(self, mock_load_config, capsys):
-        mock_load_config.return_value = _make_config(api_key=None)
+    @patch("send_newsletter.script_context")
+    def test_exits_when_api_key_empty(self, mock_script_context, caplog):
+        caplog.set_level(logging.INFO)
+        config = _make_config(api_key="")
+        db = MagicMock()
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         main()
 
-        out = capsys.readouterr().out
-        assert "API key not configured" in out
+        assert "API key not configured" in caplog.text
+
+    @patch("send_newsletter.script_context")
+    def test_exits_when_api_key_none(self, mock_script_context, caplog):
+        caplog.set_level(logging.INFO)
+        config = _make_config(api_key=None)
+        db = MagicMock()
+        mock_script_context.return_value.__enter__.return_value = (config, db)
+
+        main()
+
+        assert "API key not configured" in caplog.text
 
 
 class TestIdempotency:
@@ -72,37 +80,34 @@ class TestIdempotency:
 
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_skips_when_sent_recently(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, capsys
+        self, mock_script_context, MockAssembler, MockClient, caplog
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        caplog.set_level(logging.INFO)
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = datetime.now(timezone.utc) - timedelta(days=3)
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         main()
 
-        out = capsys.readouterr().out
-        assert "already sent" in out
-        assert "skipping" in out
+        assert "already sent" in caplog.text
+        assert "skipping" in caplog.text
         MockAssembler.assert_not_called()
         MockClient.assert_not_called()
-        db.close.assert_called_once()
 
-    @patch("send_newsletter._update_monitoring")
+    @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_proceeds_when_last_send_over_6_days(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, mock_monitoring
+        self, mock_script_context, MockAssembler, MockClient, mock_monitoring
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = datetime.now(timezone.utc) - timedelta(days=7)
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(
             subject="Weekly Update",
@@ -119,18 +124,17 @@ class TestIdempotency:
 
         MockClient.return_value.send.assert_called_once_with("Weekly Update", "# Hello\nSome content")
 
-    @patch("send_newsletter._update_monitoring")
+    @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_proceeds_when_no_previous_send(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, mock_monitoring
+        self, mock_script_context, MockAssembler, MockClient, mock_monitoring
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(
             subject="First Issue",
@@ -152,39 +156,36 @@ class TestEmptyContent:
     """No newsletter should be sent when there's nothing to report."""
 
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
-    def test_exits_when_body_empty(self, mock_load_config, MockDB, MockAssembler, capsys):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+    @patch("send_newsletter.script_context")
+    def test_exits_when_body_empty(self, mock_script_context, MockAssembler, caplog):
+        caplog.set_level(logging.INFO)
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(subject="", body_markdown="", source_content_ids=[])
         MockAssembler.return_value.assemble.return_value = content
 
         main()
 
-        out = capsys.readouterr().out
-        assert "No content published this week" in out
-        db.close.assert_called_once()
+        assert "No content published this week" in caplog.text
 
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
-    def test_exits_when_body_whitespace_only(self, mock_load_config, MockDB, MockAssembler, capsys):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+    @patch("send_newsletter.script_context")
+    def test_exits_when_body_whitespace_only(self, mock_script_context, MockAssembler, caplog):
+        caplog.set_level(logging.INFO)
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(subject="Weekly", body_markdown="   \n  \n  ", source_content_ids=[])
         MockAssembler.return_value.assemble.return_value = content
 
         main()
 
-        out = capsys.readouterr().out
-        assert "No content published this week" in out
+        assert "No content published this week" in caplog.text
 
 
 class TestDryRun:
@@ -192,15 +193,15 @@ class TestDryRun:
 
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_dry_run_prints_content_without_sending(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, capsys
+        self, mock_script_context, MockAssembler, MockClient, caplog
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        caplog.set_level(logging.INFO)
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(
             subject="Weekly Update",
@@ -216,28 +217,26 @@ class TestDryRun:
         finally:
             sys.argv = original_argv
 
-        out = capsys.readouterr().out
-        assert "DRY RUN" in out
-        assert "Great content this week." in out
+        assert "DRY RUN" in caplog.text
+        assert "Great content this week." in caplog.text
         MockClient.assert_not_called()
-        db.close.assert_called_once()
 
 
 class TestSendSuccess:
     """Successful send should record in DB and call monitoring."""
 
-    @patch("send_newsletter._update_monitoring")
+    @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_records_send_in_db(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, mock_monitoring, capsys
+        self, mock_script_context, MockAssembler, MockClient, mock_monitoring, caplog
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        caplog.set_level(logging.INFO)
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(
             subject="Weekly Update",
@@ -260,22 +259,20 @@ class TestSendSuccess:
             content_ids=[1, 2, 3],
             subscriber_count=25,
         )
-        out = capsys.readouterr().out
-        assert "Newsletter sent" in out
-        assert "https://buttondown.com/issue/42" in out
+        assert "Newsletter sent" in caplog.text
+        assert "https://buttondown.com/issue/42" in caplog.text
 
-    @patch("send_newsletter._update_monitoring")
+    @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_records_empty_issue_id_when_none(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, mock_monitoring
+        self, mock_script_context, MockAssembler, MockClient, mock_monitoring
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(
             subject="Update", body_markdown="Content.", source_content_ids=[1]
@@ -292,18 +289,17 @@ class TestSendSuccess:
         call_kwargs = db.insert_newsletter_send.call_args
         assert call_kwargs[1]["issue_id"] == ""
 
-    @patch("send_newsletter._update_monitoring")
+    @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_calls_update_monitoring(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, mock_monitoring
+        self, mock_script_context, MockAssembler, MockClient, mock_monitoring
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(
             subject="Update", body_markdown="Content.", source_content_ids=[1]
@@ -322,18 +318,17 @@ class TestSendSuccess:
 class TestSendFailure:
     """Failed send should log the error and not record in DB."""
 
-    @patch("send_newsletter._update_monitoring")
+    @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")
     @patch("send_newsletter.NewsletterAssembler")
-    @patch("send_newsletter.Database")
-    @patch("send_newsletter.load_config")
+    @patch("send_newsletter.script_context")
     def test_logs_error_on_failure(
-        self, mock_load_config, MockDB, MockAssembler, MockClient, mock_monitoring, capsys
+        self, mock_script_context, MockAssembler, MockClient, mock_monitoring, caplog
     ):
-        mock_load_config.return_value = _make_config()
-
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_last_newsletter_send.return_value = None
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         content = NewsletterContent(
             subject="Update", body_markdown="Content.", source_content_ids=[1]
@@ -346,39 +341,6 @@ class TestSendFailure:
 
         main()
 
-        out = capsys.readouterr().out
-        assert "Send failed" in out
-        assert "API rate limit exceeded" in out
+        assert "Send failed" in caplog.text
+        assert "API rate limit exceeded" in caplog.text
         db.insert_newsletter_send.assert_not_called()
-
-
-class TestUpdateMonitoring:
-    """_update_monitoring should be resilient to failures."""
-
-    @patch("send_newsletter.subprocess.run")
-    def test_runs_sync_script_when_exists(self, mock_run):
-        # The real Path is used; if the script file doesn't exist on disk
-        # the function silently skips.  We patch subprocess.run and check
-        # that it's called with the right args when the script exists.
-        sync_script = Path(__file__).parent.parent / "scripts" / "update_operations_state.py"
-        if not sync_script.exists():
-            pytest.skip("update_operations_state.py not present on disk")
-
-        _update_monitoring()
-
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args
-        assert "--operation" in call_args[0][0]
-        assert "send-newsletter" in call_args[0][0]
-
-    @patch("send_newsletter.subprocess.run")
-    @patch("pathlib.Path.exists", return_value=False)
-    def test_noop_when_script_missing(self, mock_exists, mock_run):
-        _update_monitoring()
-
-        mock_run.assert_not_called()
-
-    @patch("send_newsletter.subprocess.run", side_effect=OSError("spawn failed"))
-    def test_swallows_exceptions(self, mock_run):
-        # Should not raise
-        _update_monitoring()
