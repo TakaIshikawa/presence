@@ -1,5 +1,6 @@
 """Multi-stage synthesis pipeline for content generation."""
 
+import logging
 import random
 import re
 import uuid
@@ -13,6 +14,8 @@ from synthesis.evaluator_v2 import CrossModelEvaluator, ComparisonResult
 from synthesis.refiner import ContentRefiner, RefinementResult
 from synthesis.few_shot import FewShotSelector
 from synthesis.stale_patterns import STALE_PATTERNS
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -179,7 +182,7 @@ class SynthesisPipeline:
                 for ro in recent_openings
             )
             if is_repetitive:
-                print(f"  Rejected as repetitive: {opening[:40]}...")
+                logger.debug(f"  Rejected as repetitive: {opening[:40]}...")
                 rejected += 1
             else:
                 filtered.append(candidate)
@@ -199,7 +202,7 @@ class SynthesisPipeline:
         for candidate in candidates:
             matches = [p.pattern for p in STALE_PATTERNS if p.search(candidate)]
             if matches:
-                print(f"  Rejected stale pattern: {candidate[:50]}...")
+                logger.debug(f"  Rejected stale pattern: {candidate[:50]}...")
                 rejected += 1
                 matched_patterns.extend(matches)
             else:
@@ -263,7 +266,7 @@ class SynthesisPipeline:
                     key=lambda j: cosine_similarity(c_emb, recent_embeddings[j]),
                 )
                 matched = recent_with_embeddings[best_idx]["content"][:60]
-                print(f"  Rejected semantic duplicate (sim={max_sim:.3f}): "
+                logger.debug(f"  Rejected semantic duplicate (sim={max_sim:.3f}): "
                       f"{candidate[:40]}... ~ {matched}...")
             else:
                 filtered.append(candidate)
@@ -293,14 +296,14 @@ class SynthesisPipeline:
             # Try condensing up to 2 times
             condensed = text
             for attempt in range(2):
-                print(f"  Candidate {i} is {len(condensed)} chars (limit {max_chars}), condensing (attempt {attempt + 1})...")
+                logger.debug(f"  Candidate {i} is {len(condensed)} chars (limit {max_chars}), condensing (attempt {attempt + 1})...")
                 condensed = self.generator.condense(condensed, max_chars)
                 if len(condensed) <= max_chars:
-                    print(f"  Condensed to {len(condensed)} chars")
+                    logger.debug(f"  Condensed to {len(condensed)} chars")
                     valid.append(condensed)
                     break
             else:
-                print(f"  Still {len(condensed)} chars after 2 condense attempts, discarding")
+                logger.warning(f"  Still {len(condensed)} chars after 2 condense attempts, discarding")
                 rejected += 1
 
         if not valid:
@@ -315,7 +318,7 @@ class SynthesisPipeline:
                 else:
                     break
             valid.append(truncated or shortest[:max_chars])
-            print(f"  All candidates over limit, truncated shortest to {len(valid[0])} chars")
+            logger.warning(f"  All candidates over limit, truncated shortest to {len(valid[0])} chars")
 
         return valid, rejected
 
@@ -398,7 +401,7 @@ class SynthesisPipeline:
 
         # All candidates filtered — reject rather than publish stale/repetitive content
         if not candidate_texts:
-            print("  All candidates filtered (repetitive, stale, or semantic duplicate)")
+            logger.warning("  All candidates filtered (repetitive, stale, or semantic duplicate)")
             return PipelineResult(
                 batch_id=batch_id,
                 candidates=[],
@@ -461,11 +464,11 @@ class SynthesisPipeline:
 
         # Final character limit check (refinement may have expanded)
         if char_limit and len(final_content) > char_limit:
-            print(f"  Final content is {len(final_content)} chars, condensing...")
+            logger.info(f"  Final content is {len(final_content)} chars, condensing...")
             condensed = self.generator.condense(final_content, char_limit)
             if len(condensed) <= char_limit:
                 final_content = condensed
-                print(f"  Condensed to {len(final_content)} chars")
+                logger.info(f"  Condensed to {len(final_content)} chars")
             else:
                 # Hard truncate at sentence boundary
                 sentences = final_content.split(". ")
@@ -477,7 +480,7 @@ class SynthesisPipeline:
                     else:
                         break
                 final_content = truncated or final_content[:char_limit]
-                print(f"  Hard truncated to {len(final_content)} chars")
+                logger.warning(f"  Hard truncated to {len(final_content)} chars")
 
         return PipelineResult(
             batch_id=batch_id,
