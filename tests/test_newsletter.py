@@ -239,7 +239,7 @@ class TestButtondownClient:
         mock_session.get.assert_called_once_with(
             f"{ButtondownClient.BASE_URL}/subscribers",
             params={"type": "regular"},
-            timeout=15,
+            timeout=30,
         )
 
     @patch("output.newsletter.requests.Session")

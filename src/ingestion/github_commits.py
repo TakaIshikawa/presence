@@ -28,11 +28,11 @@ class Commit:
 
 class GitHubClient:
     BASE_URL = "https://api.github.com"
-    REQUEST_TIMEOUT = 30  # seconds
 
-    def __init__(self, token: str, username: str):
+    def __init__(self, token: str, username: str, timeout: int = 30):
         self.token = token
         self.username = username
+        self.timeout = timeout
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github.v3+json"
@@ -54,7 +54,7 @@ class GitHubClient:
                     "per_page": 100,
                     "page": page
                 },
-                timeout=self.REQUEST_TIMEOUT,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -89,7 +89,7 @@ class GitHubClient:
             f"{self.BASE_URL}/repos/{self.username}/{repo_name}/commits",
             headers=self.headers,
             params=params,
-            timeout=self.REQUEST_TIMEOUT,
+            timeout=self.timeout,
         )
 
         if response.status_code == 409:  # Empty repository
