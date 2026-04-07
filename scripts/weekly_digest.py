@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config import load_config
+from runner import script_context, update_monitoring
 from storage.db import Database
 from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
