@@ -12,6 +12,7 @@ from synthesis.generator import ContentGenerator
 from synthesis.evaluator_v2 import CrossModelEvaluator, ComparisonResult
 from synthesis.refiner import ContentRefiner, RefinementResult
 from synthesis.few_shot import FewShotSelector
+from synthesis.stale_patterns import STALE_PATTERNS
 
 
 @dataclass
@@ -41,25 +42,6 @@ class SynthesisPipeline:
     SKIP_REFINE_ABOVE = 9.0
     # Skip refinement if score is too low to be worth refining
     SKIP_REFINE_BELOW = 5.0
-
-    # Overused rhetorical patterns to reject
-    STALE_PATTERNS = [
-        re.compile(r"(?i)^AI\s"),
-        re.compile(r"(?i)isn.t about .{5,40}[—\-].{0,5}it.s about"),
-        re.compile(r"(?i)\bbreakthrough\b"),
-        re.compile(r"(?i)perfect (prompts?|memory|agents?|handoffs?|context)"),
-        re.compile(r"\d+ commits? across \d+"),
-        re.compile(r"(?i)^(TWEET 1:\s*\n)?Today.s (insight|breakthrough|lesson)"),
-        # Engagement-bait openings
-        re.compile(r"(?i)^(unpopular opinion|controversial take)\s*[:\-–—]"),
-        re.compile(r"(?i)\bnobody (is )?(talk(s|ing) about|mentions?)"),
-        re.compile(r"(?i)^the (secret|trick) to\b"),
-        re.compile(r"(?i)^stop \w[\w ]{0,30}\.\s*start \w"),
-        re.compile(r"(?i)\w[\w ]{0,30} (is|are) dead\.\s*long live\b"),
-        re.compile(r"(?i)^I spent \d+\s*(hours?|days?|weeks?|months?)"),
-        re.compile(r"(?i)^most (people|developers?|devs|engineers?) don.t\b"),
-        re.compile(r"(?i)^everyone (says|preaches|thinks|knows|believes)\b"),
-    ]
 
     # Post format directives for structural variety
     POST_FORMATS = [
@@ -196,7 +178,7 @@ class SynthesisPipeline:
         """Reject candidates matching overused rhetorical patterns."""
         filtered = []
         for candidate in candidates:
-            matches = [p.pattern for p in self.STALE_PATTERNS if p.search(candidate)]
+            matches = [p.pattern for p in STALE_PATTERNS if p.search(candidate)]
             if matches:
                 print(f"  Rejected stale pattern: {candidate[:50]}...")
             else:

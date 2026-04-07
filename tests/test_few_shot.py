@@ -4,23 +4,18 @@ import pytest
 
 from synthesis.few_shot import _has_stale_pattern, FewShotSelector, FewShotExample
 from synthesis.pipeline import SynthesisPipeline
+from synthesis.stale_patterns import has_stale_pattern, STALE_PATTERNS
 
 
 # ---------------------------------------------------------------------------
-# Helper: run the same text against both the few_shot module-level patterns
-# and the pipeline class-level patterns, verifying they agree.
+# Helper: run the same text against the shared stale pattern list.
+# Previously verified that few_shot and pipeline both used identical patterns.
 # ---------------------------------------------------------------------------
 
 
 def _both_detect(text: str) -> bool:
-    """Return True only if BOTH pattern lists flag the text as stale."""
-    few_shot_hit = _has_stale_pattern(text)
-    pipeline_hit = any(p.search(text) for p in SynthesisPipeline.STALE_PATTERNS)
-    assert few_shot_hit == pipeline_hit, (
-        f"Pattern lists diverge on: {text!r} "
-        f"(few_shot={few_shot_hit}, pipeline={pipeline_hit})"
-    )
-    return few_shot_hit
+    """Return True if the text matches any stale pattern."""
+    return has_stale_pattern(text)
 
 
 # ===========================================================================
