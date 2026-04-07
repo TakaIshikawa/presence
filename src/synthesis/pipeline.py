@@ -120,6 +120,8 @@ class SynthesisPipeline:
         db: Database,
         num_candidates: int = 3,
         anthropic_timeout: float = 300.0,
+        embedder=None,
+        semantic_threshold: float = 0.82,
     ):
         self.generator = ContentGenerator(api_key, generator_model, timeout=anthropic_timeout)
         self.evaluator = CrossModelEvaluator(api_key, evaluator_model, timeout=anthropic_timeout)
@@ -133,6 +135,8 @@ class SynthesisPipeline:
         self.db = db
         self.few_shot_selector = FewShotSelector(db)
         self.num_candidates = num_candidates
+        self.embedder = embedder
+        self.semantic_threshold = semantic_threshold
 
     # Character limits per content type
     CHAR_LIMITS = {
@@ -183,6 +187,70 @@ class SynthesisPipeline:
                 print(f"  Rejected stale pattern: {candidate[:50]}...")
             else:
                 filtered.append(candidate)
+        return filtered
+
+    def _build_avoidance_context(self) -> str:
+        """Build a list of recent topics for the generator to avoid repeating."""
+        recent = self.db.get_recent_published_content_all(limit=10)
+        if not recent:
+            return ""
+
+        topics = []
+        for r in recent:
+            content = r["content"]
+            stripped = re.sub(r"^TWEET\s+\d+:\s*\n?", "", content).strip()
+            first_sentence = stripped.split(".")[0].strip()
+            if first_sentence and len(first_sentence) > 10:
+                topics.append(f"- {first_sentence[:120]}")
+
+        if not topics:
+            return ""
+
+        return (
+            "TOPICS RECENTLY COVERED (do NOT repeat these themes — "
+            "find a DIFFERENT angle from the source material):\n"
+            + "\n".join(topics)
+            + "\n\n"
+        )
+
+    def _filter_semantic_duplicates(self, candidates: list[str]) -> list[str]:
+        """Remove candidates semantically similar to recently published content."""
+        if not self.embedder:
+            return candidates
+
+        recent = self.db.get_recent_published_content_all(limit=30)
+        recent_with_embeddings = [
+            r for r in recent if r.get("content_embedding")
+        ]
+        if not recent_with_embeddings:
+            return candidates
+
+        from knowledge.embeddings import deserialize_embedding, cosine_similarity
+
+        recent_embeddings = [
+            deserialize_embedding(r["content_embedding"])
+            for r in recent_with_embeddings
+        ]
+
+        candidate_embeddings = self.embedder.embed_batch(candidates)
+
+        filtered = []
+        for candidate, c_emb in zip(candidates, candidate_embeddings):
+            max_sim = max(
+                cosine_similarity(c_emb, r_emb)
+                for r_emb in recent_embeddings
+            )
+            if max_sim > self.semantic_threshold:
+                best_idx = max(
+                    range(len(recent_embeddings)),
+                    key=lambda j: cosine_similarity(c_emb, recent_embeddings[j]),
+                )
+                matched = recent_with_embeddings[best_idx]["content"][:60]
+                print(f"  Rejected semantic duplicate (sim={max_sim:.3f}): "
+                      f"{candidate[:40]}... ~ {matched}...")
+            else:
+                filtered.append(candidate)
+
         return filtered
 
     def _select_format_directives(self, num: int, content_type: str = "x_post") -> list[str]:
@@ -268,6 +336,7 @@ class SynthesisPipeline:
         reference_examples = [ex.content for ex in examples] if examples else None
 
         # Stage 2: Multi-candidate generation with format variation
+        avoidance_context = self._build_avoidance_context()
         format_directives = self._select_format_directives(self.num_candidates, content_type)
         candidates = self.generator.generate_candidates(
             prompts=prompts,
@@ -276,6 +345,7 @@ class SynthesisPipeline:
             few_shot_examples=few_shot_text,
             num_candidates=self.num_candidates,
             format_directives=format_directives,
+            avoidance_context=avoidance_context,
         )
         candidate_texts = [c.content for c in candidates]
 
@@ -290,9 +360,13 @@ class SynthesisPipeline:
         # Stage 2.7: Stale pattern filter
         candidate_texts = self._filter_stale_patterns(candidate_texts)
 
+        # Stage 2.8: Semantic dedup filter
+        if candidate_texts:
+            candidate_texts = self._filter_semantic_duplicates(candidate_texts)
+
         # All candidates filtered — reject rather than publish stale/repetitive content
         if not candidate_texts:
-            print("  All candidates filtered (repetitive or stale patterns)")
+            print("  All candidates filtered (repetitive, stale, or semantic duplicate)")
             return PipelineResult(
                 batch_id=batch_id,
                 candidates=[],
