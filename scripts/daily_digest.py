@@ -2,6 +2,7 @@
 """Generate and post daily digest thread via multi-stage pipeline."""
 
 import sys
+import logging
 import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -15,8 +16,11 @@ from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 
+logger = logging.getLogger(__name__)
+
 
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     config = load_config()
 
     # Initialize components
@@ -42,16 +46,16 @@ def main():
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today + timedelta(days=1)
 
-    print(f"Generating daily digest for {today.date()}")
+    logger.info(f"Generating daily digest for {today.date()}")
 
     # Get today's commits
     commits = db.get_commits_in_range(today, tomorrow)
     if not commits:
-        print("No commits today, skipping digest")
+        logger.info("No commits today, skipping digest")
         db.close()
         return
 
-    print(f"Found {len(commits)} commits")
+    logger.info(f"Found {len(commits)} commits")
 
     # Get today's Claude prompts
     parser = ClaudeLogParser(config.paths.claude_logs)
@@ -61,10 +65,10 @@ def main():
     ]
     prompt_texts = [p.prompt_text for p in prompts]
 
-    print(f"Found {len(prompts)} prompts")
+    logger.info(f"Found {len(prompts)} prompts")
 
     if not prompt_texts:
-        print("No prompts found, skipping digest")
+        logger.info("No prompts found, skipping digest")
         db.close()
         return
 
@@ -87,13 +91,13 @@ def main():
                 max_commits=config.historical.max_historical_commits,
             )
             if ctx:
-                print(f"  Historical context: {ctx.theme_description}")
+                logger.info(f"  Historical context: {ctx.theme_description}")
                 for hc in ctx.commits:
                     hc["historical"] = True
                     commit_dicts.append(hc)
 
     # Run pipeline
-    print(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
+    logger.info(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
     result = pipeline.run(
         prompts=prompt_texts,
         commits=commit_dicts,
@@ -103,10 +107,10 @@ def main():
 
     # Log pipeline stages
     best_idx = result.comparison.ranking[0] if result.comparison.ranking else 0
-    print(f"  Best candidate: {chr(65 + best_idx)} (score: {result.comparison.best_score}/10)")
+    logger.info(f"  Best candidate: {chr(65 + best_idx)} (score: {result.comparison.best_score}/10)")
     if result.refinement:
-        print(f"  Refinement: picked {result.refinement.picked} (score: {result.refinement.final_score}/10)")
-    print(f"  Final score: {result.final_score}/10")
+        logger.info(f"  Refinement: picked {result.refinement.picked} (score: {result.refinement.final_score}/10)")
+    logger.info(f"  Final score: {result.final_score}/10")
 
     # Store
     content_id = db.insert_generated_content(
@@ -133,21 +137,21 @@ def main():
             f"{config.synthesis.eval_threshold * 10}"
         )
         if result.comparison.reject_reason:
-            print(f"Rejected: {result.comparison.reject_reason}")
+            logger.warning(f"Rejected: {result.comparison.reject_reason}")
         else:
-            print("Below threshold, not posting")
-        print("Generated content:")
-        print(result.final_content)
+            logger.warning("Below threshold, not posting")
+        logger.debug("Generated content:")
+        logger.debug(result.final_content)
     else:
-        print("Posting thread to X...")
+        logger.info("Posting thread to X...")
         tweets = parse_thread_content(result.final_content)
         post_result = x_client.post_thread(tweets)
         if post_result.success:
             db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)
-            print(f"Posted: {post_result.url}")
+            logger.info(f"Posted: {post_result.url}")
             outcome = "published"
         else:
-            print(f"Post failed: {post_result.error}")
+            logger.error(f"Post failed: {post_result.error}")
             outcome = "below_threshold"
             rejection_reason = f"Post failed: {post_result.error}"
 
@@ -168,7 +172,7 @@ def main():
 
     db.close()
     _update_monitoring()
-    print("Done")
+    logger.info("Done")
 
 
 def _update_monitoring():
