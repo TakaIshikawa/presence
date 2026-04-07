@@ -114,7 +114,7 @@ class TestFilterRepetitive:
             "A completely different approach—test-driven development changes everything.",
         ]
 
-        filtered = pipeline._filter_repetitive(candidates, "x_post")
+        filtered, rejected = pipeline._filter_repetitive(candidates, "x_post")
 
         # Only the dissimilar candidate should remain
         assert len(filtered) == 1
@@ -131,7 +131,7 @@ class TestFilterRepetitive:
             "Refactoring is a discipline, not a chore.",
         ]
 
-        filtered = pipeline._filter_repetitive(candidates, "x_post")
+        filtered, rejected = pipeline._filter_repetitive(candidates, "x_post")
 
         # All should pass through
         assert len(filtered) == 3
@@ -146,7 +146,7 @@ class TestFilterRepetitive:
             "Debugging is about context—version C.",
         ]
 
-        filtered = pipeline._filter_repetitive(candidates, "x_post")
+        filtered, rejected = pipeline._filter_repetitive(candidates, "x_post")
 
         # All candidates pass through when no recent history
         assert len(filtered) == 3
@@ -163,7 +163,7 @@ class TestFilterRepetitive:
             "TWEET 1:\nA different approach works better.",
         ]
 
-        filtered = pipeline._filter_repetitive(candidates, "x_thread")
+        filtered, rejected = pipeline._filter_repetitive(candidates, "x_thread")
 
         # First should be filtered, second should pass
         assert len(filtered) == 1
@@ -180,7 +180,7 @@ class TestFilterRepetitive:
             "Same opening everywhere—version C.",
         ]
 
-        filtered = pipeline._filter_repetitive(candidates, "x_post")
+        filtered, rejected = pipeline._filter_repetitive(candidates, "x_post")
 
         # All filtered out
         assert len(filtered) == 0
@@ -198,7 +198,7 @@ class TestFilterStalePatterns:
             "This is a clean post without stale patterns.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert filtered[0] == "This is a clean post without stale patterns."
@@ -209,7 +209,7 @@ class TestFilterStalePatterns:
             "Error handling requires discipline.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Error handling" in filtered[0]
@@ -220,7 +220,7 @@ class TestFilterStalePatterns:
             "Incremental progress compounds over time.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Incremental" in filtered[0]
@@ -231,7 +231,7 @@ class TestFilterStalePatterns:
             "Good enough ships. Perfect stays local.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Good enough" in filtered[0]
@@ -242,7 +242,7 @@ class TestFilterStalePatterns:
             "Small changes compound into big wins.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Small changes" in filtered[0]
@@ -254,7 +254,7 @@ class TestFilterStalePatterns:
             "Yesterday I learned something valuable.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Yesterday" in filtered[0]
@@ -266,7 +266,7 @@ class TestFilterStalePatterns:
             "A measured take on agent reliability.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "measured take" in filtered[0]
@@ -278,7 +278,7 @@ class TestFilterStalePatterns:
             "This pattern is worth discussing.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         # First two match the nobody pattern, third is clean
         assert len(filtered) == 1
@@ -291,7 +291,7 @@ class TestFilterStalePatterns:
             "One simple approach works consistently.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "simple approach" in filtered[0]
@@ -303,7 +303,7 @@ class TestFilterStalePatterns:
             "Focus on what matters most.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Focus on" in filtered[0]
@@ -315,7 +315,7 @@ class TestFilterStalePatterns:
             "Old approaches fade. New patterns emerge.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Old approaches" in filtered[0]
@@ -327,7 +327,7 @@ class TestFilterStalePatterns:
             "After a few iterations, I found the pattern.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "After a few" in filtered[0]
@@ -339,7 +339,7 @@ class TestFilterStalePatterns:
             "Many engineers overlook this detail.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Many engineers" in filtered[0]
@@ -351,7 +351,7 @@ class TestFilterStalePatterns:
             "Common wisdom suggests one approach.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 1
         assert "Common wisdom" in filtered[0]
@@ -363,7 +363,7 @@ class TestFilterStalePatterns:
             "Small improvements compound over time.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         assert len(filtered) == 3
         assert filtered == candidates
@@ -375,7 +375,7 @@ class TestFilterStalePatterns:
             "Clean post without patterns.",
         ]
 
-        filtered = pipeline._filter_stale_patterns(candidates)
+        filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
         # First has multiple pattern matches, but only rejected once
         assert len(filtered) == 1
@@ -445,7 +445,7 @@ class TestEnforceCharLimit:
     def test_candidates_under_limit_pass_through(self, pipeline, mock_generator):
         candidates = ["Short post A", "Short post B", "Short post C"]
 
-        filtered = pipeline._enforce_char_limit(candidates, 280)
+        filtered, rejected = pipeline._enforce_char_limit(candidates, 280)
 
         assert filtered == candidates
         mock_generator.condense.assert_not_called()
@@ -458,7 +458,7 @@ class TestEnforceCharLimit:
         ]
         mock_generator.condense.return_value = "x" * 250  # Within limit after condense
 
-        filtered = pipeline._enforce_char_limit(candidates, 280)
+        filtered, rejected = pipeline._enforce_char_limit(candidates, 280)
 
         # condense should be called once for the over-limit candidate
         assert mock_generator.condense.call_count == 1
@@ -470,7 +470,7 @@ class TestEnforceCharLimit:
         # First attempt still over, second attempt succeeds
         mock_generator.condense.side_effect = ["x" * 290, "x" * 270]
 
-        filtered = pipeline._enforce_char_limit(candidates, 280)
+        filtered, rejected = pipeline._enforce_char_limit(candidates, 280)
 
         # Should attempt twice
         assert mock_generator.condense.call_count == 2
@@ -486,7 +486,7 @@ class TestEnforceCharLimit:
         # All condense attempts fail
         mock_generator.condense.return_value = "x" * 290
 
-        filtered = pipeline._enforce_char_limit(candidates, 280)
+        filtered, rejected = pipeline._enforce_char_limit(candidates, 280)
 
         # Only the short one survives
         assert len(filtered) == 1
@@ -502,7 +502,7 @@ class TestEnforceCharLimit:
         # condense fails
         mock_generator.condense.return_value = "x" * 290
 
-        filtered = pipeline._enforce_char_limit(candidates, 280)
+        filtered, rejected = pipeline._enforce_char_limit(candidates, 280)
 
         # Should have one fallback candidate
         assert len(filtered) == 1
@@ -515,7 +515,7 @@ class TestEnforceCharLimit:
         candidates = ["x" * 350, "y" * 400]
         mock_generator.condense.return_value = "x" * 290
 
-        filtered = pipeline._enforce_char_limit(candidates, 280)
+        filtered, rejected = pipeline._enforce_char_limit(candidates, 280)
 
         # Should hard truncate
         assert len(filtered) == 1
@@ -530,7 +530,7 @@ class TestEnforceCharLimit:
         ]
         mock_generator.condense.return_value = "x" * 250  # Success
 
-        filtered = pipeline._enforce_char_limit(candidates, 280)
+        filtered, rejected = pipeline._enforce_char_limit(candidates, 280)
 
         # Valid ones pass through, invalid ones condensed
         assert len(filtered) == 4
