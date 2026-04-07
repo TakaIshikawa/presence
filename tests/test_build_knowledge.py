@@ -60,14 +60,13 @@ def build_mocks():
 
 
 class TestMain:
-    def test_embeddings_not_configured(self, capsys):
+    def test_embeddings_not_configured(self, caplog):
         with patch("build_knowledge.load_config") as mock_config:
             mock_config.return_value = _make_config(embeddings_enabled=False)
             from build_knowledge import main
             with pytest.raises(SystemExit):
                 main()
-            output = capsys.readouterr().out
-            assert "embeddings not configured" in output
+            assert "embeddings not configured" in caplog.text
 
     def test_skips_existing_posts(self, build_mocks):
         build_mocks.config.return_value = _make_config()
