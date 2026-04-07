@@ -111,18 +111,26 @@ _PATCH_BASE = "poll_replies"
 def _patches():
     """Yield a namespace of mocks for every external dependency of main()."""
     with (
-        patch(f"{_PATCH_BASE}.load_config") as mock_load_config,
-        patch(f"{_PATCH_BASE}.Database") as MockDatabase,
+        patch(f"{_PATCH_BASE}.script_context") as mock_script_context,
+        patch(f"{_PATCH_BASE}.update_monitoring") as mock_update_monitoring,
         patch(f"{_PATCH_BASE}.XClient") as MockXClient,
         patch(f"{_PATCH_BASE}.ReplyDrafter") as MockDrafter,
         patch(f"{_PATCH_BASE}.signal") as mock_signal,
     ):
-        db = MockDatabase.return_value
+        # Mock database
+        db = MagicMock()
         db.count_replies_today.return_value = 0
         db.is_reply_processed.return_value = False
         db.get_last_mention_id.return_value = None
         db.get_content_by_tweet_id.return_value = OUR_CONTENT
         db.insert_reply_draft.return_value = 1
+
+        # Mock config
+        config = _make_config()
+
+        # script_context is a context manager that yields (config, db)
+        mock_script_context.return_value.__enter__.return_value = (config, db)
+        mock_script_context.return_value.__exit__.return_value = None
 
         x_client = MockXClient.return_value
         x_client.client.get_me.return_value = _make_me()
@@ -131,11 +139,10 @@ def _patches():
         drafter = MockDrafter.return_value
         drafter.draft.return_value = "Great point, thanks for sharing!"
 
-        mock_load_config.return_value = _make_config()
-
         yield SimpleNamespace(
-            load_config=mock_load_config,
-            MockDatabase=MockDatabase,
+            script_context=mock_script_context,
+            update_monitoring=mock_update_monitoring,
+            config=config,
             db=db,
             MockXClient=MockXClient,
             x_client=x_client,
@@ -159,17 +166,17 @@ class TestDailyReplyCap:
     def test_skips_when_cap_already_reached(self, _patches):
         """Processing stops immediately when replies_today >= max_daily."""
         _patches.db.count_replies_today.return_value = 10
-        _patches.load_config.return_value = _make_config(max_daily_replies=10)
+        _patches.config.replies.max_daily_replies = 10
 
         main()
 
         _patches.x_client.get_mentions.assert_not_called()
-        _patches.db.close.assert_called()
+        _patches.update_monitoring.assert_called_with("poll-replies")
 
     def test_skips_when_cap_exceeded(self, _patches):
         """Processing stops when replies_today is over max_daily."""
         _patches.db.count_replies_today.return_value = 15
-        _patches.load_config.return_value = _make_config(max_daily_replies=10)
+        _patches.config.replies.max_daily_replies = 10
 
         main()
 
@@ -178,7 +185,7 @@ class TestDailyReplyCap:
     def test_stops_mid_processing_when_cap_hit(self, _patches):
         """Only processes remaining_cap mentions, then breaks."""
         _patches.db.count_replies_today.return_value = 8
-        _patches.load_config.return_value = _make_config(max_daily_replies=10)
+        _patches.config.replies.max_daily_replies = 10
 
         # 5 valid mentions but only 2 slots remaining (10 - 8 = 2)
         mentions = [
@@ -336,9 +343,7 @@ class TestCursorManagement:
 class TestCultivateIntegration:
     def test_bridge_connected_calls_get_person_context(self, _patches):
         """When cultivate enabled + bridge connects, get_person_context is called."""
-        _patches.load_config.return_value = _make_config(
-            cultivate_enabled=True, enrich_replies=True
-        )
+        _patches.config.cultivate = SimpleNamespace(enabled=True, db_path="~/.cultivate/cultivate.db", forward_mentions=False, enrich_replies=True, proactive_review=False, reply_quality_threshold=6.0)
 
         mock_bridge = MagicMock()
         mock_bridge.get_person_context.return_value = None
@@ -356,9 +361,7 @@ class TestCultivateIntegration:
 
     def test_forward_mentions_calls_record_mention_event(self, _patches):
         """When forward_mentions=True, record_mention_event is called."""
-        _patches.load_config.return_value = _make_config(
-            cultivate_enabled=True, forward_mentions=True
-        )
+        _patches.config.cultivate = SimpleNamespace(enabled=True, db_path="~/.cultivate/cultivate.db", forward_mentions=True, enrich_replies=False, proactive_review=False, reply_quality_threshold=6.0)
 
         mock_bridge = MagicMock()
         mock_bridge.get_person_context.return_value = None
@@ -384,9 +387,7 @@ class TestCultivateIntegration:
 
     def test_no_bridge_when_try_connect_returns_none(self, _patches):
         """When cultivate enabled but bridge fails to connect, enrichment skipped."""
-        _patches.load_config.return_value = _make_config(
-            cultivate_enabled=True, enrich_replies=True
-        )
+        _patches.config.cultivate = SimpleNamespace(enabled=True, db_path="~/.cultivate/cultivate.db", forward_mentions=False, enrich_replies=True, proactive_review=False, reply_quality_threshold=6.0)
 
         mention = _make_mention(author_id="user_A")
         _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
@@ -402,7 +403,7 @@ class TestCultivateIntegration:
 
     def test_bridge_closed_at_end(self, _patches):
         """When bridge is connected, it is closed at the end of main()."""
-        _patches.load_config.return_value = _make_config(cultivate_enabled=True)
+        _patches.config.cultivate = SimpleNamespace(enabled=True, db_path="~/.cultivate/cultivate.db", forward_mentions=False, enrich_replies=False, proactive_review=False, reply_quality_threshold=6.0)
 
         mock_bridge = MagicMock()
         mock_bridge.get_person_context.return_value = None
@@ -429,8 +430,10 @@ class TestCultivateIntegration:
 class TestQualityEvaluation:
     def test_evaluator_called_when_cultivate_enabled(self, _patches):
         """When cultivate is enabled, evaluator.evaluate() is called for each draft."""
-        _patches.load_config.return_value = _make_config(
-            cultivate_enabled=True, reply_quality_threshold=7.0
+        _patches.config.cultivate = SimpleNamespace(
+            enabled=True, db_path="~/.cultivate/cultivate.db",
+            forward_mentions=False, enrich_replies=False,
+            proactive_review=False, reply_quality_threshold=7.0
         )
 
         mock_bridge = MagicMock()
@@ -459,7 +462,7 @@ class TestQualityEvaluation:
 
     def test_quality_score_passed_to_insert_reply_draft(self, _patches):
         """quality_score and quality_flags from evaluator are stored in the DB."""
-        _patches.load_config.return_value = _make_config(cultivate_enabled=True)
+        _patches.config.cultivate = SimpleNamespace(enabled=True, db_path="~/.cultivate/cultivate.db", forward_mentions=False, enrich_replies=False, proactive_review=False, reply_quality_threshold=6.0)
 
         mock_bridge = MagicMock()
         mock_bridge.get_person_context.return_value = None
@@ -513,7 +516,6 @@ class TestErrorHandling:
         main()
 
         _patches.drafter.draft.assert_not_called()
-        _patches.db.close.assert_called()
 
     def test_draft_error_skips_mention_continues_processing(self, _patches):
         """An error in drafter.draft() skips that mention but continues."""
@@ -539,11 +541,13 @@ class TestErrorHandling:
 
     def test_replies_disabled_returns_early(self, _patches):
         """When replies.enabled is False, main() returns immediately."""
-        _patches.load_config.return_value = _make_config(replies_enabled=False)
+        _patches.config.replies.enabled = False
 
         main()
 
-        _patches.MockDatabase.assert_not_called()
+        # With script_context, DB is always initialized, but X operations should be skipped
+        _patches.MockXClient.assert_not_called()
+        _patches.update_monitoring.assert_called_with("poll-replies")
 
 
 # ---------------------------------------------------------------------------
