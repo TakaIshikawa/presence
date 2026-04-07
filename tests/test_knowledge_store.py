@@ -91,6 +91,25 @@ class TestSerializeDeserialize:
         blob = serialize_embedding([1.5])
         assert deserialize_embedding(blob) == pytest.approx([1.5])
 
+    def test_typical_embedding_1536d(self):
+        """Test round-trip with typical OpenAI embedding dimension."""
+        import random
+        random.seed(42)
+        original = [random.uniform(-1, 1) for _ in range(1536)]
+        blob = serialize_embedding(original)
+        restored = deserialize_embedding(blob)
+        assert len(restored) == 1536
+        for a, b in zip(original, restored):
+            assert a == pytest.approx(b, rel=1e-6)
+
+    def test_edge_values(self):
+        """Test serialization with extreme float values."""
+        original = [0.0, -1.0, 1.0, 1e-10, -1e-10, 0.99999, -0.99999]
+        blob = serialize_embedding(original)
+        restored = deserialize_embedding(blob)
+        for a, b in zip(original, restored):
+            assert a == pytest.approx(b, rel=1e-6)
+
 
 class TestCosineSimilarity:
     def test_identical_vectors(self):
@@ -260,6 +279,32 @@ class TestSearchSimilar:
 
         results = store.search_similar("content", limit=2, min_similarity=-1.0)
         assert len(results) <= 2
+
+    def test_empty_database(self, store):
+        """Search with no stored items returns empty list."""
+        results = store.search_similar("anything", min_similarity=-1.0)
+        assert results == []
+
+    def test_items_with_null_embeddings(self, store):
+        """Items with NULL embeddings are skipped in search."""
+        # Add item with embedding
+        store.add_item(_make_item(source_id="has-embedding", content="with embedding"))
+
+        # Add item and then manually NULL out its embedding
+        store.add_item(_make_item(source_id="no-embedding", content="without embedding"))
+        store.conn.execute(
+            "UPDATE knowledge SET embedding = NULL WHERE source_id = ?",
+            ("no-embedding",)
+        )
+        store.conn.commit()
+
+        results = store.search_similar("embedding", min_similarity=-1.0)
+        result_ids = {item.source_id for item, _ in results}
+
+        # Only the item with embedding should be returned
+        assert "has-embedding" in result_ids
+        assert "no-embedding" not in result_ids
+        assert len(results) == 1
 
 
 class TestGetBySource:
