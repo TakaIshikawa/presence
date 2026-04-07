@@ -152,8 +152,9 @@ class ButtondownClient:
 
     BASE_URL = "https://api.buttondown.com/v1"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, timeout: int = 30):
         self.api_key = api_key
+        self.timeout = timeout
         self.session = requests.Session()
         self.session.headers["Authorization"] = f"Token {api_key}"
 
@@ -170,7 +171,7 @@ class ButtondownClient:
                     "body": body,
                     "status": status,
                 },
-                timeout=30,
+                timeout=self.timeout,
             )
             if response.status_code in (200, 201):
                 data = response.json()
@@ -193,7 +194,7 @@ class ButtondownClient:
             response = self.session.get(
                 f"{self.BASE_URL}/subscribers",
                 params={"type": "regular"},
-                timeout=15,
+                timeout=self.timeout,
             )
             if response.status_code == 200:
                 return response.json().get("count", 0)

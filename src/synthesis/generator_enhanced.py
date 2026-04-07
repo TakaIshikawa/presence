@@ -25,9 +25,10 @@ class EnhancedContentGenerator:
         self,
         api_key: str,
         knowledge_store: Optional[KnowledgeStore] = None,
-        model: str = "claude-sonnet-4-20250514"
+        model: str = "claude-sonnet-4-20250514",
+        timeout: float = 300.0
     ):
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.knowledge_store = knowledge_store
 

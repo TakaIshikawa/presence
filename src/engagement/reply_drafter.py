@@ -37,8 +37,8 @@ No familiarity assumed.
 
 
 class ReplyDrafter:
-    def __init__(self, api_key: str, model: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
+    def __init__(self, api_key: str, model: str, timeout: float = 300.0):
+        self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
 
     def draft(
