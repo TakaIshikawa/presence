@@ -64,6 +64,8 @@ class Database:
             self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN outcome TEXT")
         if pr_cols and "rejection_reason" not in pr_cols:
             self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
+        if pr_cols and "filter_stats" not in pr_cols:
+            self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
         self.conn.commit()
 
     # Claude messages
@@ -702,6 +704,7 @@ class Database:
         content_id: int = None,
         outcome: str = None,
         rejection_reason: str = None,
+        filter_stats: dict = None,
     ) -> int:
         """Record a pipeline run for observability."""
         cursor = self.conn.execute(
@@ -710,13 +713,14 @@ class Database:
                 best_candidate_index, best_score_before_refine,
                 best_score_after_refine, refinement_picked,
                 final_score, published, content_id,
-                outcome, rejection_reason)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                outcome, rejection_reason, filter_stats)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (batch_id, content_type, candidates_generated,
              best_candidate_index, best_score_before_refine,
              best_score_after_refine, refinement_picked,
              final_score, 1 if published else 0, content_id,
-             outcome, rejection_reason)
+             outcome, rejection_reason,
+             json.dumps(filter_stats) if filter_stats else None)
         )
         self.conn.commit()
         return cursor.lastrowid

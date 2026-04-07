@@ -1314,7 +1314,8 @@ class TestReplyQueue:
         assert "quality_flags" in cols
 
 
-# ===========================================================================
+# ====================================================================
+
 # Additional tests from create-comprehensive-unit-tests-for-the-storage-la branch
 # ===========================================================================
 
@@ -1679,3 +1680,81 @@ class TestTransactionBehaviour:
         # First insert should still be there
         rows = db.get_unpublished_content("x_post", min_score=0)
         assert len(rows) >= 1
+
+    def test_insert_pipeline_run_with_filter_stats(self, db):
+        stats = {
+            "char_limit_rejected": 1,
+            "repetition_rejected": 2,
+            "stale_pattern_rejected": 1,
+            "stale_patterns_matched": ["(?i)^AI\\s", "(?i)\\bbreakthrough\\b"],
+        }
+        run_id = db.insert_pipeline_run(
+            batch_id="batch-fs",
+            content_type="x_post",
+            candidates_generated=3,
+            best_candidate_index=0,
+            best_score_before_refine=7.0,
+            filter_stats=stats,
+        )
+        assert run_id > 0
+
+        row = db.conn.execute(
+            "SELECT filter_stats FROM pipeline_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        stored = json.loads(row[0])
+        assert stored["char_limit_rejected"] == 1
+        assert stored["repetition_rejected"] == 2
+        assert stored["stale_pattern_rejected"] == 1
+        assert stored["stale_patterns_matched"] == ["(?i)^AI\\s", "(?i)\\bbreakthrough\\b"]
+
+    def test_insert_pipeline_run_without_filter_stats(self, db):
+        run_id = db.insert_pipeline_run(
+            batch_id="batch-nofs",
+            content_type="x_post",
+            candidates_generated=3,
+            best_candidate_index=0,
+            best_score_before_refine=7.0,
+        )
+        row = db.conn.execute(
+            "SELECT filter_stats FROM pipeline_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        assert row[0] is None
+
+    def test_filter_stats_column_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")
+        }
+        assert "filter_stats" in cols
+
+    def test_schema_migration_adds_filter_stats(self, schema_path):
+        """Verify migration adds filter_stats to a DB created without it."""
+        db = Database(":memory:")
+        db.connect()
+        # Create pipeline_runs without filter_stats column
+        db.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT UNIQUE NOT NULL,
+                content_type TEXT NOT NULL,
+                candidates_generated INTEGER,
+                best_candidate_index INTEGER,
+                best_score_before_refine REAL,
+                best_score_after_refine REAL,
+                refinement_picked TEXT,
+                final_score REAL,
+                published INTEGER DEFAULT 0,
+                content_id INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        # Confirm column does not exist yet
+        cols_before = {row[1] for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")}
+        assert "filter_stats" not in cols_before
+
+        # Run init_schema which should migrate
+        db.init_schema(schema_path)
+
+        cols_after = {row[1] for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")}
+        assert "filter_stats" in cols_after
+        db.close()

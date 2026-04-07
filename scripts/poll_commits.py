@@ -331,6 +331,7 @@ def main():
         content_id=content_id,
         outcome=outcome,
         rejection_reason=rejection_reason,
+        filter_stats=pipeline_result.filter_stats,
     )
 
     # Update last poll time

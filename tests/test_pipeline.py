@@ -517,3 +517,117 @@ class TestPipelineResult:
         assert result.source_commits == [c["message"] for c in SAMPLE_COMMITS]
         assert len(result.batch_id) == 8  # UUID[:8]
         assert isinstance(result.comparison, ComparisonResult)
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_result_carries_filter_stats(self, MockFS, MockGen, MockEval, MockRefiner):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Post A", "Post B", "Post C"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(best_score=9.5)
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.filter_stats is not None
+        assert result.filter_stats["char_limit_rejected"] == 0
+        assert result.filter_stats["repetition_rejected"] == 0
+        assert result.filter_stats["stale_pattern_rejected"] == 0
+        assert result.filter_stats["stale_patterns_matched"] == []
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_filter_stats_tracks_stale_rejections(self, MockFS, MockGen, MockEval, MockRefiner):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+
+        # One candidate matches a stale pattern, two don't
+        candidates = [
+            "AI is transforming everything we know",  # matches (?i)^AI\s
+            "Short clean post",
+            "Another clean post",
+        ]
+        pipeline.generator.generate_candidates.return_value = _make_candidates(candidates)
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5, ranking=[0, 1]
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.filter_stats["stale_pattern_rejected"] == 1
+        assert len(result.filter_stats["stale_patterns_matched"]) == 1
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_filter_stats_tracks_repetition_rejections(self, MockFS, MockGen, MockEval, MockRefiner):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = [
+            {"content": "Debugging is about context—the error message is just the start."}
+        ]
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+
+        candidates = [
+            "Debugging is about context—you need to see the whole picture.",
+            "A completely different topic about testing strategies.",
+            "Yet another unique post about deployment.",
+        ]
+        pipeline.generator.generate_candidates.return_value = _make_candidates(candidates)
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5, ranking=[0, 1]
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.filter_stats["repetition_rejected"] == 1
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_filter_stats_on_all_rejected(self, MockFS, MockGen, MockEval, MockRefiner):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+
+        # All candidates match stale patterns
+        stale_candidates = [
+            "AI is going to change everything",
+            "AI systems are the future of dev",
+            "The secret to great code is simple",
+        ]
+        pipeline.generator.generate_candidates.return_value = _make_candidates(stale_candidates)
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.final_score == 0
+        assert result.filter_stats is not None
+        assert result.filter_stats["stale_pattern_rejected"] == 3

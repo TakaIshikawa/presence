@@ -169,6 +169,7 @@ def main():
         content_id=content_id,
         outcome=outcome,
         rejection_reason=rejection_reason,
+        filter_stats=result.filter_stats,
     )
 
     db.close()

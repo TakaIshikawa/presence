@@ -25,6 +25,7 @@ class PipelineResult:
     final_score: float
     source_prompts: list[str]
     source_commits: list[str]
+    filter_stats: Optional[dict] = None
 
 
 class SynthesisPipeline:
@@ -156,15 +157,21 @@ class SynthesisPipeline:
         opening = match[0].strip().lower() if match else stripped[:max_len].lower()
         return opening[:max_len]
 
-    def _filter_repetitive(self, candidates: list[str], content_type: str) -> list[str]:
-        """Remove candidates whose opening is too similar to recent posts."""
+    def _filter_repetitive(
+        self, candidates: list[str], content_type: str
+    ) -> tuple[list[str], int]:
+        """Remove candidates whose opening is too similar to recent posts.
+
+        Returns (filtered_candidates, rejection_count).
+        """
         recent = self.db.get_recent_published_content(content_type, limit=20)
         if not recent:
-            return candidates
+            return candidates, 0
 
         recent_openings = [self._extract_opening(p["content"]) for p in recent]
 
         filtered = []
+        rejected = 0
         for candidate in candidates:
             opening = self._extract_opening(candidate)
             is_repetitive = any(
@@ -173,21 +180,31 @@ class SynthesisPipeline:
             )
             if is_repetitive:
                 print(f"  Rejected as repetitive: {opening[:40]}...")
+                rejected += 1
             else:
                 filtered.append(candidate)
 
-        return filtered
+        return filtered, rejected
 
-    def _filter_stale_patterns(self, candidates: list[str]) -> list[str]:
-        """Reject candidates matching overused rhetorical patterns."""
+    def _filter_stale_patterns(
+        self, candidates: list[str]
+    ) -> tuple[list[str], int, list[str]]:
+        """Reject candidates matching overused rhetorical patterns.
+
+        Returns (filtered_candidates, rejection_count, matched_patterns).
+        """
         filtered = []
+        rejected = 0
+        matched_patterns = []
         for candidate in candidates:
             matches = [p.pattern for p in STALE_PATTERNS if p.search(candidate)]
             if matches:
                 print(f"  Rejected stale pattern: {candidate[:50]}...")
+                rejected += 1
+                matched_patterns.extend(matches)
             else:
                 filtered.append(candidate)
-        return filtered
+        return filtered, rejected, matched_patterns
 
     def _build_avoidance_context(self) -> str:
         """Build a list of recent topics for the generator to avoid repeating."""
@@ -259,9 +276,15 @@ class SynthesisPipeline:
         selected = random.sample(formats, min(num, len(formats)))
         return [directive for _, directive in selected]
 
-    def _enforce_char_limit(self, candidates: list[str], max_chars: int) -> list[str]:
-        """Validate and condense candidates that exceed character limit."""
+    def _enforce_char_limit(
+        self, candidates: list[str], max_chars: int
+    ) -> tuple[list[str], int]:
+        """Validate and condense candidates that exceed character limit.
+
+        Returns (valid_candidates, rejection_count).
+        """
         valid = []
+        rejected = 0
         for i, text in enumerate(candidates):
             if len(text) <= max_chars:
                 valid.append(text)
@@ -278,6 +301,7 @@ class SynthesisPipeline:
                     break
             else:
                 print(f"  Still {len(condensed)} chars after 2 condense attempts, discarding")
+                rejected += 1
 
         if not valid:
             # Fallback: take shortest original, truncate at sentence boundary
@@ -293,7 +317,7 @@ class SynthesisPipeline:
             valid.append(truncated or shortest[:max_chars])
             print(f"  All candidates over limit, truncated shortest to {len(valid[0])} chars")
 
-        return valid
+        return valid, rejected
 
     def run(
         self,
@@ -350,15 +374,23 @@ class SynthesisPipeline:
         candidate_texts = [c.content for c in candidates]
 
         # Stage 2.5: Character limit enforcement
+        char_limit_rejected = 0
         char_limit = self.CHAR_LIMITS.get(content_type)
         if char_limit:
-            candidate_texts = self._enforce_char_limit(candidate_texts, char_limit)
+            candidate_texts, char_limit_rejected = self._enforce_char_limit(candidate_texts, char_limit)
 
         # Stage 2.6: Repetition filter
-        candidate_texts = self._filter_repetitive(candidate_texts, content_type)
+        candidate_texts, repetition_rejected = self._filter_repetitive(candidate_texts, content_type)
 
         # Stage 2.7: Stale pattern filter
-        candidate_texts = self._filter_stale_patterns(candidate_texts)
+        candidate_texts, stale_pattern_rejected, stale_patterns_matched = self._filter_stale_patterns(candidate_texts)
+
+        filter_stats = {
+            "char_limit_rejected": char_limit_rejected,
+            "repetition_rejected": repetition_rejected,
+            "stale_pattern_rejected": stale_pattern_rejected,
+            "stale_patterns_matched": stale_patterns_matched,
+        }
 
         # Stage 2.8: Semantic dedup filter
         if candidate_texts:
@@ -388,6 +420,7 @@ class SynthesisPipeline:
                 final_score=0,
                 source_prompts=prompts,
                 source_commits=[c["message"] for c in commits],
+                filter_stats=filter_stats,
             )
 
         # Stage 3: Cross-model evaluation with engagement calibration
@@ -455,4 +488,5 @@ class SynthesisPipeline:
             final_score=final_score,
             source_prompts=prompts,
             source_commits=[c["message"] for c in commits],
+            filter_stats=filter_stats,
         )
