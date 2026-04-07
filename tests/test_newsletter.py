@@ -122,6 +122,126 @@ class TestNewsletterAssembler:
         post_mentions = content.body_markdown.count("Post number")
         assert post_mentions <= 3
 
+    def test_limits_threads_to_two(self, db):
+        """At most 2 threads are included."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        for i in range(4):
+            _insert_published_content(
+                db, "x_thread",
+                f"TWEET 1:\nThread number {i} first tweet\n\nTWEET 2:\nSecond tweet",
+                days_ago=i + 1,
+            )
+
+        assembler = NewsletterAssembler(db)
+        content = assembler.assemble(week_start, now)
+
+        # Count "Thread number" occurrences (not just "Thread" which includes "## Threads")
+        thread_mentions = content.body_markdown.count("Thread number")
+        assert thread_mentions == 2
+
+    def test_subject_format(self, db):
+        """Subject line follows the expected format."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        _insert_published_content(db, "x_post", "Test post.", days_ago=1)
+
+        assembler = NewsletterAssembler(db)
+        content = assembler.assemble(week_start, now)
+
+        expected_date = week_start.strftime("%b %d")
+        assert content.subject == f"Building with AI — Week of {expected_date}"
+
+    def test_includes_site_url_footer(self, db):
+        """Newsletter footer includes site URL."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        _insert_published_content(db, "x_post", "Test post.", days_ago=1)
+
+        assembler = NewsletterAssembler(db)
+        content = assembler.assemble(week_start, now)
+
+        assert "takaishikawa.com" in content.body_markdown
+        assert "*Shipped from [takaishikawa.com](https://takaishikawa.com)*" in content.body_markdown
+
+    def test_blog_post_section_includes_read_link(self, db):
+        """Blog post section includes 'Read the full post' link."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        _insert_published_content(
+            db, "blog_post",
+            "TITLE: Test Post\n\nSome content here.",
+            days_ago=1,
+            url="https://takaishikawa.com/blog/test.html",
+        )
+
+        assembler = NewsletterAssembler(db)
+        content = assembler.assemble(week_start, now)
+
+        assert "[Read the full post](https://takaishikawa.com/blog/test.html)" in content.body_markdown
+
+    def test_custom_site_url(self, db):
+        """Custom site_url is used in footer."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        _insert_published_content(db, "x_post", "Test post.", days_ago=1)
+
+        assembler = NewsletterAssembler(db, site_url="https://example.org")
+        content = assembler.assemble(week_start, now)
+
+        assert "example.org" in content.body_markdown
+        assert "*Shipped from [takaishikawa.com](https://example.org)*" in content.body_markdown
+
+    def test_assembles_threads_only(self, db):
+        """Newsletter with only threads generates correct output."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        _insert_published_content(
+            db, "x_thread",
+            "TWEET 1:\nFirst thread content\n\nTWEET 2:\nSecond tweet",
+            days_ago=1,
+        )
+
+        assembler = NewsletterAssembler(db)
+        content = assembler.assemble(week_start, now)
+
+        assert content.subject != ""
+        assert "## Threads" in content.body_markdown
+        assert "First thread content" in content.body_markdown
+        assert "## This Week's Post" not in content.body_markdown
+        assert "## Posts" not in content.body_markdown
+
+    def test_content_ids_collected_across_types(self, db):
+        """source_content_ids includes IDs from blog, threads, and posts."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        blog_id = _insert_published_content(
+            db, "blog_post",
+            "TITLE: Blog\n\nContent here.",
+            days_ago=1,
+        )
+        thread_id = _insert_published_content(
+            db, "x_thread",
+            "TWEET 1:\nThread content\n\nTWEET 2:\nMore",
+            days_ago=2,
+        )
+        post_id = _insert_published_content(db, "x_post", "Post content.", days_ago=3)
+
+        assembler = NewsletterAssembler(db)
+        content = assembler.assemble(week_start, now)
+
+        assert len(content.source_content_ids) == 3
+        assert blog_id in content.source_content_ids
+        assert thread_id in content.source_content_ids
+        assert post_id in content.source_content_ids
+
 
 class TestNewsletterAssemblerHelpers:
     def test_extract_blog_title(self):
@@ -154,6 +274,33 @@ class TestNewsletterAssemblerHelpers:
         assert "First paragraph" in excerpt
         assert "TITLE" not in excerpt
         assert "Header" not in excerpt
+
+    def test_extract_blog_excerpt_only_title_and_headers(self):
+        """Content with only title and headers returns empty string."""
+        content = "TITLE: My Title\n\n## Header 1\n\n## Header 2\n\n### Subheader"
+        excerpt = NewsletterAssembler._extract_blog_excerpt(content, max_lines=3)
+        assert excerpt == ""
+
+    def test_extract_blog_excerpt_with_max_lines_one(self):
+        """max_lines=1 returns only a single line."""
+        content = "TITLE: Title\n\nFirst line.\n\nSecond line.\n\nThird line."
+        excerpt = NewsletterAssembler._extract_blog_excerpt(content, max_lines=1)
+        assert excerpt == "First line."
+
+    def test_extract_first_tweet_multiline_content(self):
+        """First tweet can span multiple lines."""
+        content = "TWEET 1:\nThis is a tweet\nthat spans multiple\nlines of text\n\nTWEET 2:\nSecond tweet"
+        result = NewsletterAssembler._extract_first_tweet(content)
+        assert "This is a tweet" in result
+        assert "that spans multiple" in result
+        assert "lines of text" in result
+        assert "TWEET 2" not in result
+
+    def test_extract_blog_title_with_whitespace(self):
+        """Title with extra whitespace is properly stripped."""
+        content = "TITLE:   Spaced Title  \n\nContent here"
+        title = NewsletterAssembler._extract_blog_title(content)
+        assert title == "Spaced Title"
 
 
 # --- ButtondownClient ---
