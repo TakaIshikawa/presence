@@ -5,10 +5,19 @@ This ensures the tact maintainer has accurate data for anomaly detection.
 """
 
 import argparse
+import logging
 import sqlite3
+import sys
 import yaml
 from datetime import datetime
 from pathlib import Path
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from runner import script_context
+
+logger = logging.getLogger(__name__)
 
 OPERATION_QUERIES = {
     "run-poll": {
@@ -52,14 +61,13 @@ def sync_operation(cursor, ops_data, operation_id):
         'agent': {'agentType': 'launchd', 'model': 'n/a'},
     })
 
-    print(f"Synced {operation_id}: {timestamp}")
+    logger.info(f"Synced {operation_id}: {timestamp}")
     return True
 
 
-def update_operations_yaml(operations=None):
+def update_operations_yaml(db_path, operations=None):
     """Update operations.yaml with current state from database."""
     project_root = Path(__file__).parent.parent
-    db_path = project_root / "presence.db"
     ops_path = project_root / ".tact" / "config" / "operations.yaml"
 
     if operations is None:
@@ -89,11 +97,16 @@ def update_operations_yaml(operations=None):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--operation', choices=list(OPERATION_QUERIES.keys()),
                         help='Sync a specific operation (default: all)')
     args = parser.parse_args()
 
     operations = [args.operation] if args.operation else None
-    success = update_operations_yaml(operations)
+
+    with script_context() as (config, db):
+        success = update_operations_yaml(config.paths.database, operations)
+
     exit(0 if success else 1)
