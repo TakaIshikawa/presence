@@ -49,6 +49,7 @@ def main():
     drafter = ReplyDrafter(
         api_key=config.anthropic.api_key,
         model=config.synthesis.model,
+        timeout=config.timeouts.anthropic_seconds,
     )
 
     # Cultivate integration (optional — works without it)

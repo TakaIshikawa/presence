@@ -78,8 +78,8 @@ class TestPipelineConstruction:
             db=db,
             num_candidates=3,
         )
-        MockGen.assert_called_once_with("test-key", "claude-sonnet-4-20250514")
-        MockEval.assert_called_once_with("test-key", "claude-opus-4-20250514")
+        MockGen.assert_called_once_with("test-key", "claude-sonnet-4-20250514", timeout=300.0)
+        MockEval.assert_called_once_with("test-key", "claude-opus-4-20250514", timeout=300.0)
         assert pipeline.num_candidates == 3
 
 

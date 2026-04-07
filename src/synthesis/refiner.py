@@ -33,10 +33,11 @@ class ContentRefiner:
         refine_model: str,
         gate_api_key: str,
         gate_model: str,
+        timeout: float = 300.0,
     ):
-        self.refine_client = anthropic.Anthropic(api_key=refine_api_key, timeout=300.0)
+        self.refine_client = anthropic.Anthropic(api_key=refine_api_key, timeout=timeout)
         self.refine_model = refine_model
-        self.gate_client = anthropic.Anthropic(api_key=gate_api_key, timeout=300.0)
+        self.gate_client = anthropic.Anthropic(api_key=gate_api_key, timeout=timeout)
         self.gate_model = gate_model
 
     def refine_and_gate(

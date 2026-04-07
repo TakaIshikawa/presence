@@ -34,7 +34,7 @@ class TestReplyDrafterInit:
     def test_creates_anthropic_client(self):
         with patch("engagement.reply_drafter.anthropic.Anthropic") as mock_cls:
             drafter = ReplyDrafter(api_key="sk-test", model="claude-sonnet-4-5-20250929")
-            mock_cls.assert_called_once_with(api_key="sk-test")
+            mock_cls.assert_called_once_with(api_key="sk-test", timeout=300.0)
 
     def test_stores_model(self):
         with patch("engagement.reply_drafter.anthropic.Anthropic"):

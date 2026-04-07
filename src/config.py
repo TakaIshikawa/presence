@@ -106,6 +106,13 @@ class CultivateIntegrationConfig:
 
 
 @dataclass
+class TimeoutsConfig:
+    anthropic_seconds: int = 300
+    github_seconds: int = 30
+    http_seconds: int = 30
+
+
+@dataclass
 class Config:
     github: GitHubConfig
     x: XConfig
@@ -119,6 +126,7 @@ class Config:
     newsletter: Optional[NewsletterConfig]
     historical: Optional[HistoricalConfig]
     cultivate: Optional[CultivateIntegrationConfig]
+    timeouts: TimeoutsConfig
 
 
 def _resolve_env_var(value: str) -> str:
@@ -259,6 +267,15 @@ def load_config(config_path: Optional[str] = None) -> Config:
     _require(data, "synthesis", section="synthesis")
     _require(data, "polling", section="polling")
 
+    # Parse timeouts config if present
+    timeouts_config = TimeoutsConfig()
+    if "timeouts" in data:
+        timeouts_config = TimeoutsConfig(
+            anthropic_seconds=data["timeouts"].get("anthropic_seconds", 300),
+            github_seconds=data["timeouts"].get("github_seconds", 30),
+            http_seconds=data["timeouts"].get("http_seconds", 30),
+        )
+
     return Config(
         github=GitHubConfig(
             username=_require(data, "github", "username", section="github"),
@@ -298,4 +315,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         newsletter=newsletter_config,
         historical=historical_config,
         cultivate=cultivate_config,
+        timeouts=timeouts_config,
     )

@@ -31,8 +31,8 @@ class CrossModelEvaluator:
     PROMPTS_DIR = Path(__file__).parent / "prompts"
     CANDIDATE_LABELS = "ABCDEFGHIJ"
 
-    def __init__(self, api_key: str, model: str = "claude-opus-4-20250514"):
-        self.client = anthropic.Anthropic(api_key=api_key, timeout=300.0)
+    def __init__(self, api_key: str, model: str = "claude-opus-4-20250514", timeout: float = 300.0):
+        self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
 
     def _load_prompt(self) -> str:

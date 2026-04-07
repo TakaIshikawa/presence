@@ -68,13 +68,14 @@ def main():
     db.connect()
     db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
 
-    github = GitHubClient(config.github.token, config.github.username)
+    github = GitHubClient(config.github.token, config.github.username, timeout=config.timeouts.github_seconds)
     pipeline = SynthesisPipeline(
         api_key=config.anthropic.api_key,
         generator_model=config.synthesis.model,
         evaluator_model=config.synthesis.eval_model,
         db=db,
         num_candidates=config.synthesis.num_candidates,
+        anthropic_timeout=config.timeouts.anthropic_seconds,
     )
     x_client = XClient(
         config.x.api_key,
