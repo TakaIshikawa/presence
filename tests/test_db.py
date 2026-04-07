@@ -60,6 +60,227 @@ class TestSchemaInit:
         db.init_schema(schema_path)
 
 
+# --- Schema migration logic ---
+
+
+class TestInitSchemaMigrations:
+    """Tests for init_schema() migration logic (lines 33-67 in db.py)."""
+
+    def test_init_schema_twice_is_idempotent(self, schema_path):
+        """Calling init_schema() twice should not error."""
+        with Database(":memory:") as db:
+            db.init_schema(schema_path)
+            db.init_schema(schema_path)  # Second call should succeed
+            # Verify tables still exist
+            tables = {
+                row[0]
+                for row in db.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "generated_content" in tables
+
+    def test_migration_adds_retry_count_if_missing(self, schema_path):
+        """Test that retry_count column is added when missing."""
+        with Database(":memory:") as db:
+            # Create table without retry_count
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            # Run init_schema to trigger migration
+            db.init_schema(schema_path)
+
+            # Verify retry_count was added
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+            assert "retry_count" in cols
+
+    def test_migration_adds_last_retry_at_if_missing(self, schema_path):
+        """Test that last_retry_at column is added when missing."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+            assert "last_retry_at" in cols
+
+    def test_migration_adds_tweet_id_if_missing(self, schema_path):
+        """Test that tweet_id column is added when missing."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+            assert "tweet_id" in cols
+
+    def test_migration_adds_published_at_if_missing(self, schema_path):
+        """Test that published_at column is added when missing."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+            assert "published_at" in cols
+
+    def test_migration_adds_curation_quality_and_index_if_missing(self, schema_path):
+        """Test that curation_quality column and index are added when missing."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+            assert "curation_quality" in cols
+
+            # Check index was created
+            indexes = {
+                row[1]
+                for row in db.conn.execute(
+                    "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='generated_content'"
+                ).fetchall()
+            }
+            assert "idx_generated_content_curation" in indexes
+
+    def test_migration_adds_auto_quality_and_index_if_missing(self, schema_path):
+        """Test that auto_quality column and index are added when missing."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+            assert "auto_quality" in cols
+
+            # Check index was created
+            indexes = {
+                row[1]
+                for row in db.conn.execute(
+                    "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='generated_content'"
+                ).fetchall()
+            }
+            assert "idx_generated_content_auto_quality" in indexes
+
+    def test_migration_adds_reply_queue_columns_if_missing(self, schema_path):
+        """Test that reply_queue columns (relationship_context, quality_score, quality_flags) are added when missing."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE reply_queue (
+                    id INTEGER PRIMARY KEY,
+                    inbound_tweet_id TEXT UNIQUE NOT NULL,
+                    inbound_text TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending'
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(reply_queue)")}
+            assert "relationship_context" in cols
+            assert "quality_score" in cols
+            assert "quality_flags" in cols
+
+    def test_migration_adds_pipeline_runs_columns_if_missing(self, schema_path):
+        """Test that pipeline_runs columns (outcome, rejection_reason) are added when missing."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE pipeline_runs (
+                    id INTEGER PRIMARY KEY,
+                    batch_id TEXT UNIQUE NOT NULL,
+                    content_type TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")}
+            assert "outcome" in cols
+            assert "rejection_reason" in cols
+
+    def test_migration_does_not_re_add_existing_columns(self, schema_path):
+        """Test that migration does not attempt to re-add columns that are already present."""
+        with Database(":memory:") as db:
+            # Create table with all migration columns already present
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0,
+                    retry_count INTEGER DEFAULT 0,
+                    last_retry_at TEXT,
+                    tweet_id TEXT,
+                    published_at TEXT,
+                    curation_quality TEXT,
+                    auto_quality TEXT
+                )
+            """)
+            db.conn.commit()
+
+            # Count columns before migration
+            cols_before = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+
+            # Run init_schema (should not error)
+            db.init_schema(schema_path)
+
+            # Count columns after migration
+            cols_after = {row[1] for row in db.conn.execute("PRAGMA table_info(generated_content)")}
+
+            # All original columns should still be present
+            assert cols_before.issubset(cols_after)
+
+
 # --- Context manager ---
 
 
@@ -686,6 +907,224 @@ class TestAutoClassification:
 
         results = db.get_auto_classified_posts("low_resonance")
         assert len(results) == 0
+
+
+class TestAutoClassifyPosts:
+    """Tests for auto_classify_posts() method (lines 433-479 in db.py)."""
+
+    def test_classifies_old_post_with_high_engagement_as_resonated(self, db):
+        """Posts >= 48 hours old with engagement_score >= 5.0 should be classified as 'resonated'."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "high engagement post", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-high', published_at = ? WHERE id = ?",
+            (old_ts, cid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid, "tw-high", 50, 10, 5, 3, 20.0)
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["resonated"] == 1
+        assert results["low_resonance"] == 0
+        assert results["ambiguous"] == 0
+
+        # Verify database was updated
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] == "resonated"
+
+    def test_classifies_old_post_with_zero_engagement_as_low_resonance(self, db):
+        """Posts >= 48 hours old with engagement_score == 0 should be classified as 'low_resonance'."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "zero engagement post", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-zero', published_at = ? WHERE id = ?",
+            (old_ts, cid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid, "tw-zero", 0, 0, 0, 0, 0.0)
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["resonated"] == 0
+        assert results["low_resonance"] == 1
+        assert results["ambiguous"] == 0
+
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] == "low_resonance"
+
+    def test_does_not_classify_young_posts(self, db):
+        """Posts younger than min_age_hours should NOT be classified."""
+        now = datetime.now(timezone.utc)
+        recent_ts = (now - timedelta(hours=24)).isoformat()  # Only 24 hours old
+
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "recent post", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-recent', published_at = ? WHERE id = ?",
+            (recent_ts, cid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid, "tw-recent", 50, 10, 5, 3, 20.0)
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["resonated"] == 0
+        assert results["low_resonance"] == 0
+        assert results["ambiguous"] == 0
+
+        # Verify auto_quality remains NULL
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] is None
+
+    def test_skips_already_classified_posts(self, db):
+        """Posts with auto_quality IS NOT NULL should be skipped."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "already classified", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-already', published_at = ?, auto_quality = 'resonated' WHERE id = ?",
+            (old_ts, cid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid, "tw-already", 0, 0, 0, 0, 0.0)  # Zero engagement, but already classified
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        # Should not be reclassified
+        assert results["resonated"] == 0
+        assert results["low_resonance"] == 0
+        assert results["ambiguous"] == 0
+
+        # Verify auto_quality unchanged
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] == "resonated"
+
+    def test_boundary_post_exactly_at_48_hours(self, db):
+        """Post at exactly the 48 hour boundary should be classified."""
+        # Use SQLite's datetime directly to avoid Python/SQLite timezone/format discrepancies
+        db.conn.execute("""
+            INSERT INTO generated_content
+            (content_type, source_commits, source_messages, content, eval_score, eval_feedback,
+             published, tweet_id, published_at)
+            VALUES ('x_post', '["sha"]', '["uuid"]', 'exactly 48h old', 8.0, 'ok',
+                    1, 'tw-48h', datetime('now', '-48 hours'))
+        """)
+        db.conn.commit()
+
+        cid = db.conn.execute("SELECT id FROM generated_content WHERE tweet_id = 'tw-48h'").fetchone()[0]
+        db.insert_engagement(cid, "tw-48h", 20, 5, 3, 2, 10.0)
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["resonated"] == 1
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] == "resonated"
+
+    def test_boundary_engagement_exactly_at_threshold(self, db):
+        """Post with engagement_score exactly at min_engagement should be classified as 'resonated'."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "threshold engagement", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-threshold', published_at = ? WHERE id = ?",
+            (old_ts, cid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid, "tw-threshold", 10, 2, 1, 0, 5.0)  # Exactly 5.0
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["resonated"] == 1
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] == "resonated"
+
+    def test_ambiguous_engagement_between_zero_and_threshold(self, db):
+        """Posts with 0 < engagement < threshold should be left as ambiguous (NULL)."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "mid engagement", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-mid', published_at = ? WHERE id = ?",
+            (old_ts, cid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid, "tw-mid", 2, 0, 0, 0, 2.0)  # Between 0 and 5.0
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["resonated"] == 0
+        assert results["low_resonance"] == 0
+        assert results["ambiguous"] == 1
+
+        # Verify auto_quality remains NULL
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] is None
+
+    def test_returns_correct_count_of_classified_posts(self, db):
+        """Test that the method returns correct counts for all categories."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        # Create 2 resonated posts
+        for i in range(2):
+            cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], f"resonated {i}", 8.0, "ok")
+            db.conn.execute(
+                "UPDATE generated_content SET published = 1, tweet_id = ?, published_at = ? WHERE id = ?",
+                (f"tw-res-{i}", old_ts, cid),
+            )
+            db.conn.commit()
+            db.insert_engagement(cid, f"tw-res-{i}", 50, 10, 5, 3, 20.0)
+
+        # Create 3 low_resonance posts
+        for i in range(3):
+            cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], f"low {i}", 8.0, "ok")
+            db.conn.execute(
+                "UPDATE generated_content SET published = 1, tweet_id = ?, published_at = ? WHERE id = ?",
+                (f"tw-low-{i}", old_ts, cid),
+            )
+            db.conn.commit()
+            db.insert_engagement(cid, f"tw-low-{i}", 0, 0, 0, 0, 0.0)
+
+        # Create 1 ambiguous post
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "ambiguous", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-amb', published_at = ? WHERE id = ?",
+            (old_ts, cid),
+        )
+        db.conn.commit()
+        db.insert_engagement(cid, "tw-amb", 2, 0, 0, 0, 2.5)
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["resonated"] == 2
+        assert results["low_resonance"] == 3
+        assert results["ambiguous"] == 1
+
+    def test_no_engagement_data_defaults_to_zero(self, db):
+        """Posts with no engagement records should be treated as having 0 engagement."""
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=72)).isoformat()
+
+        cid = db.insert_generated_content("x_post", ["sha"], ["uuid"], "no engagement data", 8.0, "ok")
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, tweet_id = 'tw-none', published_at = ? WHERE id = ?",
+            (old_ts, cid),
+        )
+        db.conn.commit()
+        # Do not insert any engagement record
+
+        results = db.auto_classify_posts(min_age_hours=48, min_engagement=5.0)
+
+        assert results["low_resonance"] == 1
+        row = db.conn.execute("SELECT auto_quality FROM generated_content WHERE id = ?", (cid,)).fetchone()
+        assert row[0] == "low_resonance"
 
 
 # --- Recent published content ---
