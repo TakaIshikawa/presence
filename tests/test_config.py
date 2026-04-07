@@ -16,6 +16,7 @@ from config import (
     EmbeddingsConfig,
     CuratedSource,
     CuratedSourcesConfig,
+    TimeoutsConfig,
     _resolve_env_var,
     load_config,
 )
@@ -459,3 +460,57 @@ class TestEdgeCases:
         data["paths"] = ["not", "a", "dict"]
         with pytest.raises(ValueError, match="Invalid config section: 'paths' must be a dictionary"):
             load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+
+# ---------------------------------------------------------------------------
+# TimeoutsConfig
+# ---------------------------------------------------------------------------
+
+class TestTimeoutsConfig:
+    """Test timeout configuration parsing and defaults."""
+
+    def test_timeouts_defaults_when_section_missing(self, tmp_path):
+        """When timeouts section is omitted, defaults should be applied."""
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert isinstance(cfg.timeouts, TimeoutsConfig)
+        assert cfg.timeouts.anthropic_seconds == 300
+        assert cfg.timeouts.github_seconds == 30
+        assert cfg.timeouts.http_seconds == 30
+
+    def test_timeouts_override(self, tmp_path):
+        """When timeouts section is provided, values should override defaults."""
+        data = _minimal_config_dict(
+            timeouts={
+                "anthropic_seconds": 600,
+                "github_seconds": 60,
+                "http_seconds": 45,
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.timeouts.anthropic_seconds == 600
+        assert cfg.timeouts.github_seconds == 60
+        assert cfg.timeouts.http_seconds == 45
+
+    def test_timeouts_partial_override(self, tmp_path):
+        """When only some timeout values are provided, others should use defaults."""
+        data = _minimal_config_dict(
+            timeouts={"anthropic_seconds": 500}
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.timeouts.anthropic_seconds == 500
+        assert cfg.timeouts.github_seconds == 30  # default
+        assert cfg.timeouts.http_seconds == 30  # default
+
+    def test_timeouts_types_are_int(self, tmp_path):
+        """Timeout values should be integers."""
+        data = _minimal_config_dict(
+            timeouts={
+                "anthropic_seconds": 300,
+                "github_seconds": 30,
+                "http_seconds": 30,
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert isinstance(cfg.timeouts.anthropic_seconds, int)
+        assert isinstance(cfg.timeouts.github_seconds, int)
+        assert isinstance(cfg.timeouts.http_seconds, int)

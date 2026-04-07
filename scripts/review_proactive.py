@@ -48,6 +48,7 @@ def main():
     drafter = ReplyDrafter(
         api_key=config.anthropic.api_key,
         model=config.synthesis.model,
+        timeout=config.timeouts.anthropic_seconds,
     )
 
     me = x_client.client.get_me()

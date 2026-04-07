@@ -64,7 +64,7 @@ def main():
         return
 
     # Send via Buttondown
-    client = ButtondownClient(config.newsletter.api_key)
+    client = ButtondownClient(config.newsletter.api_key, timeout=config.timeouts.http_seconds)
     subscriber_count = client.get_subscriber_count()
     print(f"Subscribers: {subscriber_count}")
 

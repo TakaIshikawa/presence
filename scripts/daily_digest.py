@@ -34,6 +34,7 @@ def main():
         evaluator_model=config.synthesis.eval_model,
         db=db,
         num_candidates=config.synthesis.num_candidates,
+        anthropic_timeout=config.timeouts.anthropic_seconds,
     )
     x_client = XClient(
         config.x.api_key,

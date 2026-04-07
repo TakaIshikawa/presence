@@ -50,6 +50,12 @@ def _make_config(
             reply_quality_threshold=reply_quality_threshold,
         )
 
+    timeouts = SimpleNamespace(
+        anthropic_seconds=300,
+        github_seconds=30,
+        http_seconds=30,
+    )
+
     return SimpleNamespace(
         x=x,
         anthropic=anthropic,
@@ -57,6 +63,7 @@ def _make_config(
         paths=paths,
         replies=replies,
         cultivate=cultivate,
+        timeouts=timeouts,
     )
 
 
