@@ -1,5 +1,6 @@
 """Tests for curate.py CLI command functions."""
 
+import logging
 import sys
 from pathlib import Path
 
@@ -10,6 +11,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from curate import VALID_FLAGS, cmd_clear, cmd_flag, cmd_list, cmd_stats
+
+
+@pytest.fixture(autouse=True)
+def setup_logging(caplog):
+    """Configure logging for tests."""
+    caplog.set_level(logging.INFO)
 
 
 def _seed_published_posts(db, count=3):
@@ -33,20 +40,20 @@ def _seed_published_posts(db, count=3):
 
 
 class TestCmdList:
-    def test_populated_db(self, db, capsys):
+    def test_populated_db(self, db, caplog):
         ids = _seed_published_posts(db, count=2)
         cmd_list(db)
-        output = capsys.readouterr().out
+        output = caplog.text
         # Should show both posts with IDs
         assert f"[{ids[0]:>3}]" in output
         assert f"[{ids[1]:>3}]" in output
 
-    def test_empty_db(self, db, capsys):
+    def test_empty_db(self, db, caplog):
         cmd_list(db)
-        output = capsys.readouterr().out
-        assert "No published posts found." in output
+        output = caplog.text
+        assert "No published posts found" in output
 
-    def test_content_truncated(self, db, capsys):
+    def test_content_truncated(self, db, caplog):
         content_id = db.insert_generated_content(
             content_type="x_post",
             source_commits=["sha1"],
@@ -57,7 +64,7 @@ class TestCmdList:
         )
         db.mark_published(content_id, "https://x.com/user/status/999")
         cmd_list(db)
-        output = capsys.readouterr().out
+        output = caplog.text
         # 70-char truncation + "..."
         assert "A" * 70 in output
         assert "A" * 71 not in output
@@ -67,10 +74,10 @@ class TestCmdList:
 
 
 class TestCmdFlag:
-    def test_valid_flag(self, db, capsys):
+    def test_valid_flag(self, db, caplog):
         ids = _seed_published_posts(db, count=1)
         cmd_flag(db, ids[0], "good")
-        output = capsys.readouterr().out
+        output = caplog.text
         assert "Flagged" in output
         assert "'good'" in output
         # Verify in DB
@@ -80,25 +87,27 @@ class TestCmdFlag:
         ).fetchone()
         assert row["curation_quality"] == "good"
 
-    def test_invalid_flag(self, db):
+    def test_invalid_flag(self, db, caplog):
         ids = _seed_published_posts(db, count=1)
         with pytest.raises(SystemExit):
             cmd_flag(db, ids[0], "invalid_flag")
+        assert "Invalid flag" in caplog.text
 
-    def test_nonexistent_content_id(self, db):
+    def test_nonexistent_content_id(self, db, caplog):
         with pytest.raises(SystemExit):
             cmd_flag(db, 9999, "good")
+        assert "No content found" in caplog.text
 
 
 # --- cmd_clear ---
 
 
 class TestCmdClear:
-    def test_clears_flag(self, db, capsys):
+    def test_clears_flag(self, db, caplog):
         ids = _seed_published_posts(db, count=1)
         db.set_curation_quality(ids[0], "good")
         cmd_clear(db, ids[0])
-        output = capsys.readouterr().out
+        output = caplog.text
         assert "Cleared" in output
         # Verify in DB
         row = db.conn.execute(
@@ -107,7 +116,7 @@ class TestCmdClear:
         ).fetchone()
         assert row["curation_quality"] is None
 
-    def test_clear_roundtrip(self, db):
+    def test_clear_roundtrip(self, db, caplog):
         ids = _seed_published_posts(db, count=1)
         db.set_curation_quality(ids[0], "too_specific")
         row = db.conn.execute(
@@ -127,19 +136,19 @@ class TestCmdClear:
 
 
 class TestCmdStats:
-    def test_mixed_data(self, db, capsys):
+    def test_mixed_data(self, db, caplog):
         ids = _seed_published_posts(db, count=3)
         db.set_curation_quality(ids[0], "good")
         db.set_curation_quality(ids[1], "too_specific")
         # ids[2] left unreviewed
         cmd_stats(db)
-        output = capsys.readouterr().out
+        output = caplog.text
         assert "good" in output
         assert "too_specific" in output
         assert "unreviewed" in output
 
-    def test_empty_db(self, db, capsys):
+    def test_empty_db(self, db, caplog):
         cmd_stats(db)
-        output = capsys.readouterr().out
+        output = caplog.text
         assert "Manual curation" in output
         assert "Auto-classification" in output
