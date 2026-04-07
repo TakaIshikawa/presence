@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fetch content from curated external sources."""
 
+import logging
 import sys
 import time
 from pathlib import Path
@@ -18,11 +19,12 @@ from output.x_client import XClient
 
 def fetch_user_tweets(x_client, username: str, limit: int = 10) -> list[dict]:
     """Fetch recent tweets from a user."""
+    logger = logging.getLogger(__name__)
     try:
         # Get user ID first
         user = x_client.client.get_user(username=username)
         if not user.data:
-            print(f"  User @{username} not found")
+            logger.error(f"User @{username} not found")
             return []
 
         user_id = user.data.id
@@ -46,19 +48,26 @@ def fetch_user_tweets(x_client, username: str, limit: int = 10) -> list[dict]:
             for tweet in tweets.data
         ]
     except Exception as e:
-        print(f"  Error fetching @{username}: {e}")
+        logger.error(f"Error fetching @{username}: {e}")
         return []
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    logger = logging.getLogger(__name__)
+
     config = load_config()
 
     if not config.embeddings:
-        print("Error: embeddings not configured")
+        logger.error("embeddings not configured")
         sys.exit(1)
 
     if not config.curated_sources:
-        print("No curated sources configured")
+        logger.info("No curated sources configured")
         sys.exit(0)
 
     # Initialize
@@ -83,21 +92,21 @@ def main():
     )
 
     # Fetch from curated X accounts
-    print("=== Fetching from curated X accounts ===")
+    logger.info("=== Fetching from curated X accounts ===")
     for account in config.curated_sources.x_accounts:
-        print(f"\nFetching @{account.identifier}...")
+        logger.info(f"Fetching @{account.identifier}...")
         tweets = fetch_user_tweets(x_client, account.identifier, limit=5)
 
         for tweet in tweets:
             if store.exists("curated_x", tweet["id"]):
-                print(f"  Skipping {tweet['id']} (already exists)")
+                logger.debug(f"Skipping {tweet['id']} (already exists)")
                 continue
 
             # Skip retweets and very short tweets
             if tweet["text"].startswith("RT @") or len(tweet["text"]) < 50:
                 continue
 
-            print(f"  Processing tweet {tweet['id']}...")
+            logger.info(f"Processing tweet {tweet['id']}...")
             try:
                 ingest_curated_post(
                     store=store,
@@ -108,13 +117,13 @@ def main():
                     author=account.identifier,
                     license_type=account.license
                 )
-                print(f"    ✓ Ingested")
+                logger.info(f"Ingested tweet {tweet['id']}")
                 time.sleep(1)  # Rate limiting
             except Exception as e:
-                print(f"    ✗ Error: {e}")
+                logger.error(f"Failed to ingest tweet {tweet['id']}: {e}")
 
     db.close()
-    print("\n=== Done ===")
+    logger.info("=== Done ===")
 
 
 if __name__ == "__main__":
