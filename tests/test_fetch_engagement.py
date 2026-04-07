@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from fetch_engagement import backfill_tweet_ids
+from fetch_engagement import backfill_tweet_ids, get_bearer_token
 
 
 # --- helpers ---
@@ -219,3 +219,198 @@ class TestMain:
         # backfill_tweet_ids is called on the db instance before get_posts_needing_metrics
         # We verify by checking the call order: init_schema before get_posts_needing_metrics
         mock_db.init_schema.assert_called_once()
+
+    @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
+    @patch("fetch_engagement.tweepy.Client")
+    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("fetch_engagement.Database")
+    @patch("fetch_engagement.load_config")
+    def test_batching_with_more_than_batch_size_posts(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
+        """Test that posts > BATCH_SIZE (100) are fetched in multiple batches."""
+        mock_config.return_value = _make_config()
+        mock_db = MockDB.return_value
+
+        # Create 150 posts (should trigger 2 batches: 100 + 50)
+        posts = [{"id": i, "tweet_id": str(1000 + i), "content": f"Post {i}"} for i in range(150)]
+        mock_db.get_posts_needing_metrics.return_value = posts
+
+        mock_client = MockTweepy.return_value
+        # Mock responses for both batches
+        first_batch_tweets = [_make_tweet_data(str(1000 + i)) for i in range(100)]
+        second_batch_tweets = [_make_tweet_data(str(1100 + i)) for i in range(50)]
+        mock_client.get_tweets.side_effect = [
+            MagicMock(data=first_batch_tweets),
+            MagicMock(data=second_batch_tweets),
+        ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+
+        from fetch_engagement import main
+        main()
+
+        # Verify get_tweets was called exactly twice
+        assert mock_client.get_tweets.call_count == 2
+
+        # Verify first call had 100 tweet IDs
+        first_call_ids = mock_client.get_tweets.call_args_list[0][1]["ids"]
+        assert len(first_call_ids) == 100
+
+        # Verify second call had 50 tweet IDs
+        second_call_ids = mock_client.get_tweets.call_args_list[1][1]["ids"]
+        assert len(second_call_ids) == 50
+
+        # Verify all 150 engagements were recorded
+        assert mock_db.insert_engagement.call_count == 150
+
+    @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
+    @patch("fetch_engagement.tweepy.Client")
+    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("fetch_engagement.Database")
+    @patch("fetch_engagement.load_config")
+    def test_partial_batch_failure(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
+        """Test that first batch succeeds but second batch fails — first batch data is still recorded."""
+        mock_config.return_value = _make_config()
+        mock_db = MockDB.return_value
+
+        # Create 150 posts
+        posts = [{"id": i, "tweet_id": str(1000 + i), "content": f"Post {i}"} for i in range(150)]
+        mock_db.get_posts_needing_metrics.return_value = posts
+
+        mock_client = MockTweepy.return_value
+        # First batch succeeds, second batch fails
+        first_batch_tweets = [_make_tweet_data(str(1000 + i)) for i in range(100)]
+        mock_client.get_tweets.side_effect = [
+            MagicMock(data=first_batch_tweets),
+            Exception("API rate limit exceeded"),
+        ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+
+        from fetch_engagement import main
+        main()
+
+        # Verify get_tweets was called twice (second call failed)
+        assert mock_client.get_tweets.call_count == 2
+
+        # Verify only first batch (100 engagements) were recorded
+        assert mock_db.insert_engagement.call_count == 100
+
+    @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
+    @patch("fetch_engagement.tweepy.Client")
+    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("fetch_engagement.Database")
+    @patch("fetch_engagement.load_config")
+    def test_auto_classify_output_formatting(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer, capsys):
+        """Test that auto_classify_posts output is correctly formatted and printed."""
+        mock_config.return_value = _make_config()
+        mock_db = MockDB.return_value
+        mock_db.get_posts_needing_metrics.return_value = [
+            {"id": 1, "tweet_id": "100", "content": "Post A"},
+        ]
+        mock_client = MockTweepy.return_value
+        mock_client.get_tweets.return_value = MagicMock(data=[_make_tweet_data("100")])
+        mock_db.auto_classify_posts.return_value = {"resonated": 2, "low_resonance": 1}
+
+        from fetch_engagement import main
+        main()
+
+        captured = capsys.readouterr()
+        assert "Auto-classified: 2 resonated, 1 low_resonance" in captured.out
+
+    @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
+    @patch("fetch_engagement.tweepy.Client")
+    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("fetch_engagement.Database")
+    @patch("fetch_engagement.load_config")
+    def test_tweet_id_not_in_mapping_skipped(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
+        """Test that response tweets not in tweet_id_to_post mapping are silently skipped."""
+        mock_config.return_value = _make_config()
+        mock_db = MockDB.return_value
+        mock_db.get_posts_needing_metrics.return_value = [
+            {"id": 1, "tweet_id": "100", "content": "Post A"},
+        ]
+        mock_client = MockTweepy.return_value
+        # API returns our tweet plus an extra tweet not in our mapping
+        mock_client.get_tweets.return_value = MagicMock(
+            data=[_make_tweet_data("100"), _make_tweet_data("999")]
+        )
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+
+        from fetch_engagement import main
+        main()
+
+        # Only the tweet in our mapping (100) should be recorded
+        assert mock_db.insert_engagement.call_count == 1
+        call_kwargs = mock_db.insert_engagement.call_args[1]
+        assert call_kwargs["tweet_id"] == "100"
+
+
+# --- TestGetBearerToken ---
+
+
+class TestGetBearerToken:
+    @patch("requests.post")
+    def test_successful_token_exchange(self, mock_post):
+        """Test successful OAuth 2.0 bearer token exchange."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"access_token": "bearer-xyz"}
+        mock_post.return_value = mock_response
+
+        token = get_bearer_token("test_key", "test_secret")
+
+        assert token == "bearer-xyz"
+        mock_post.assert_called_once()
+
+        # Verify the request details
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "https://api.twitter.com/oauth2/token"
+
+        headers = call_args[1]["headers"]
+        assert "Authorization" in headers
+        assert headers["Authorization"].startswith("Basic ")
+        assert headers["Content-Type"] == "application/x-www-form-urlencoded;charset=UTF-8"
+
+        assert call_args[1]["data"] == "grant_type=client_credentials"
+        mock_response.raise_for_status.assert_called_once()
+
+    @patch("requests.post")
+    def test_http_error_propagates(self, mock_post):
+        """Test that HTTP error from raise_for_status() propagates."""
+        import requests
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = requests.HTTPError("401 Unauthorized")
+        mock_post.return_value = mock_response
+
+        with pytest.raises(requests.HTTPError, match="401 Unauthorized"):
+            get_bearer_token("bad_key", "bad_secret")
+
+    @patch("requests.post")
+    def test_network_failure_propagates(self, mock_post):
+        """Test that network connection errors propagate."""
+        import requests
+
+        mock_post.side_effect = requests.ConnectionError("Network unreachable")
+
+        with pytest.raises(requests.ConnectionError, match="Network unreachable"):
+            get_bearer_token("test_key", "test_secret")
+
+    @patch("requests.post")
+    def test_authorization_header_base64_encoding(self, mock_post):
+        """Test that Authorization header contains correctly Base64-encoded credentials."""
+        import base64
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"access_token": "bearer-xyz"}
+        mock_post.return_value = mock_response
+
+        api_key = "my_api_key"
+        api_secret = "my_api_secret"
+        get_bearer_token(api_key, api_secret)
+
+        call_args = mock_post.call_args
+        auth_header = call_args[1]["headers"]["Authorization"]
+
+        # Extract the Base64 part after "Basic "
+        base64_part = auth_header.split("Basic ")[1]
+        decoded = base64.b64decode(base64_part).decode()
+
+        assert decoded == f"{api_key}:{api_secret}"
