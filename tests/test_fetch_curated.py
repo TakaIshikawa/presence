@@ -71,11 +71,10 @@ class TestMainFiltering:
     @patch("fetch_curated.KnowledgeStore")
     @patch("fetch_curated.get_embedding_provider")
     @patch("fetch_curated.XClient")
-    @patch("fetch_curated.Database")
-    @patch("fetch_curated.load_config")
+    @patch("fetch_curated.script_context")
     @patch("fetch_curated.fetch_user_tweets")
     def test_skips_retweets_and_short_content(
-        self, mock_fetch, mock_config, MockDB, MockXClient,
+        self, mock_fetch, mock_script_context, MockXClient,
         mock_embedder, MockStore, MockExtractor, mock_ingest, mock_sleep
     ):
         config = MagicMock()
@@ -92,7 +91,9 @@ class TestMainFiltering:
         config.curated_sources.x_accounts = [
             SimpleNamespace(identifier="testuser", license="attribution_required")
         ]
-        mock_config.return_value = config
+
+        db = MagicMock()
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         mock_fetch.return_value = [
             {"id": "1", "text": "RT @someone: Great post!", "url": "https://x.com/..."},
@@ -114,11 +115,10 @@ class TestMainFiltering:
     @patch("fetch_curated.KnowledgeStore")
     @patch("fetch_curated.get_embedding_provider")
     @patch("fetch_curated.XClient")
-    @patch("fetch_curated.Database")
-    @patch("fetch_curated.load_config")
+    @patch("fetch_curated.script_context")
     @patch("fetch_curated.fetch_user_tweets")
     def test_skips_existing(
-        self, mock_fetch, mock_config, MockDB, MockXClient,
+        self, mock_fetch, mock_script_context, MockXClient,
         mock_embedder, MockStore, MockExtractor, mock_ingest, mock_sleep
     ):
         config = MagicMock()
@@ -135,7 +135,9 @@ class TestMainFiltering:
         config.curated_sources.x_accounts = [
             SimpleNamespace(identifier="testuser", license="open")
         ]
-        mock_config.return_value = config
+
+        db = MagicMock()
+        mock_script_context.return_value.__enter__.return_value = (config, db)
 
         mock_fetch.return_value = [
             {"id": "1", "text": "A long enough tweet about AI that should be ingested normally", "url": "https://x.com/..."},
@@ -148,10 +150,11 @@ class TestMainFiltering:
         mock_ingest.assert_not_called()
 
     def test_no_embeddings_exits(self, caplog):
-        with patch("fetch_curated.load_config") as mock_config:
+        with patch("fetch_curated.script_context") as mock_script_context:
             config = MagicMock()
             config.embeddings = None
-            mock_config.return_value = config
+            db = MagicMock()
+            mock_script_context.return_value.__enter__.return_value = (config, db)
 
             from fetch_curated import main
             with pytest.raises(SystemExit):
