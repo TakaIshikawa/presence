@@ -11,7 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from fetch_engagement import backfill_tweet_ids, get_bearer_token
+from fetch_engagement import backfill_tweet_ids
+from twitter_utils import get_bearer_token
 
 
 # --- helpers ---
@@ -97,7 +98,7 @@ def _make_tweet_data(tweet_id, likes=5, rts=2, replies=1, quotes=0):
 class TestMain:
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_happy_path(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -121,7 +122,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score")
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_no_posts_need_metrics(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -139,7 +140,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score")
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_api_error_skips_batch(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -159,7 +160,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score")
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_no_data_in_response(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -179,7 +180,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score", return_value=0.0)
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_missing_public_metrics(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -205,7 +206,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score", return_value=5.0)
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_backfill_runs_before_fetch(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -222,7 +223,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_batching_with_more_than_batch_size_posts(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -263,7 +264,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_partial_batch_failure(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
@@ -295,7 +296,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_auto_classify_output_formatting(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer, capsys):
@@ -317,7 +318,7 @@ class TestMain:
 
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
-    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("twitter_utils.get_bearer_token", return_value="bearer-token")
     @patch("fetch_engagement.Database")
     @patch("fetch_engagement.load_config")
     def test_tweet_id_not_in_mapping_skipped(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):

@@ -9,32 +9,17 @@ import tweepy
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Add scripts to path for shared utilities
+sys.path.insert(0, str(Path(__file__).parent))
 
 from runner import script_context
 from evaluation.validation_db import ValidationDatabase
 from evaluation.engagement_scorer import compute_engagement_score
+from twitter_utils import get_bearer_token
 
 RATE_LIMIT_SLEEP = 60
 
 logger = logging.getLogger(__name__)
-
-
-def get_bearer_token(api_key: str, api_secret: str) -> str:
-    """Get OAuth 2.0 bearer token from consumer credentials."""
-    import base64
-    import requests
-
-    credentials = base64.b64encode(f"{api_key}:{api_secret}".encode()).decode()
-    resp = requests.post(
-        "https://api.twitter.com/oauth2/token",
-        headers={
-            "Authorization": f"Basic {credentials}",
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        },
-        data="grant_type=client_credentials",
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
 
 
 def fetch_following(client: tweepy.Client, user_id: str) -> list[dict]:
