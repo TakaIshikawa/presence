@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from config import load_config
+from runner import script_context
 from evaluation.validation_db import ValidationDatabase
 from evaluation.engagement_scorer import compute_engagement_score
 
@@ -162,72 +162,73 @@ def main():
     )
     args = parser.parse_args()
 
-    config = load_config()
-
-    # User-auth client for get_me() and get_users_following()
-    client = tweepy.Client(
-        consumer_key=config.x.api_key,
-        consumer_secret=config.x.api_secret,
-        access_token=config.x.access_token,
-        access_token_secret=config.x.access_token_secret,
-    )
-
-    # Bearer-token client for reading other users' tweets
-    bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
-    read_client = tweepy.Client(bearer_token=bearer_token)
-
-    db = ValidationDatabase(args.db_path)
-    db.connect()
-    db.init_schema()
-
-    # Get authenticated user's ID
-    me = client.get_me()
-    my_id = str(me.data.id)
-    logger.info("Authenticated as @%s (id=%s)", me.data.username, my_id)
-
-    # Fetch following list
-    logger.info("Fetching following list...")
-    following = fetch_following(client, my_id)
-    logger.info("Found %d accounts", len(following))
-
-    # Filter by follower count and take top N
-    following = [a for a in following if a["follower_count"] >= args.min_followers]
-    following.sort(key=lambda a: a["follower_count"], reverse=True)
-    following = following[: args.max_accounts]
-    logger.info(
-        "Selected %d accounts (min %d followers)",
-        len(following), args.min_followers
-    )
-
-    total_tweets = 0
-    for i, account in enumerate(following):
-        logger.info(
-            "[%d/%d] @%s (%d followers)",
-            i + 1, len(following), account['username'], account['follower_count']
+    with script_context() as (config, _):
+        # User-auth client for get_me() and get_users_following()
+        client = tweepy.Client(
+            consumer_key=config.x.api_key,
+            consumer_secret=config.x.api_secret,
+            access_token=config.x.access_token,
+            access_token_secret=config.x.access_token_secret,
         )
 
-        # Upsert account
-        db.upsert_account(**account)
-        acct_row = db.get_account_by_user_id(account["user_id"])
-        account_id = acct_row["id"]
+        # Bearer-token client for reading other users' tweets
+        bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
+        read_client = tweepy.Client(bearer_token=bearer_token)
 
-        # Fetch tweets (bearer token for reading other users' timelines)
-        tweets = fetch_account_tweets(
-            read_client, account["user_id"], args.tweets_per_account
-        )
+        db = ValidationDatabase(args.db_path)
+        db.connect()
+        db.init_schema()
 
-        inserted = 0
-        for tweet in tweets:
-            result = db.insert_tweet(account_id=account_id, **tweet)
-            if result is not None:
-                inserted += 1
+        try:
+            # Get authenticated user's ID
+            me = client.get_me()
+            my_id = str(me.data.id)
+            logger.info("Authenticated as @%s (id=%s)", me.data.username, my_id)
 
-        total_tweets += inserted
-        logger.info("Collected %d new tweets (of %d fetched)", inserted, len(tweets))
-        time.sleep(1)
+            # Fetch following list
+            logger.info("Fetching following list...")
+            following = fetch_following(client, my_id)
+            logger.info("Found %d accounts", len(following))
 
-    db.close()
-    logger.info("Done. Total new tweets: %d", total_tweets)
+            # Filter by follower count and take top N
+            following = [a for a in following if a["follower_count"] >= args.min_followers]
+            following.sort(key=lambda a: a["follower_count"], reverse=True)
+            following = following[: args.max_accounts]
+            logger.info(
+                "Selected %d accounts (min %d followers)",
+                len(following), args.min_followers
+            )
+
+            total_tweets = 0
+            for i, account in enumerate(following):
+                logger.info(
+                    "[%d/%d] @%s (%d followers)",
+                    i + 1, len(following), account['username'], account['follower_count']
+                )
+
+                # Upsert account
+                db.upsert_account(**account)
+                acct_row = db.get_account_by_user_id(account["user_id"])
+                account_id = acct_row["id"]
+
+                # Fetch tweets (bearer token for reading other users' timelines)
+                tweets = fetch_account_tweets(
+                    read_client, account["user_id"], args.tweets_per_account
+                )
+
+                inserted = 0
+                for tweet in tweets:
+                    result = db.insert_tweet(account_id=account_id, **tweet)
+                    if result is not None:
+                        inserted += 1
+
+                total_tweets += inserted
+                logger.info("Collected %d new tweets (of %d fetched)", inserted, len(tweets))
+                time.sleep(1)
+
+            logger.info("Done. Total new tweets: %d", total_tweets)
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":
