@@ -2,8 +2,11 @@
 """Interactive review of pending reply drafts."""
 
 import json
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -15,6 +18,12 @@ from review_helpers import truncate, read_char, format_relationship_context
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
     config = load_config()
 
     db = Database(config.paths.database)
@@ -23,11 +32,11 @@ def main():
 
     pending = db.get_pending_replies()
     if not pending:
-        print("No pending reply drafts.")
+        logger.info("No pending reply drafts.")
         db.close()
         return
 
-    print(f"\n{len(pending)} pending reply draft{'s' if len(pending) != 1 else ''}\n")
+    logger.info(f"\n{len(pending)} pending reply draft{'s' if len(pending) != 1 else ''}\n")
 
     x_client = XClient(
         config.x.api_key,
@@ -43,7 +52,7 @@ def main():
         if quit_requested:
             break
 
-        print(f"{'─' * 60}")
+        logger.info(f"{'─' * 60}")
         header = f"{i + 1}/{len(pending)}  @{reply['inbound_author_handle']} replied to your post"
 
         # Relationship context (from cultivate enrichment stored at poll time)
@@ -56,19 +65,19 @@ def main():
         if quality_line:
             header += f"\n     [{quality_line}]"
 
-        print(header)
-        print()
-        print(f"  Your post:   \"{truncate(reply['our_post_text'], 120)}\"")
-        print(f"  Their reply: \"{truncate(reply['inbound_text'], 120)}\"")
-        print(f"  Draft:       \"{truncate(reply['draft_text'], 120)}\"")
-        print()
+        logger.info(header)
+        logger.info("")
+        logger.info(f"  Your post:   \"{truncate(reply['our_post_text'], 120)}\"")
+        logger.info(f"  Their reply: \"{truncate(reply['inbound_text'], 120)}\"")
+        logger.info(f"  Draft:       \"{truncate(reply['draft_text'], 120)}\"")
+        logger.info("")
 
         while True:
             sys.stdout.write("  [a]pprove  [e]dit  [d]ismiss  [s]kip  [q]uit > ")
             sys.stdout.flush()
 
             choice = read_char().lower()
-            print(choice)
+            logger.info(choice)
 
             if choice == "q":
                 quit_requested = True
@@ -84,19 +93,19 @@ def main():
                         reply["id"], "posted",
                         posted_tweet_id=result.tweet_id
                     )
-                    print(f"  Posted: {result.url}")
+                    logger.info(f"  Posted: {result.url}")
                     posted += 1
                 else:
-                    print(f"  Error: {result.error}")
+                    logger.error(f"  Error: {result.error}")
                 break
 
             elif choice == "e":
                 edited = input("  Your reply: ").strip()
                 if not edited:
-                    print("  Empty, cancelled.")
+                    logger.info("  Empty, cancelled.")
                     continue
                 if len(edited) > 280:
-                    print(f"  Too long ({len(edited)} chars, max 280). Try again.")
+                    logger.info(f"  Too long ({len(edited)} chars, max 280). Try again.")
                     continue
                 result = x_client.reply(edited, reply["inbound_tweet_id"])
                 if result.success:
@@ -104,22 +113,22 @@ def main():
                         reply["id"], "posted",
                         posted_tweet_id=result.tweet_id
                     )
-                    print(f"  Posted: {result.url}")
+                    logger.info(f"  Posted: {result.url}")
                     posted += 1
                 else:
-                    print(f"  Error: {result.error}")
+                    logger.error(f"  Error: {result.error}")
                 break
 
             elif choice == "d":
                 db.update_reply_status(reply["id"], "dismissed")
-                print("  Dismissed.")
+                logger.info("  Dismissed.")
                 break
 
             else:  # skip or any other key
-                print("  Skipped.")
+                logger.info("  Skipped.")
                 break
 
-    print(f"\nDone. {posted} replies posted.")
+    logger.info(f"\nDone. {posted} replies posted.")
     db.close()
 
 

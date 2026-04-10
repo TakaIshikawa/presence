@@ -7,7 +7,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from storage.db import Database
 from runner import script_context
 
 VALID_FLAGS = ("good", "too_specific")
@@ -15,7 +14,7 @@ VALID_FLAGS = ("good", "too_specific")
 logger = logging.getLogger(__name__)
 
 
-def cmd_list(db: Database, content_type: str = "x_post"):
+def cmd_list(db, content_type: str = "x_post"):
     """Show recent published posts with curation status."""
     cursor = db.conn.execute(
         """SELECT id, content, eval_score, curation_quality, auto_quality, published_at
@@ -39,7 +38,7 @@ def cmd_list(db: Database, content_type: str = "x_post"):
         logger.info(f"  [{row['id']:>3}] m:{manual:<13} a:{auto:<14} {score:.1f}  {date}  {preview}...")
 
 
-def cmd_flag(db: Database, content_id: int, quality: str):
+def cmd_flag(db, content_id: int, quality: str):
     """Flag a post with a curation quality label."""
     if quality not in VALID_FLAGS:
         logger.error(f"Invalid flag '{quality}'. Use: {', '.join(VALID_FLAGS)}")
@@ -58,13 +57,13 @@ def cmd_flag(db: Database, content_id: int, quality: str):
     logger.info(f"Flagged [{content_id}] as '{quality}': {preview}...")
 
 
-def cmd_clear(db: Database, content_id: int):
+def cmd_clear(db, content_id: int):
     """Clear curation flag from a post."""
     db.set_curation_quality(content_id, None)
     logger.info(f"Cleared curation flag for [{content_id}]")
 
 
-def cmd_stats(db: Database):
+def cmd_stats(db):
     """Show curation statistics."""
     # Manual curation
     cursor = db.conn.execute(
