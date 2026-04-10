@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,6 +42,14 @@ def _make_config():
     config.x.access_token_secret = "ats"
     config.synthesis.eval_threshold = 0.7
     return config
+
+
+def _mock_script_context(config, db):
+    """Create a mock context manager that yields (config, db)."""
+    @contextmanager
+    def _ctx():
+        yield (config, db)
+    return _ctx
 
 
 # --- TestBackfillTweetIds ---
@@ -98,20 +107,21 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_happy_path(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+    @patch("fetch_engagement.script_context")
+    def test_happy_path(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = [
             {"id": 1, "tweet_id": "100", "content": "Post A"},
             {"id": 2, "tweet_id": "200", "content": "Post B"},
         ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
         mock_client = MockTweepy.return_value
         mock_client.get_tweets.return_value = MagicMock(
             data=[_make_tweet_data("100"), _make_tweet_data("200")]
         )
-        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
 
         from fetch_engagement import main
         main()
@@ -122,12 +132,12 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score")
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_no_posts_need_metrics(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+    @patch("fetch_engagement.script_context")
+    def test_no_posts_need_metrics(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = []
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
 
         from fetch_engagement import main
         main()
@@ -140,17 +150,18 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score")
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_api_error_skips_batch(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+    @patch("fetch_engagement.script_context")
+    def test_api_error_skips_batch(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = [
             {"id": 1, "tweet_id": "100", "content": "Post A"},
         ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
         mock_client = MockTweepy.return_value
         mock_client.get_tweets.side_effect = Exception("API timeout")
-        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
 
         from fetch_engagement import main
         main()
@@ -160,17 +171,18 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score")
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_no_data_in_response(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+    @patch("fetch_engagement.script_context")
+    def test_no_data_in_response(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = [
             {"id": 1, "tweet_id": "100", "content": "Post A"},
         ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
         mock_client = MockTweepy.return_value
         mock_client.get_tweets.return_value = MagicMock(data=None)
-        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
 
         from fetch_engagement import main
         main()
@@ -180,20 +192,21 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score", return_value=0.0)
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_missing_public_metrics(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+    @patch("fetch_engagement.script_context")
+    def test_missing_public_metrics(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = [
             {"id": 1, "tweet_id": "100", "content": "Post A"},
         ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
         tweet = MagicMock()
         tweet.id = 100
         tweet.public_metrics = None
         mock_client = MockTweepy.return_value
         mock_client.get_tweets.return_value = MagicMock(data=[tweet])
-        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
 
         from fetch_engagement import main
         main()
@@ -206,33 +219,34 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score", return_value=5.0)
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_backfill_runs_before_fetch(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+    @patch("fetch_engagement.script_context")
+    def test_backfill_runs_before_fetch(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = []
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
 
         from fetch_engagement import main
         main()
 
         # backfill_tweet_ids is called on the db instance before get_posts_needing_metrics
-        # We verify by checking the call order: init_schema before get_posts_needing_metrics
-        mock_db.init_schema.assert_called_once()
+        # We verify by checking that get_posts_needing_metrics was called
+        mock_db.get_posts_needing_metrics.assert_called_once()
 
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_batching_with_more_than_batch_size_posts(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
+    @patch("fetch_engagement.script_context")
+    def test_batching_with_more_than_batch_size_posts(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
         """Test that posts > BATCH_SIZE (100) are fetched in multiple batches."""
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+        config = _make_config()
+        mock_db = MagicMock()
 
         # Create 150 posts (should trigger 2 batches: 100 + 50)
         posts = [{"id": i, "tweet_id": str(1000 + i), "content": f"Post {i}"} for i in range(150)]
         mock_db.get_posts_needing_metrics.return_value = posts
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
 
         mock_client = MockTweepy.return_value
         # Mock responses for both batches
@@ -242,7 +256,6 @@ class TestMain:
             MagicMock(data=first_batch_tweets),
             MagicMock(data=second_batch_tweets),
         ]
-        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
 
         from fetch_engagement import main
         main()
@@ -264,16 +277,17 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_partial_batch_failure(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
+    @patch("fetch_engagement.script_context")
+    def test_partial_batch_failure(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
         """Test that first batch succeeds but second batch fails — first batch data is still recorded."""
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+        config = _make_config()
+        mock_db = MagicMock()
 
         # Create 150 posts
         posts = [{"id": i, "tweet_id": str(1000 + i), "content": f"Post {i}"} for i in range(150)]
         mock_db.get_posts_needing_metrics.return_value = posts
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
 
         mock_client = MockTweepy.return_value
         # First batch succeeds, second batch fails
@@ -282,7 +296,6 @@ class TestMain:
             MagicMock(data=first_batch_tweets),
             Exception("API rate limit exceeded"),
         ]
-        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
 
         from fetch_engagement import main
         main()
@@ -296,43 +309,47 @@ class TestMain:
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_auto_classify_output_formatting(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer, capsys):
+    @patch("fetch_engagement.script_context")
+    def test_auto_classify_output_formatting(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer, caplog):
         """Test that auto_classify_posts output is correctly formatted and printed."""
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+        import logging
+        caplog.set_level(logging.INFO)
+
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = [
             {"id": 1, "tweet_id": "100", "content": "Post A"},
         ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 2, "low_resonance": 1}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
         mock_client = MockTweepy.return_value
         mock_client.get_tweets.return_value = MagicMock(data=[_make_tweet_data("100")])
-        mock_db.auto_classify_posts.return_value = {"resonated": 2, "low_resonance": 1}
 
         from fetch_engagement import main
         main()
 
-        captured = capsys.readouterr()
-        assert "Auto-classified: 2 resonated, 1 low_resonance" in captured.out
+        assert "Auto-classified: 2 resonated, 1 low_resonance" in caplog.text
 
     @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
     @patch("fetch_engagement.tweepy.Client")
     @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
-    @patch("fetch_engagement.Database")
-    @patch("fetch_engagement.load_config")
-    def test_tweet_id_not_in_mapping_skipped(self, mock_config, MockDB, mock_bearer, MockTweepy, mock_scorer):
+    @patch("fetch_engagement.script_context")
+    def test_tweet_id_not_in_mapping_skipped(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer):
         """Test that response tweets not in tweet_id_to_post mapping are silently skipped."""
-        mock_config.return_value = _make_config()
-        mock_db = MockDB.return_value
+        config = _make_config()
+        mock_db = MagicMock()
         mock_db.get_posts_needing_metrics.return_value = [
             {"id": 1, "tweet_id": "100", "content": "Post A"},
         ]
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
         mock_client = MockTweepy.return_value
         # API returns our tweet plus an extra tweet not in our mapping
         mock_client.get_tweets.return_value = MagicMock(
             data=[_make_tweet_data("100"), _make_tweet_data("999")]
         )
-        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
 
         from fetch_engagement import main
         main()
