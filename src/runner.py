@@ -4,8 +4,9 @@ import sys
 import subprocess
 from pathlib import Path
 from contextlib import contextmanager
+from collections.abc import Generator
 
-from config import load_config
+from config import load_config, Config
 from storage.db import Database
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -13,7 +14,7 @@ SCHEMA_PATH = str(PROJECT_ROOT / "schema.sql")
 
 
 @contextmanager
-def script_context():
+def script_context() -> Generator[tuple[Config, Database], None, None]:
     """Context manager providing config + connected database."""
     config = load_config()
     db = Database(config.paths.database)
@@ -25,7 +26,7 @@ def script_context():
         db.close()
 
 
-def update_monitoring(operation: str):
+def update_monitoring(operation: str) -> None:
     """Sync run state to operations.yaml for tact monitoring."""
     try:
         sync_script = PROJECT_ROOT / "scripts" / "update_operations_state.py"
