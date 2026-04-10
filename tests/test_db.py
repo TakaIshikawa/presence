@@ -1758,3 +1758,315 @@ class TestTransactionBehaviour:
         cols_after = {row[1] for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")}
         assert "filter_stats" in cols_after
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Content embedding
+# ---------------------------------------------------------------------------
+
+
+class TestSetContentEmbedding:
+    """Tests for set_content_embedding() method (~line 421 in db.py)."""
+
+    def test_set_content_embedding_stores_blob(self, db, sample_content):
+        """Test that embedding blob is stored correctly for a content item."""
+        cid = db.insert_generated_content(**sample_content)
+        embedding_blob = b'\x00\x01\x02\x03\x04\x05'
+
+        db.set_content_embedding(cid, embedding_blob)
+
+        # Verify blob was stored
+        row = db.conn.execute(
+            "SELECT content_embedding FROM generated_content WHERE id = ?",
+            (cid,)
+        ).fetchone()
+        assert row[0] == embedding_blob
+
+    def test_set_content_embedding_updates_existing(self, db, sample_content):
+        """Test that embedding can be updated for existing content."""
+        cid = db.insert_generated_content(**sample_content)
+        embedding_blob_1 = b'\x01\x02\x03'
+        embedding_blob_2 = b'\x04\x05\x06\x07'
+
+        db.set_content_embedding(cid, embedding_blob_1)
+        db.set_content_embedding(cid, embedding_blob_2)
+
+        # Verify second blob overwrote the first
+        row = db.conn.execute(
+            "SELECT content_embedding FROM generated_content WHERE id = ?",
+            (cid,)
+        ).fetchone()
+        assert row[0] == embedding_blob_2
+
+    def test_set_content_embedding_for_nonexistent_id(self, db):
+        """Test that setting embedding for nonexistent ID is a no-op."""
+        embedding_blob = b'\x00\x01\x02'
+        db.set_content_embedding(9999, embedding_blob)
+        # Should not raise, just no-op
+
+
+# ---------------------------------------------------------------------------
+# Content lookup by tweet ID
+# ---------------------------------------------------------------------------
+
+
+class TestGetContentByTweetId:
+    """Tests for get_content_by_tweet_id() method (~line 623 in db.py)."""
+
+    def test_get_content_by_tweet_id_returns_published_content(self, db, sample_content):
+        """Test retrieval of published content by tweet ID."""
+        cid = db.insert_generated_content(**sample_content)
+        db.mark_published(cid, "https://x.com/status/123", tweet_id="tweet-123")
+
+        result = db.get_content_by_tweet_id("tweet-123")
+
+        assert result is not None
+        assert result["id"] == cid
+        assert result["content"] == sample_content["content"]
+        assert result["content_type"] == "x_post"
+
+    def test_get_content_by_tweet_id_returns_none_for_unknown_id(self, db):
+        """Test that unknown tweet ID returns None."""
+        result = db.get_content_by_tweet_id("nonexistent-tweet-id")
+        assert result is None
+
+    def test_get_content_by_tweet_id_returns_none_for_unpublished(self, db, sample_content):
+        """Test that unpublished content without tweet_id is not found."""
+        db.insert_generated_content(**sample_content)
+        result = db.get_content_by_tweet_id("tweet-999")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Published content in date range
+# ---------------------------------------------------------------------------
+
+
+class TestGetPublishedContentInRange:
+    """Tests for get_published_content_in_range() method (~line 665 in db.py)."""
+
+    def test_get_published_content_in_range_filters_by_dates(self, db, sample_content):
+        """Test that content is filtered by date range."""
+        # Insert content at different times
+        cid1 = db.insert_generated_content(**{**sample_content, "content": "post 1"})
+        cid2 = db.insert_generated_content(**{**sample_content, "content": "post 2"})
+        cid3 = db.insert_generated_content(**{**sample_content, "content": "post 3"})
+
+        # Publish at different times
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
+            ("2026-04-01T10:00:00", cid1)
+        )
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
+            ("2026-04-05T10:00:00", cid2)
+        )
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
+            ("2026-04-10T10:00:00", cid3)
+        )
+        db.conn.commit()
+
+        # Query for mid-range
+        start = datetime(2026, 4, 3, 0, 0, 0)
+        end = datetime(2026, 4, 8, 0, 0, 0)
+        results = db.get_published_content_in_range("x_post", start, end)
+
+        assert len(results) == 1
+        assert results[0]["content"] == "post 2"
+
+    def test_get_published_content_in_range_filters_by_content_type(self, db, sample_content):
+        """Test that content_type filter works."""
+        cid1 = db.insert_generated_content(**{**sample_content, "content_type": "x_post"})
+        cid2 = db.insert_generated_content(**{**sample_content, "content_type": "x_thread"})
+
+        ts = "2026-04-05T10:00:00"
+        for cid in [cid1, cid2]:
+            db.conn.execute(
+                "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
+                (ts, cid)
+            )
+        db.conn.commit()
+
+        start = datetime(2026, 4, 1, 0, 0, 0)
+        end = datetime(2026, 4, 10, 0, 0, 0)
+        results = db.get_published_content_in_range("x_post", start, end)
+
+        assert len(results) == 1
+        assert results[0]["content_type"] == "x_post"
+
+    def test_get_published_content_in_range_excludes_unpublished(self, db, sample_content):
+        """Test that unpublished content is not returned."""
+        cid = db.insert_generated_content(**sample_content)
+        # Don't mark as published
+
+        start = datetime(2026, 4, 1, 0, 0, 0)
+        end = datetime(2026, 4, 10, 0, 0, 0)
+        results = db.get_published_content_in_range("x_post", start, end)
+
+        assert len(results) == 0
+
+    def test_get_published_content_in_range_empty_range(self, db, sample_content):
+        """Test that empty date range returns no results."""
+        cid = db.insert_generated_content(**sample_content)
+        db.mark_published(cid, "https://x.com/1", tweet_id="tw-1")
+
+        # Query for a range that doesn't include the published date
+        start = datetime(2026, 1, 1, 0, 0, 0)
+        end = datetime(2026, 1, 2, 0, 0, 0)
+        results = db.get_published_content_in_range("x_post", start, end)
+
+        assert len(results) == 0
+
+
+# ---------------------------------------------------------------------------
+# Commits by repository
+# ---------------------------------------------------------------------------
+
+
+class TestGetCommitsByRepo:
+    """Tests for get_commits_by_repo() method (~line 684 in db.py)."""
+
+    def test_get_commits_by_repo_filters_by_repo_name(self, db):
+        """Test that commits are filtered by repository name."""
+        # Insert commits for different repos at appropriate ages
+        db.conn.execute(
+            """INSERT INTO github_commits (repo_name, commit_sha, commit_message, timestamp, author)
+               VALUES ('repo-a', 'sha-1', 'commit 1', datetime('now', '-60 days'), 'author1')"""
+        )
+        db.conn.execute(
+            """INSERT INTO github_commits (repo_name, commit_sha, commit_message, timestamp, author)
+               VALUES ('repo-b', 'sha-2', 'commit 2', datetime('now', '-60 days'), 'author2')"""
+        )
+        db.conn.execute(
+            """INSERT INTO github_commits (repo_name, commit_sha, commit_message, timestamp, author)
+               VALUES ('repo-a', 'sha-3', 'commit 3', datetime('now', '-90 days'), 'author1')"""
+        )
+        db.conn.commit()
+
+        results = db.get_commits_by_repo("repo-a")
+
+        assert len(results) == 2
+        assert all(row["repo_name"] == "repo-a" for row in results)
+
+    def test_get_commits_by_repo_respects_age_filters(self, db):
+        """Test that min_age_days and max_age_days filter correctly."""
+        # Insert commits at different ages
+        db.conn.execute(
+            """INSERT INTO github_commits (repo_name, commit_sha, commit_message, timestamp, author)
+               VALUES ('repo-a', 'sha-recent', 'recent', datetime('now', '-10 days'), 'author1')"""
+        )
+        db.conn.execute(
+            """INSERT INTO github_commits (repo_name, commit_sha, commit_message, timestamp, author)
+               VALUES ('repo-a', 'sha-mid', 'mid', datetime('now', '-60 days'), 'author1')"""
+        )
+        db.conn.execute(
+            """INSERT INTO github_commits (repo_name, commit_sha, commit_message, timestamp, author)
+               VALUES ('repo-a', 'sha-old', 'old', datetime('now', '-400 days'), 'author1')"""
+        )
+        db.conn.commit()
+
+        # Query for commits between 30 and 365 days old
+        results = db.get_commits_by_repo("repo-a", min_age_days=30, max_age_days=365)
+
+        # Should only return the mid-age commit
+        assert len(results) == 1
+        assert results[0]["commit_sha"] == "sha-mid"
+
+    def test_get_commits_by_repo_respects_limit(self, db):
+        """Test that limit parameter works."""
+        # Insert multiple commits for same repo
+        for i in range(10):
+            db.conn.execute(
+                """INSERT INTO github_commits (repo_name, commit_sha, commit_message, timestamp, author)
+                   VALUES ('repo-a', ?, 'commit', datetime('now', '-60 days'), 'author1')""",
+                (f"sha-{i}",)
+            )
+        db.conn.commit()
+
+        results = db.get_commits_by_repo("repo-a", limit=5)
+
+        assert len(results) == 5
+
+    def test_get_commits_by_repo_empty_for_unknown_repo(self, db):
+        """Test that unknown repo returns empty list."""
+        results = db.get_commits_by_repo("nonexistent-repo")
+        assert len(results) == 0
+
+
+# ---------------------------------------------------------------------------
+# Pipeline run counting
+# ---------------------------------------------------------------------------
+
+
+class TestCountPipelineRuns:
+    """Tests for count_pipeline_runs() method (~line 703 in db.py)."""
+
+    def test_count_pipeline_runs_counts_within_window(self, db):
+        """Test that pipeline runs within the time window are counted."""
+        # Insert recent pipeline runs
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated, best_candidate_index,
+                best_score_before_refine, created_at)
+               VALUES ('batch-1', 'x_post', 3, 0, 7.0, datetime('now', '-10 days'))"""
+        )
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated, best_candidate_index,
+                best_score_before_refine, created_at)
+               VALUES ('batch-2', 'x_post', 3, 1, 8.0, datetime('now', '-20 days'))"""
+        )
+        db.conn.commit()
+
+        count = db.count_pipeline_runs("x_post", since_days=30)
+
+        assert count == 2
+
+    def test_count_pipeline_runs_excludes_old_runs(self, db):
+        """Test that runs outside the time window are excluded."""
+        # Insert old pipeline run
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated, best_candidate_index,
+                best_score_before_refine, created_at)
+               VALUES ('batch-old', 'x_post', 3, 0, 7.0, datetime('now', '-60 days'))"""
+        )
+        # Insert recent pipeline run
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated, best_candidate_index,
+                best_score_before_refine, created_at)
+               VALUES ('batch-recent', 'x_post', 3, 1, 8.0, datetime('now', '-10 days'))"""
+        )
+        db.conn.commit()
+
+        count = db.count_pipeline_runs("x_post", since_days=30)
+
+        assert count == 1
+
+    def test_count_pipeline_runs_filters_by_content_type(self, db):
+        """Test that content_type filter works."""
+        # Insert runs for different content types
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated, best_candidate_index,
+                best_score_before_refine, created_at)
+               VALUES ('batch-1', 'x_post', 3, 0, 7.0, datetime('now', '-10 days'))"""
+        )
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated, best_candidate_index,
+                best_score_before_refine, created_at)
+               VALUES ('batch-2', 'x_thread', 3, 1, 8.0, datetime('now', '-10 days'))"""
+        )
+        db.conn.commit()
+
+        count = db.count_pipeline_runs("x_post", since_days=30)
+
+        assert count == 1
+
+    def test_count_pipeline_runs_returns_zero_for_no_matches(self, db):
+        """Test that count returns 0 when no runs match."""
+        count = db.count_pipeline_runs("x_post", since_days=30)
+        assert count == 0
