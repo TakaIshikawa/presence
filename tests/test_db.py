@@ -2070,3 +2070,184 @@ class TestCountPipelineRuns:
         """Test that count returns 0 when no runs match."""
         count = db.count_pipeline_runs("x_post", since_days=30)
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Reply methods: count_replies_today, get_last_mention_id, set_last_mention_id
+# ---------------------------------------------------------------------------
+
+
+class TestReplyMethods:
+    """Tests for reply-related methods in Database."""
+
+    def test_count_replies_today_returns_zero_when_no_replies(self, db):
+        """count_replies_today should return 0 when no replies exist."""
+        assert db.count_replies_today() == 0
+
+    def test_count_replies_today_counts_posted_replies(self, db):
+        """count_replies_today should count replies with status='posted' from today."""
+        # Insert a posted reply today
+        db.conn.execute(
+            """INSERT INTO reply_queue (
+                inbound_tweet_id, inbound_text, our_tweet_id, draft_text,
+                status, posted_at
+            ) VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+            ("tw-in-1", "Nice post!", "tw-our-1", "Thanks!", "posted")
+        )
+        db.conn.commit()
+
+        assert db.count_replies_today() == 1
+
+    def test_count_replies_today_excludes_pending_replies(self, db):
+        """count_replies_today should not count pending replies."""
+        # Insert a pending reply
+        db.conn.execute(
+            """INSERT INTO reply_queue (
+                inbound_tweet_id, inbound_text, our_tweet_id, draft_text,
+                status
+            ) VALUES (?, ?, ?, ?, ?)""",
+            ("tw-in-2", "Interesting!", "tw-our-2", "Glad you liked it!", "pending")
+        )
+        db.conn.commit()
+
+        assert db.count_replies_today() == 0
+
+    def test_count_replies_today_excludes_old_replies(self, db):
+        """count_replies_today should not count replies posted yesterday."""
+        # Insert a reply posted yesterday
+        db.conn.execute(
+            """INSERT INTO reply_queue (
+                inbound_tweet_id, inbound_text, our_tweet_id, draft_text,
+                status, posted_at
+            ) VALUES (?, ?, ?, ?, ?, datetime('now', '-1 day'))""",
+            ("tw-in-3", "Great!", "tw-our-3", "Thank you!", "posted")
+        )
+        db.conn.commit()
+
+        assert db.count_replies_today() == 0
+
+    def test_count_replies_today_multiple_posted_today(self, db):
+        """count_replies_today should count multiple posted replies from today."""
+        # Insert 3 posted replies today
+        for i in range(3):
+            db.conn.execute(
+                """INSERT INTO reply_queue (
+                    inbound_tweet_id, inbound_text, our_tweet_id, draft_text,
+                    status, posted_at
+                ) VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+                (f"tw-in-{i}", f"Comment {i}", f"tw-our-{i}", f"Reply {i}", "posted")
+            )
+        db.conn.commit()
+
+        assert db.count_replies_today() == 3
+
+    def test_get_last_mention_id_returns_none_initially(self, db):
+        """get_last_mention_id should return None when no mention ID is stored."""
+        assert db.get_last_mention_id() is None
+
+    def test_set_and_get_last_mention_id_roundtrip(self, db):
+        """set_last_mention_id followed by get_last_mention_id should retrieve the same ID."""
+        mention_id = "mention-12345"
+        db.set_last_mention_id(mention_id)
+
+        result = db.get_last_mention_id()
+        assert result == mention_id
+
+    def test_set_last_mention_id_updates_existing(self, db):
+        """set_last_mention_id should update the existing record (upsert behavior)."""
+        db.set_last_mention_id("mention-old")
+        db.set_last_mention_id("mention-new")
+
+        result = db.get_last_mention_id()
+        assert result == "mention-new"
+
+        # Verify only one row exists in reply_state
+        count = db.conn.execute("SELECT COUNT(*) FROM reply_state").fetchone()[0]
+        assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# Newsletter methods: insert_newsletter_send, get_last_newsletter_send
+# ---------------------------------------------------------------------------
+
+
+class TestNewsletterMethods:
+    """Tests for newsletter-related methods in Database."""
+
+    def test_insert_newsletter_send_returns_id(self, db):
+        """insert_newsletter_send should return a valid row ID."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-001",
+            subject="Weekly Update",
+            content_ids=[1, 2, 3],
+            subscriber_count=100,
+            status="sent"
+        )
+        assert isinstance(send_id, int)
+        assert send_id > 0
+
+    def test_insert_newsletter_send_stores_data(self, db):
+        """insert_newsletter_send should store all provided data correctly."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-002",
+            subject="Monthly Digest",
+            content_ids=[10, 20],
+            subscriber_count=250,
+            status="sent"
+        )
+
+        # Verify the data was stored
+        row = db.conn.execute(
+            "SELECT issue_id, subject, source_content_ids, subscriber_count, status FROM newsletter_sends WHERE id = ?",
+            (send_id,)
+        ).fetchone()
+
+        assert row["issue_id"] == "issue-002"
+        assert row["subject"] == "Monthly Digest"
+        assert json.loads(row["source_content_ids"]) == [10, 20]
+        assert row["subscriber_count"] == 250
+        assert row["status"] == "sent"
+
+    def test_get_last_newsletter_send_returns_none_when_empty(self, db):
+        """get_last_newsletter_send should return None when no newsletters exist."""
+        assert db.get_last_newsletter_send() is None
+
+    def test_insert_and_get_last_newsletter_send_roundtrip(self, db):
+        """insert_newsletter_send followed by get_last_newsletter_send should return a timestamp."""
+        db.insert_newsletter_send(
+            issue_id="issue-003",
+            subject="Test Newsletter",
+            content_ids=[5],
+            subscriber_count=50
+        )
+
+        result = db.get_last_newsletter_send()
+        assert result is not None
+        assert isinstance(result, datetime)
+        assert result.tzinfo is not None  # Should have timezone info
+
+    def test_get_last_newsletter_send_returns_most_recent(self, db):
+        """get_last_newsletter_send should return the most recent send timestamp."""
+        # Insert older newsletter
+        db.conn.execute(
+            """INSERT INTO newsletter_sends (issue_id, subject, source_content_ids, subscriber_count, sent_at)
+               VALUES (?, ?, ?, ?, datetime('now', '-2 days'))""",
+            ("issue-old", "Old Newsletter", "[]", 10)
+        )
+
+        # Insert newer newsletter
+        db.insert_newsletter_send(
+            issue_id="issue-new",
+            subject="New Newsletter",
+            content_ids=[1],
+            subscriber_count=20
+        )
+
+        result = db.get_last_newsletter_send()
+        assert result is not None
+
+        # The most recent send should be from today (much more recent than 2 days ago)
+        # We can verify it's within the last minute
+        now = datetime.now(timezone.utc)
+        time_diff = (now - result).total_seconds()
+        assert time_diff < 60  # Should be less than 60 seconds old
