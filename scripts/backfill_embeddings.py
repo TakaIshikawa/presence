@@ -3,6 +3,7 @@
 
 import sys
 import time
+import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -10,11 +11,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from runner import script_context
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 
+logger = logging.getLogger(__name__)
+
 
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     with script_context() as (config, db):
         if not config.embeddings:
-            print("No embeddings config found, exiting")
+            logger.info("No embeddings config found, exiting")
             return
 
         embedder = VoyageEmbeddings(
@@ -32,10 +36,10 @@ def main():
         rows = cursor.fetchall()
 
         if not rows:
-            print("No content to backfill")
+            logger.info("No content to backfill")
             return
 
-        print(f"Backfilling embeddings for {len(rows)} published posts...")
+        logger.info(f"Backfilling embeddings for {len(rows)} published posts...")
 
         # Process in batches of 20
         batch_size = 20
@@ -49,7 +53,7 @@ def main():
                 embeddings = embedder.embed_batch(texts)
             except Exception as e:
                 if "RateLimit" in type(e).__name__ or "429" in str(e):
-                    print(f"  Rate limited at {total}/{len(rows)}, waiting 25s...")
+                    logger.warning(f"Rate limited at {total}/{len(rows)}, waiting 25s...")
                     time.sleep(25)
                     embeddings = embedder.embed_batch(texts)
                 else:
@@ -59,12 +63,12 @@ def main():
                 db.set_content_embedding(content_id, serialize_embedding(embedding))
                 total += 1
 
-            print(f"  Embedded {total}/{len(rows)}")
+            logger.info(f"Embedded {total}/{len(rows)}")
             # Respect rate limits (3 RPM on free tier)
             if i + batch_size < len(rows):
                 time.sleep(22)
 
-        print(f"Done. Backfilled {total} embeddings.")
+        logger.info(f"Done. Backfilled {total} embeddings.")
 
 
 if __name__ == "__main__":
