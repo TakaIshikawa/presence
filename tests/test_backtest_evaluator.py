@@ -52,10 +52,10 @@ class TestMain:
     @patch("backtest_evaluator.tweepy.Client")
     @patch("backtest_evaluator.ValidationDatabase")
     @patch("backtest_evaluator.EngagementPredictor")
-    @patch("backtest_evaluator.load_config")
-    def test_no_unevaluated_tweets(self, mock_config, MockPredictor, MockDB,
+    @patch("backtest_evaluator.script_context")
+    def test_no_unevaluated_tweets(self, mock_context, MockPredictor, MockDB,
                                     MockTweepy, mock_sleep):
-        mock_config.return_value = _make_config()
+        mock_context.return_value.__enter__.return_value = (_make_config(), None)
         mock_db = MockDB.return_value
         mock_db.get_purged_tweet_ids.return_value = []
         mock_db.get_unevaluated_tweets.return_value = []
@@ -70,10 +70,10 @@ class TestMain:
     @patch("backtest_evaluator.tweepy.Client")
     @patch("backtest_evaluator.ValidationDatabase")
     @patch("backtest_evaluator.EngagementPredictor")
-    @patch("backtest_evaluator.load_config")
-    def test_groups_by_account(self, mock_config, MockPredictor, MockDB,
+    @patch("backtest_evaluator.script_context")
+    def test_groups_by_account(self, mock_context, MockPredictor, MockDB,
                                 MockTweepy, mock_sleep):
-        mock_config.return_value = _make_config()
+        mock_context.return_value.__enter__.return_value = (_make_config(), None)
         mock_db = MockDB.return_value
         mock_db.get_purged_tweet_ids.return_value = []
         mock_db.get_unevaluated_tweets.return_value = [
@@ -97,10 +97,10 @@ class TestMain:
     @patch("backtest_evaluator.tweepy.Client")
     @patch("backtest_evaluator.ValidationDatabase")
     @patch("backtest_evaluator.EngagementPredictor")
-    @patch("backtest_evaluator.load_config")
-    def test_batch_error_continues(self, mock_config, MockPredictor, MockDB,
+    @patch("backtest_evaluator.script_context")
+    def test_batch_error_continues(self, mock_context, MockPredictor, MockDB,
                                     MockTweepy, mock_sleep):
-        mock_config.return_value = _make_config()
+        mock_context.return_value.__enter__.return_value = (_make_config(), None)
         mock_db = MockDB.return_value
         mock_db.get_purged_tweet_ids.return_value = []
         mock_db.get_unevaluated_tweets.return_value = [
@@ -120,10 +120,10 @@ class TestMain:
     @patch("backtest_evaluator.tweepy.Client")
     @patch("backtest_evaluator.ValidationDatabase")
     @patch("backtest_evaluator.EngagementPredictor")
-    @patch("backtest_evaluator.load_config")
-    def test_no_purge_flag(self, mock_config, MockPredictor, MockDB,
+    @patch("backtest_evaluator.script_context")
+    def test_no_purge_flag(self, mock_context, MockPredictor, MockDB,
                             MockTweepy, mock_sleep):
-        mock_config.return_value = _make_config()
+        mock_context.return_value.__enter__.return_value = (_make_config(), None)
         mock_db = MockDB.return_value
         mock_db.get_purged_tweet_ids.return_value = []
         mock_db.get_unevaluated_tweets.return_value = []
@@ -138,10 +138,10 @@ class TestMain:
     @patch("backtest_evaluator.tweepy.Client")
     @patch("backtest_evaluator.ValidationDatabase")
     @patch("backtest_evaluator.EngagementPredictor")
-    @patch("backtest_evaluator.load_config")
-    def test_empty_text_filtered(self, mock_config, MockPredictor, MockDB,
+    @patch("backtest_evaluator.script_context")
+    def test_empty_text_filtered(self, mock_context, MockPredictor, MockDB,
                                   MockTweepy, mock_sleep):
-        mock_config.return_value = _make_config()
+        mock_context.return_value.__enter__.return_value = (_make_config(), None)
         mock_db = MockDB.return_value
         mock_db.get_purged_tweet_ids.return_value = []
         mock_db.get_unevaluated_tweets.return_value = [
