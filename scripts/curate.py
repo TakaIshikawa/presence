@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from storage.db import Database
+from runner import script_context
 
 VALID_FLAGS = ("good", "too_specific")
 
@@ -109,31 +110,25 @@ def main():
         logger.error("  stats            Show curation statistics")
         sys.exit(1)
 
-    project_root = Path(__file__).parent.parent
-    db = Database(str(project_root / "presence.db"))
-    db.connect()
-    db.init_schema(str(project_root / "schema.sql"))
-
-    cmd = sys.argv[1]
-    if cmd == "list":
-        cmd_list(db)
-    elif cmd == "flag":
-        if len(sys.argv) < 4:
-            logger.error("Usage: curate.py flag <id> <good|too_specific>")
+    with script_context() as (config, db):
+        cmd = sys.argv[1]
+        if cmd == "list":
+            cmd_list(db)
+        elif cmd == "flag":
+            if len(sys.argv) < 4:
+                logger.error("Usage: curate.py flag <id> <good|too_specific>")
+                sys.exit(1)
+            cmd_flag(db, int(sys.argv[2]), sys.argv[3])
+        elif cmd == "clear":
+            if len(sys.argv) < 3:
+                logger.error("Usage: curate.py clear <id>")
+                sys.exit(1)
+            cmd_clear(db, int(sys.argv[2]))
+        elif cmd == "stats":
+            cmd_stats(db)
+        else:
+            logger.error(f"Unknown command: {cmd}")
             sys.exit(1)
-        cmd_flag(db, int(sys.argv[2]), sys.argv[3])
-    elif cmd == "clear":
-        if len(sys.argv) < 3:
-            logger.error("Usage: curate.py clear <id>")
-            sys.exit(1)
-        cmd_clear(db, int(sys.argv[2]))
-    elif cmd == "stats":
-        cmd_stats(db)
-    else:
-        logger.error(f"Unknown command: {cmd}")
-        sys.exit(1)
-
-    db.close()
 
 
 if __name__ == "__main__":
