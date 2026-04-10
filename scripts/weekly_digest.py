@@ -13,6 +13,7 @@ from runner import script_context, update_monitoring
 from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.blog_writer import BlogWriter
+from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,16 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     with script_context() as (config, db):
+        # Initialize embedder for semantic dedup
+        embedder = None
+        semantic_threshold = 0.82
+        if config.embeddings:
+            embedder = VoyageEmbeddings(
+                api_key=config.embeddings.api_key,
+                model=config.embeddings.model,
+            )
+            semantic_threshold = config.embeddings.semantic_dedup_threshold
+
         pipeline = SynthesisPipeline(
             api_key=config.anthropic.api_key,
             generator_model=config.synthesis.model,
@@ -28,6 +39,8 @@ def main():
             db=db,
             num_candidates=config.synthesis.num_candidates,
             anthropic_timeout=config.timeouts.anthropic_seconds,
+            embedder=embedder,
+            semantic_threshold=semantic_threshold,
         )
         blog_writer = BlogWriter(config.paths.static_site)
 
@@ -108,6 +121,15 @@ def main():
             eval_score=result.final_score,
             eval_feedback=result.comparison.best_feedback,
         )
+
+        # Embed content for future semantic dedup
+        if embedder and content_id:
+            try:
+                vectors = embedder.embed_batch([result.final_content])
+                if vectors:
+                    db.set_content_embedding(content_id, serialize_embedding(vectors[0]))
+            except Exception as e:
+                logger.warning(f"Embedding failed (non-fatal): {e}")
 
         # Determine outcome and publish if passes threshold
         passes = result.final_score >= config.synthesis.eval_threshold * 10

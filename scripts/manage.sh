@@ -16,6 +16,7 @@ AGENTS=(
     "com.presence.knowledge"
     "com.presence.curated"
     "com.presence.ops-sync"
+    "com.presence.resolve"
 )
 
 usage() {
@@ -27,7 +28,7 @@ usage() {
     echo "  restart   - Stop then start all jobs"
     echo "  status    - Show status of all jobs"
     echo "  logs      - Tail all log files"
-    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync)"
+    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve)"
     echo "  retry     - Retry posting unpublished content"
     echo "  reply     - Review and post pending reply drafts"
     echo "  knowledge - Knowledge base commands (build|fetch|stats)"
@@ -139,8 +140,12 @@ run_job() {
             echo "Running update_operations_state.py..."
             cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/update_operations_state.py
             ;;
+        resolve)
+            echo "Running resolve_actions.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/resolve_actions.py
+            ;;
         *)
-            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync}"
+            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve}"
             exit 1
             ;;
     esac

@@ -105,6 +105,40 @@ class XClient:
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=str(e))
 
+    def get_user_tweets(
+        self, user_id: str, count: int = 10
+    ) -> list[dict]:
+        """Fetch a user's recent tweets.
+
+        Returns list of dicts with keys: id, text, created_at,
+        public_metrics, reply_settings. Empty list on error.
+        """
+        try:
+            response = self.client.get_users_tweets(
+                id=user_id,
+                max_results=min(max(count, 5), 100),
+                tweet_fields=[
+                    "created_at", "text", "public_metrics", "reply_settings"
+                ],
+                user_auth=True,
+            )
+            if not response.data:
+                return []
+            return [
+                {
+                    "id": str(t.id),
+                    "text": t.text or "",
+                    "created_at": (
+                        t.created_at.isoformat() if t.created_at else ""
+                    ),
+                    "public_metrics": getattr(t, "public_metrics", {}) or {},
+                    "reply_settings": getattr(t, "reply_settings", "everyone"),
+                }
+                for t in response.data[:count]
+            ]
+        except tweepy.TweepyException:
+            return []
+
     def get_mentions(
         self, since_id: Optional[str] = None, max_results: int = 50
     ) -> tuple[list[dict], dict]:

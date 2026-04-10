@@ -325,6 +325,30 @@ class CultivateBridge:
 
         self.conn.commit()
 
+    def update_action_payload(self, action_id: str, payload: dict) -> None:
+        """Write resolved payload data to a cultivate action.
+
+        Merges with existing payload if present.
+        """
+        row = self.conn.execute(
+            "SELECT payload FROM actions WHERE id = ?", (action_id,)
+        ).fetchone()
+
+        existing = {}
+        if row and row["payload"]:
+            try:
+                existing = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                pass
+
+        existing.update(payload)
+
+        self.conn.execute(
+            "UPDATE actions SET payload = ? WHERE id = ?",
+            (json.dumps(existing), action_id),
+        )
+        self.conn.commit()
+
     def mark_action_completed(self, action_id: str) -> None:
         """Mark a cultivate action as completed."""
         now = datetime.now(timezone.utc).isoformat()

@@ -15,6 +15,7 @@ Given {commit_count} recent commits and the Claude Code prompts that drove them,
 {format_directive}
 
 {historical_section}
+{avoidance_context}
 CONTENT RULES:
 - Tell a specific moment: what you tried, what surprised you, what you changed
 - Ground it in concrete details from the source material

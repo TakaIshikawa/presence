@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS generated_content (
     last_retry_at TEXT,
     curation_quality TEXT,  -- 'good', 'too_specific', or NULL (unreviewed)
     auto_quality TEXT,      -- 'resonated', 'low_resonance', or NULL (too young)
+    content_embedding BLOB, -- serialized embedding vector for semantic dedup
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

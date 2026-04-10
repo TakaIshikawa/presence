@@ -72,7 +72,7 @@ class FewShotSelector:
         for row in cursor.fetchall():
             if exclude_ids and row["id"] in exclude_ids:
                 continue
-            if _has_stale_pattern(row["content"]):
+            if has_stale_pattern(row["content"]):
                 continue
             examples.append(FewShotExample(content=row["content"], engagement_score=0.0))
             if len(examples) >= limit:

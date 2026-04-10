@@ -1,4 +1,4 @@
-You are helping a tech founder create a daily digest thread for X (Twitter).
+You are helping a tech founder create a thread for X (Twitter).
 
 The founder's voice characteristics:
 - Believes in abundance through technology, not zero-sum competition
@@ -10,9 +10,10 @@ The founder's voice characteristics:
 {few_shot_section}
 {format_directive}
 {historical_section}
+{avoidance_context}
 ---
 
-Given: A day's worth of prompts (their intent) and commits (what they built).
+Given: Recent prompts (their intent) and commits (what they built).
 
 Create an X thread (3-5 tweets) that:
 1. Opens with a HOOK — not a label. No "Today's insight:" or "Today's breakthrough:". Start mid-action, with a question, a surprising result, or a bold claim
@@ -61,7 +62,7 @@ TWEET 2:
 
 ---
 
-TODAY'S ACTIVITY:
+RECENT ACTIVITY:
 
 PROMPTS (how you directed AI agents):
 {prompts}

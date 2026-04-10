@@ -2,6 +2,7 @@
 
 import sys
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,13 @@ def _make_config():
     return config
 
 
+def _mock_script_context(config, db):
+    @contextmanager
+    def _ctx():
+        yield (config, db)
+    return _ctx
+
+
 def _make_post_result(success=True, url="https://x.com/user/status/123",
                       tweet_id="123", error=None):
     return SimpleNamespace(success=success, url=url, tweet_id=tweet_id, error=error)
@@ -40,14 +48,16 @@ def _make_content_item(content_id=1, content="Test post about AI and coding", re
 @pytest.fixture
 def mocks():
     """Set up common mocks for retry_unpublished tests."""
+    config = _make_config()
+    db = MagicMock()
+
     with patch("retry_unpublished.time.sleep") as mock_sleep, \
          patch("retry_unpublished.XClient") as MockXClient, \
-         patch("retry_unpublished.Database") as MockDB, \
-         patch("retry_unpublished.load_config") as mock_config:
-        mock_config.return_value = _make_config()
+         patch("retry_unpublished.script_context") as mock_ctx:
+        mock_ctx.return_value = _mock_script_context(config, db)()
         yield SimpleNamespace(
-            config=mock_config,
-            db=MockDB.return_value,
+            config=config,
+            db=db,
             x_client=MockXClient.return_value,
             sleep=mock_sleep,
         )
