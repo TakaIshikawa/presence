@@ -1,5 +1,6 @@
 """Shared script runner utilities."""
 
+import logging
 import sys
 import subprocess
 from pathlib import Path
@@ -10,6 +11,8 @@ from storage.db import Database
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SCHEMA_PATH = str(PROJECT_ROOT / "schema.sql")
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -36,4 +39,4 @@ def update_monitoring(operation: str):
                 capture_output=True,
             )
     except Exception:
-        pass
+        logger.debug("update_monitoring failed for %s", operation, exc_info=True)
