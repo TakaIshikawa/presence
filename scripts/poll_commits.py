@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll for new commits and generate X posts when enough material accumulates."""
+"""Poll for new commits and generate X threads when enough material accumulates."""
 
 import signal
 import sys
@@ -23,7 +23,8 @@ from runner import script_context, update_monitoring
 from ingestion.github_commits import GitHubClient
 from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
-from output.x_client import XClient
+from output.x_client import XClient, parse_thread_content
+from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 
 
 def estimate_tokens(texts: list[str]) -> int:
@@ -53,7 +54,7 @@ def is_daily_cap_reached(posts_today: int, max_daily: int) -> bool:
     return posts_today >= max_daily
 
 
-def get_retryable_content(db, min_score: float, content_type: str = "x_post") -> list[dict]:
+def get_retryable_content(db, min_score: float, content_type: str = "x_thread") -> list[dict]:
     """Return unpublished content eligible for retry (retry_count < MAX_RETRIES)."""
     return db.get_unpublished_content(content_type, min_score)
 
@@ -66,6 +67,17 @@ def main():
 
     with script_context() as (config, db):
         github = GitHubClient(config.github.token, config.github.username, timeout=config.timeouts.github_seconds)
+
+        # Initialize embedder for semantic dedup
+        embedder = None
+        semantic_threshold = 0.82
+        if config.embeddings:
+            embedder = VoyageEmbeddings(
+                api_key=config.embeddings.api_key,
+                model=config.embeddings.model,
+            )
+            semantic_threshold = config.embeddings.semantic_dedup_threshold
+
         pipeline = SynthesisPipeline(
             api_key=config.anthropic.api_key,
             generator_model=config.synthesis.model,
@@ -73,6 +85,8 @@ def main():
             db=db,
             num_candidates=config.synthesis.num_candidates,
             anthropic_timeout=config.timeouts.anthropic_seconds,
+            embedder=embedder,
+            semantic_threshold=semantic_threshold,
         )
         x_client = XClient(
             config.x.api_key,
@@ -104,7 +118,8 @@ def main():
             logger.info(f"Retrying {len(unpublished)} unpublished posts...")
             item = unpublished[0]
             retry_num = (item.get("retry_count") or 0) + 1
-            result = x_client.post(item["content"])
+            tweets = parse_thread_content(item["content"])
+            result = x_client.post_thread(tweets)
             if result.success:
                 db.mark_published(item["id"], result.url, tweet_id=result.tweet_id)
                 logger.info(f"  Posted queued: {result.url}")
@@ -149,7 +164,7 @@ def main():
 
         # --- Phase 2: Readiness check ---
         # Daily post cap
-        posts_today = db.count_posts_today("x_post")
+        posts_today = db.count_posts_today("x_thread")
         max_daily = config.polling.max_daily_posts
         if is_daily_cap_reached(posts_today, max_daily):
             logger.info(f"Daily post limit reached ({posts_today}/{max_daily}), waiting for tomorrow")
@@ -158,7 +173,7 @@ def main():
             logger.info("Done. No posts made.")
             return
 
-        last_post_time = db.get_last_published_time("x_post")
+        last_post_time = db.get_last_published_time("x_thread")
         now = datetime.now(timezone.utc)
 
         if last_post_time is None:
@@ -227,9 +242,9 @@ def main():
         if config.historical and config.historical.enabled:
             from synthesis.theme_selector import ThemeSelector
             theme_selector = ThemeSelector(db)
-            if theme_selector.should_inject("x_post", config.historical.injection_frequency):
+            if theme_selector.should_inject("x_thread", config.historical.injection_frequency):
                 ctx = theme_selector.select(
-                    commit_dicts, "x_post",
+                    commit_dicts, "x_thread",
                     lookback_days=config.historical.lookback_days,
                     min_age_days=config.historical.min_age_days,
                     max_commits=config.historical.max_historical_commits,
@@ -245,7 +260,7 @@ def main():
         pipeline_result = pipeline.run(
             prompts=prompt_text_list,
             commits=commit_dicts,
-            content_type="x_post",
+            content_type="x_thread",
             threshold=config.synthesis.eval_threshold,
         )
 
@@ -261,7 +276,7 @@ def main():
 
         # Store generated content
         content_id = db.insert_generated_content(
-            content_type="x_post",
+            content_type="x_thread",
             source_commits=[c["sha"] for c in commit_dicts],
             source_messages=prompt_uuids,
             content=pipeline_result.final_content,
@@ -293,8 +308,9 @@ def main():
                 outcome = "below_threshold"
                 rejection_reason = "Already posted this cycle"
             else:
-                logger.info("Posting to X...")
-                result = x_client.post(pipeline_result.final_content)
+                logger.info("Posting thread to X...")
+                tweets = parse_thread_content(pipeline_result.final_content)
+                result = x_client.post_thread(tweets)
                 if result.success:
                     db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
                     logger.info(f"Posted: {result.url}")
@@ -311,10 +327,19 @@ def main():
             elif outcome == "below_threshold" and not rejection_reason:
                 logger.warning("Below threshold, not posting")
 
+        # Embed content for future semantic dedup
+        if embedder and content_id:
+            try:
+                vectors = embedder.embed_batch([pipeline_result.final_content])
+                if vectors:
+                    db.set_content_embedding(content_id, serialize_embedding(vectors[0]))
+            except Exception as e:
+                logger.warning(f"Embedding failed (non-fatal): {e}")
+
         # Record pipeline run
         db.insert_pipeline_run(
             batch_id=pipeline_result.batch_id,
-            content_type="x_post",
+            content_type="x_thread",
             candidates_generated=len(pipeline_result.candidates),
             best_candidate_index=best_idx,
             best_score_before_refine=pipeline_result.comparison.best_score,

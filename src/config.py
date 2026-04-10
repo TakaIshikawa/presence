@@ -62,6 +62,7 @@ class EmbeddingsConfig:
     provider: str
     model: str
     api_key: str
+    semantic_dedup_threshold: float = 0.82
 
 
 @dataclass
@@ -198,7 +199,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         embeddings_config = EmbeddingsConfig(
             provider=data["embeddings"]["provider"],
             model=data["embeddings"]["model"],
-            api_key=_resolve_env_var(data["embeddings"]["api_key"])
+            api_key=_resolve_env_var(data["embeddings"]["api_key"]),
+            semantic_dedup_threshold=data["embeddings"].get("semantic_dedup_threshold", 0.82),
         )
 
     # Parse curated sources if present

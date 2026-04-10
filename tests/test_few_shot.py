@@ -2,7 +2,7 @@
 
 import pytest
 
-from synthesis.few_shot import _has_stale_pattern, FewShotSelector, FewShotExample
+from synthesis.few_shot import FewShotSelector, FewShotExample
 from synthesis.pipeline import SynthesisPipeline
 from synthesis.stale_patterns import has_stale_pattern, STALE_PATTERNS
 
@@ -241,48 +241,48 @@ class TestStalePatternDetection:
     """Verify each category of stale pattern is caught."""
 
     def test_ai_prefix_pattern(self):
-        assert _has_stale_pattern("AI is transforming everything")
-        assert _has_stale_pattern("AI will change how we code")
-        assert _has_stale_pattern("AI agents are the future")
+        assert has_stale_pattern("AI is transforming everything")
+        assert has_stale_pattern("AI will change how we code")
+        assert has_stale_pattern("AI agents are the future")
 
     def test_isnt_about_its_about_pattern(self):
-        assert _has_stale_pattern("Coding isn't about syntax—it's about thinking")
-        assert _has_stale_pattern("This isn't about syntax - it's about clarity")
-        assert _has_stale_pattern("Testing isn't about test coverage — it's about confidence")
+        assert has_stale_pattern("Coding isn't about syntax—it's about thinking")
+        assert has_stale_pattern("This isn't about syntax - it's about clarity")
+        assert has_stale_pattern("Testing isn't about test coverage — it's about confidence")
 
     def test_unpopular_opinion_engagement_bait(self):
-        assert _has_stale_pattern("Unpopular opinion: tests are overrated")
-        assert _has_stale_pattern("Controversial take: microservices are harmful")
+        assert has_stale_pattern("Unpopular opinion: tests are overrated")
+        assert has_stale_pattern("Controversial take: microservices are harmful")
 
     def test_i_spent_effort_brag(self):
-        assert _has_stale_pattern("I spent 3 hours debugging this")
-        assert _has_stale_pattern("I spent 2 weeks building this framework")
+        assert has_stale_pattern("I spent 3 hours debugging this")
+        assert has_stale_pattern("I spent 2 weeks building this framework")
 
     def test_most_people_dont_pattern(self):
-        assert _has_stale_pattern("Most developers don't understand async")
-        assert _has_stale_pattern("Most people don't test error paths")
+        assert has_stale_pattern("Most developers don't understand async")
+        assert has_stale_pattern("Most people don't test error paths")
 
     def test_everyone_pattern(self):
-        assert _has_stale_pattern("Everyone thinks AI is magic")
-        assert _has_stale_pattern("Everyone says unit tests are essential")
+        assert has_stale_pattern("Everyone thinks AI is magic")
+        assert has_stale_pattern("Everyone says unit tests are essential")
 
     def test_secret_trick_pattern(self):
-        assert _has_stale_pattern("The secret to clean code")
-        assert _has_stale_pattern("The trick to fast builds")
+        assert has_stale_pattern("The secret to clean code")
+        assert has_stale_pattern("The trick to fast builds")
 
     def test_stop_start_pattern(self):
-        assert _has_stale_pattern("Stop writing tests. Start writing types")
-        assert _has_stale_pattern("Stop using REST. Start using GraphQL")
+        assert has_stale_pattern("Stop writing tests. Start writing types")
+        assert has_stale_pattern("Stop using REST. Start using GraphQL")
 
     def test_non_stale_text_returns_false(self):
-        assert not _has_stale_pattern("Built a caching layer for our API today")
-        assert not _has_stale_pattern("Refactored the auth module to use JWT")
-        assert not _has_stale_pattern("Fixed a race condition in the queue processor")
+        assert not has_stale_pattern("Built a caching layer for our API today")
+        assert not has_stale_pattern("Refactored the auth module to use JWT")
+        assert not has_stale_pattern("Fixed a race condition in the queue processor")
 
     def test_case_insensitivity(self):
-        assert _has_stale_pattern("AI IS AMAZING")
-        assert _has_stale_pattern("ai is changing everything")
-        assert _has_stale_pattern("UNPOPULAR OPINION: testing is waste")
+        assert has_stale_pattern("AI IS AMAZING")
+        assert has_stale_pattern("ai is changing everything")
+        assert has_stale_pattern("UNPOPULAR OPINION: testing is waste")
 
 
 # ===========================================================================
@@ -717,68 +717,68 @@ class TestStalePatternFiltering:
     """Verify each regex in _STALE_PATTERNS correctly rejects matching content."""
 
     def test_starts_with_ai(self):
-        assert _has_stale_pattern("AI is transforming everything") is True
+        assert has_stale_pattern("AI is transforming everything") is True
 
     def test_starts_with_ai_case_insensitive(self):
-        assert _has_stale_pattern("ai models are getting better") is True
+        assert has_stale_pattern("ai models are getting better") is True
 
     def test_ai_mid_sentence_not_matched(self):
         # Pattern requires ^AI\s — only at start of string
-        assert _has_stale_pattern("The AI model works well") is False
+        assert has_stale_pattern("The AI model works well") is False
 
     def test_isnt_about_its_about(self):
-        assert _has_stale_pattern(
+        assert has_stale_pattern(
             "Engineering isn't about writing code—it's about solving problems"
         ) is True
 
     def test_isnt_about_its_about_with_dash(self):
-        assert _has_stale_pattern(
+        assert has_stale_pattern(
             "Success isn't about perfection-it's about progress"
         ) is True
 
     def test_breakthrough(self):
-        assert _has_stale_pattern("This is a breakthrough in AI") is True
+        assert has_stale_pattern("This is a breakthrough in AI") is True
 
     def test_breakthrough_case_insensitive(self):
-        assert _has_stale_pattern("BREAKTHROUGH discovery in science") is True
+        assert has_stale_pattern("BREAKTHROUGH discovery in science") is True
 
     def test_perfect_prompts(self):
-        assert _has_stale_pattern("You don't need perfect prompts") is True
+        assert has_stale_pattern("You don't need perfect prompts") is True
 
     def test_perfect_memory(self):
-        assert _has_stale_pattern("No system has perfect memory") is True
+        assert has_stale_pattern("No system has perfect memory") is True
 
     def test_perfect_agents(self):
-        assert _has_stale_pattern("There are no perfect agents") is True
+        assert has_stale_pattern("There are no perfect agents") is True
 
     def test_perfect_handoffs(self):
-        assert _has_stale_pattern("Forget about perfect handoffs") is True
+        assert has_stale_pattern("Forget about perfect handoffs") is True
 
     def test_perfect_context(self):
-        assert _has_stale_pattern("You won't get perfect context") is True
+        assert has_stale_pattern("You won't get perfect context") is True
 
     def test_commits_across_pattern(self):
-        assert _has_stale_pattern("47 commits across 3 repos today") is True
+        assert has_stale_pattern("47 commits across 3 repos today") is True
 
     def test_todays_insight(self):
-        assert _has_stale_pattern("Today's insight on building agents") is True
+        assert has_stale_pattern("Today's insight on building agents") is True
 
     def test_todays_breakthrough(self):
-        assert _has_stale_pattern("Today's breakthrough in memory systems") is True
+        assert has_stale_pattern("Today's breakthrough in memory systems") is True
 
     def test_todays_lesson(self):
-        assert _has_stale_pattern("Today's lesson about error handling") is True
+        assert has_stale_pattern("Today's lesson about error handling") is True
 
     def test_tweet_prefix_todays_insight(self):
-        assert _has_stale_pattern("TWEET 1:\nToday's insight on testing") is True
+        assert has_stale_pattern("TWEET 1:\nToday's insight on testing") is True
 
     def test_clean_content_not_flagged(self):
-        assert _has_stale_pattern(
+        assert has_stale_pattern(
             "Spent the morning debugging a race condition in the event loop"
         ) is False
 
     def test_empty_string_not_flagged(self):
-        assert _has_stale_pattern("") is False
+        assert has_stale_pattern("") is False
 
 
 # --- select() with engagement data ---

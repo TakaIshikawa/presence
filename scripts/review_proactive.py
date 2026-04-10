@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Interactive review of cultivate's proactive engagement recommendations."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from output.x_client import XClient
 from engagement.cultivate_bridge import CultivateBridge
 from engagement.reply_drafter import ReplyDrafter
 from review_helpers import truncate, read_char
+
+_EXEC_TAG_RE = re.compile(r"^\[(\w+)\]")
+_VALID_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet", "follow"}
 
 
 def main():
@@ -62,8 +66,12 @@ def main():
             break
 
         ctx = action.person_context
+
+        # Determine execution type from resolved payload or description tag
+        exec_type = _get_execution_type(action)
+
         print(f"{'─' * 60}")
-        print(f"{i + 1}/{len(actions)}  {_format_action_context(action)}")
+        print(f"{i + 1}/{len(actions)}  {_format_action_context(action, exec_type)}")
 
         print(f"\n  Reason: {action.description}")
 
@@ -80,7 +88,7 @@ def main():
         print()
 
         while True:
-            if action.action_type in ("like", "retweet"):
+            if exec_type in ("like", "retweet"):
                 if not tweet_id:
                     print("  No tweet_id in payload, skipping.")
                     break
@@ -93,13 +101,13 @@ def main():
                     quit_requested = True
                     break
                 elif choice == "a":
-                    if action.action_type == "like":
+                    if exec_type == "like":
                         result = x_client.like(tweet_id)
                     else:
                         result = x_client.retweet(tweet_id)
                     if result.success:
                         bridge.mark_action_completed(action.action_id)
-                        print(f"  Done: {action.action_type}d tweet {tweet_id}")
+                        print(f"  Done: {exec_type}d tweet {tweet_id}")
                         completed += 1
                     else:
                         print(f"  Error: {result.error}")
@@ -112,7 +120,7 @@ def main():
                     print("  Skipped.")
                     break
 
-            elif action.action_type == "follow":
+            elif exec_type == "follow":
                 sys.stdout.write("  [a]pprove  [d]ismiss  [s]kip  [q]uit > ")
                 sys.stdout.flush()
                 choice = read_char().lower()
@@ -122,8 +130,12 @@ def main():
                     quit_requested = True
                     break
                 elif choice == "a":
-                    # Need X user ID — look up from cultivate's people table
-                    person_x_id = _get_x_user_id(bridge, action.target_person_id)
+                    # Use resolved x_user_id from payload, fall back to DB lookup
+                    person_x_id = None
+                    if action.payload:
+                        person_x_id = action.payload.get("x_user_id")
+                    if not person_x_id:
+                        person_x_id = _get_x_user_id(bridge, action.target_person_id)
                     if not person_x_id:
                         print("  No X user ID found for this person, skipping.")
                         break
@@ -143,27 +155,32 @@ def main():
                     print("  Skipped.")
                     break
 
-            elif action.action_type in ("reply", "quote_tweet"):
+            elif exec_type in ("reply", "quote_tweet"):
                 if not tweet_id:
                     print("  No tweet_id in payload, skipping.")
                     break
 
-                # Draft a reply/quote
-                post_text = tweet_content or ""
-                print("  Drafting response...")
-                try:
-                    draft = drafter.draft(
-                        our_post="",
-                        their_reply=post_text,
-                        their_handle=action.target_handle,
-                        self_handle=my_handle,
-                        person_context=ctx,
-                    )
-                except Exception as e:
-                    print(f"  Error drafting: {e}")
-                    break
+                # Use pre-drafted content if available, otherwise draft live
+                draft = None
+                if action.payload and action.payload.get("draft"):
+                    draft = action.payload["draft"]
+                    print(f"  Pre-draft: \"{draft}\"")
+                else:
+                    post_text = tweet_content or ""
+                    print("  Drafting response...")
+                    try:
+                        draft = drafter.draft(
+                            our_post="",
+                            their_reply=post_text,
+                            their_handle=action.target_handle,
+                            self_handle=my_handle,
+                            person_context=ctx,
+                        )
+                    except Exception as e:
+                        print(f"  Error drafting: {e}")
+                        break
+                    print(f"  Draft: \"{draft}\"")
 
-                print(f"  Draft: \"{draft}\"")
                 print()
                 sys.stdout.write("  [a]pprove  [e]dit  [d]ismiss  [s]kip  [q]uit > ")
                 sys.stdout.flush()
@@ -174,7 +191,7 @@ def main():
                     quit_requested = True
                     break
                 elif choice == "a":
-                    if action.action_type == "reply":
+                    if exec_type == "reply":
                         result = x_client.reply(draft, tweet_id)
                     else:
                         result = x_client.quote_tweet(draft, tweet_id)
@@ -193,7 +210,7 @@ def main():
                     if len(edited) > 280:
                         print(f"  Too long ({len(edited)} chars, max 280). Try again.")
                         continue
-                    if action.action_type == "reply":
+                    if exec_type == "reply":
                         result = x_client.reply(edited, tweet_id)
                     else:
                         result = x_client.quote_tweet(edited, tweet_id)
@@ -213,7 +230,7 @@ def main():
                     break
 
             else:
-                # Unknown action type — show and let user decide
+                # Unknown execution type — show and let user decide
                 sys.stdout.write("  [d]ismiss  [s]kip  [q]uit > ")
                 sys.stdout.flush()
                 choice = read_char().lower()
@@ -229,9 +246,22 @@ def main():
     bridge.close()
 
 
-def _format_action_context(action) -> str:
+def _get_execution_type(action) -> str | None:
+    """Extract execution type from resolved payload or description tag."""
+    if action.payload:
+        exec_type = action.payload.get("execution_type")
+        if exec_type:
+            return exec_type
+    m = _EXEC_TAG_RE.match(action.description)
+    if m and m.group(1) in _VALID_EXEC_TYPES:
+        return m.group(1)
+    return None
+
+
+def _format_action_context(action, exec_type: str | None = None) -> str:
     """Format action header with relationship context lines."""
-    lines = [f"{action.action_type.upper()} -> @{action.target_handle}"]
+    label = (exec_type or action.action_type).upper()
+    lines = [f"{label} -> @{action.target_handle}"]
     ctx = action.person_context
     if ctx:
         parts = []

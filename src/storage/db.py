@@ -50,6 +50,8 @@ class Database:
         if "auto_quality" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN auto_quality TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_auto_quality ON generated_content(auto_quality)")
+        if "content_embedding" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_embedding BLOB")
         # Migrate reply_queue for cultivate enrichment
         rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
         if rq_cols and "relationship_context" not in rq_cols:
@@ -404,6 +406,25 @@ class Database:
             (content_type, limit)
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_published_content_all(self, limit: int = 30) -> list[dict]:
+        """Get most recently published posts across x_post and x_thread."""
+        cursor = self.conn.execute(
+            """SELECT id, content, content_type, content_embedding, published_at
+               FROM generated_content
+               WHERE content_type IN ('x_post', 'x_thread') AND published = 1
+               ORDER BY published_at DESC LIMIT ?""",
+            (limit,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def set_content_embedding(self, content_id: int, embedding_blob: bytes) -> None:
+        """Store embedding vector for a content item."""
+        self.conn.execute(
+            "UPDATE generated_content SET content_embedding = ? WHERE id = ?",
+            (embedding_blob, content_id)
+        )
+        self.conn.commit()
 
     # Curation
     def set_curation_quality(self, content_id: int, quality: str) -> None:

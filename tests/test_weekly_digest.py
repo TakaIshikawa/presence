@@ -1,6 +1,7 @@
 """Tests for scripts/weekly_digest.py script-level logic."""
 
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -35,6 +36,8 @@ def _make_config(historical_enabled=False):
     config.synthesis.eval_model = "eval-model"
     config.synthesis.num_candidates = 3
     config.synthesis.eval_threshold = 0.7
+    config.timeouts.anthropic_seconds = 300
+    config.embeddings = None
     if historical_enabled:
         config.historical.enabled = True
         config.historical.injection_frequency = 3
@@ -44,6 +47,13 @@ def _make_config(historical_enabled=False):
     else:
         config.historical = None
     return config
+
+
+def _mock_script_context(config, db):
+    @contextmanager
+    def _ctx():
+        yield (config, db)
+    return _ctx
 
 
 def _make_comparison(best_score=8.0, reject_reason=None):
@@ -95,21 +105,19 @@ def _make_commit_row():
 # Shared decorator stack for patching weekly_digest dependencies.
 def _weekly_patches(func):
     @patch("weekly_digest.datetime", wraps=datetime)
-    @patch("weekly_digest._update_monitoring")
+    @patch("weekly_digest.update_monitoring")
     @patch("weekly_digest.BlogWriter")
     @patch("weekly_digest.ClaudeLogParser")
     @patch("weekly_digest.SynthesisPipeline")
-    @patch("weekly_digest.Database")
-    @patch("weekly_digest.load_config")
-    def wrapper(self, mock_load_config, MockDB, MockPipeline, MockParser,
+    @patch("weekly_digest.script_context")
+    def wrapper(self, mock_ctx, MockPipeline, MockParser,
                 MockBlogWriter, mock_monitoring, mock_dt,
                 *args, **kwargs):
         mock_dt.now.return_value = FIXED_NOW
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         return func(
             self,
-            mock_load_config=mock_load_config,
-            MockDB=MockDB,
+            mock_ctx=mock_ctx,
             MockPipeline=MockPipeline,
             MockParser=MockParser,
             MockBlogWriter=MockBlogWriter,
@@ -124,12 +132,13 @@ def _weekly_patches(func):
 class TestMainExitsEarlyNoCommits:
     @_weekly_patches
     def test_exits_early_when_no_commits(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config()
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_commits_in_range.return_value = []
+        mock_ctx.return_value = _mock_script_context(config, db)()
 
         import weekly_digest
         weekly_digest.main()
@@ -137,37 +146,37 @@ class TestMainExitsEarlyNoCommits:
         db.get_commits_in_range.assert_called_once()
         MockParser.assert_not_called()
         MockPipeline.return_value.run.assert_not_called()
-        db.close.assert_called_once()
 
 
 class TestMainExitsEarlyNoPrompts:
     @_weekly_patches
     def test_exits_early_when_no_prompts(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config()
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
+        mock_ctx.return_value = _mock_script_context(config, db)()
         MockParser.return_value.parse_global_history.return_value = []
 
         import weekly_digest
         weekly_digest.main()
 
         MockPipeline.return_value.run.assert_not_called()
-        db.close.assert_called_once()
 
 
 class TestMainPublishesWhenPassesThreshold:
     @_weekly_patches
     def test_runs_pipeline_and_publishes_blog(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config()
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
         db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
 
         MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
 
@@ -190,19 +199,19 @@ class TestMainPublishesWhenPassesThreshold:
         MockBlogWriter.return_value.write_post.assert_called_once_with(result.final_content)
         MockBlogWriter.return_value.commit_and_push.assert_called_once_with("Weekly Recap")
         db.mark_published.assert_called_once_with(42, "https://blog.example.com/weekly")
-        db.close.assert_called_once()
 
 
 class TestMainDoesNotPublishBelowThreshold:
     @_weekly_patches
     def test_does_not_publish_below_threshold(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config()
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
         db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
 
         MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
 
@@ -215,19 +224,19 @@ class TestMainDoesNotPublishBelowThreshold:
         MockBlogWriter.return_value.write_post.assert_not_called()
         MockBlogWriter.return_value.commit_and_push.assert_not_called()
         db.mark_published.assert_not_called()
-        db.close.assert_called_once()
 
 
 class TestMainDoesNotPublishWhenRejected:
     @_weekly_patches
     def test_does_not_publish_when_reject_reason_set(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config()
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
         db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
 
         MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
 
@@ -244,13 +253,14 @@ class TestMainDoesNotPublishWhenRejected:
 class TestCommitAndPushIntegration:
     @_weekly_patches
     def test_does_not_mark_published_when_push_fails(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config()
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
         db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
 
         MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
 
@@ -274,13 +284,14 @@ class TestCommitAndPushIntegration:
 
     @_weekly_patches
     def test_does_not_push_when_write_fails(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config()
-        db = MockDB.return_value
+        config = _make_config()
+        db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
         db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
 
         MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
 
@@ -300,27 +311,28 @@ class TestCommitAndPushIntegration:
 class TestHistoricalContextInjection:
     @_weekly_patches
     def test_historical_context_injected_when_enabled(
-        self, *, mock_load_config, MockDB, MockPipeline, MockParser,
+        self, *, mock_ctx, MockPipeline, MockParser,
         MockBlogWriter, mock_monitoring,
     ):
-        mock_load_config.return_value = _make_config(historical_enabled=True)
-        db = MockDB.return_value
+        config = _make_config(historical_enabled=True)
+        db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
         db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
 
         MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
 
         result = _make_pipeline_result(final_score=5.0)
         MockPipeline.return_value.run.return_value = result
 
-        mock_ctx = MagicMock()
-        mock_ctx.theme_description = "Error handling patterns"
-        mock_ctx.commits = [{"sha": "old123", "message": "old commit", "repo_name": "old-repo"}]
+        mock_theme_ctx = MagicMock()
+        mock_theme_ctx.theme_description = "Error handling patterns"
+        mock_theme_ctx.commits = [{"sha": "old123", "message": "old commit", "repo_name": "old-repo"}]
 
         with patch("synthesis.theme_selector.ThemeSelector") as MockThemeSelector:
             mock_ts = MockThemeSelector.return_value
             mock_ts.should_inject.return_value = True
-            mock_ts.select.return_value = mock_ctx
+            mock_ts.select.return_value = mock_theme_ctx
 
             import weekly_digest
             weekly_digest.main()
@@ -333,26 +345,3 @@ class TestHistoricalContextInjection:
             historical = [c for c in commits_passed if c.get("historical")]
             assert len(historical) == 1
             assert historical[0]["sha"] == "old123"
-
-
-class TestUpdateMonitoring:
-    def test_handles_missing_sync_script(self):
-        """When the sync script doesn't exist, subprocess.run is not called."""
-        import weekly_digest
-
-        with patch("weekly_digest.Path") as MockPath:
-            mock_script = MagicMock()
-            mock_script.exists.return_value = False
-            MockPath.return_value.parent.__truediv__ = MagicMock(return_value=mock_script)
-
-            with patch("weekly_digest.subprocess.run") as mock_run:
-                weekly_digest._update_monitoring()
-                mock_run.assert_not_called()
-
-    def test_handles_exception_gracefully(self):
-        """Exceptions inside _update_monitoring are swallowed."""
-        import weekly_digest
-
-        with patch("weekly_digest.Path") as MockPath:
-            MockPath.side_effect = OSError("broken")
-            weekly_digest._update_monitoring()

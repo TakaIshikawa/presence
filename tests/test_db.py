@@ -1649,36 +1649,36 @@ class TestTopPerformingPosts:
 # ---------------------------------------------------------------------------
 
 class TestTransactionBehaviour:
-    def test_insert_message_commits_immediately(self, db, sample_message):
+    def test_insert_message_commits_immediately(self, file_db, sample_message):
         """Each insert commits, so data survives a fresh connection."""
-        db.insert_claude_message(**sample_message)
+        file_db.insert_claude_message(**sample_message)
 
         # Open second connection to same file to prove data is persisted
-        db2 = Database(str(db.db_path))
+        db2 = Database(str(file_db.db_path))
         db2.connect()
         assert db2.is_message_processed(sample_message["message_uuid"]) is True
         db2.close()
 
-    def test_insert_commit_commits_immediately(self, db, sample_commit):
-        db.insert_commit(**sample_commit)
+    def test_insert_commit_commits_immediately(self, file_db, sample_commit):
+        file_db.insert_commit(**sample_commit)
 
-        db2 = Database(str(db.db_path))
+        db2 = Database(str(file_db.db_path))
         db2.connect()
         assert db2.is_commit_processed(sample_commit["commit_sha"]) is True
         db2.close()
 
-    def test_multiple_inserts_are_independent(self, db, sample_content):
+    def test_multiple_inserts_are_independent(self, file_db, sample_content):
         """Failure of one insert should not roll back others."""
-        db.insert_generated_content(**sample_content)
+        file_db.insert_generated_content(**sample_content)
         try:
             # This will fail because batch_id UNIQUE constraint is not
             # relevant here; instead we rely on a known invariant—
             # each insert_generated_content call commits on its own.
-            db.insert_generated_content(**sample_content)
+            file_db.insert_generated_content(**sample_content)
         except Exception:
             pass
         # First insert should still be there
-        rows = db.get_unpublished_content("x_post", min_score=0)
+        rows = file_db.get_unpublished_content("x_post", min_score=0)
         assert len(rows) >= 1
 
     def test_insert_pipeline_run_with_filter_stats(self, db):

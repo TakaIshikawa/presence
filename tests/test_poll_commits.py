@@ -132,7 +132,7 @@ class TestDailyCapIntegration:
         now_iso = datetime.now(timezone.utc).isoformat()
         for i in range(3):
             cid = db.insert_generated_content(
-                "x_post", ["sha"], ["uuid"], f"post {i}", 8.0, "ok"
+                "x_thread", ["sha"], ["uuid"], f"post {i}", 8.0, "ok"
             )
             db.conn.execute(
                 "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
@@ -140,13 +140,13 @@ class TestDailyCapIntegration:
             )
         db.conn.commit()
 
-        posts_today = db.count_posts_today("x_post")
+        posts_today = db.count_posts_today("x_thread")
         assert is_daily_cap_reached(posts_today, max_daily=3) is True
 
     def test_cap_allows_synthesis_below_limit(self, db):
         now_iso = datetime.now(timezone.utc).isoformat()
         cid = db.insert_generated_content(
-            "x_post", ["sha"], ["uuid"], "post 0", 8.0, "ok"
+            "x_thread", ["sha"], ["uuid"], "post 0", 8.0, "ok"
         )
         db.conn.execute(
             "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
@@ -154,7 +154,7 @@ class TestDailyCapIntegration:
         )
         db.conn.commit()
 
-        posts_today = db.count_posts_today("x_post")
+        posts_today = db.count_posts_today("x_thread")
         assert is_daily_cap_reached(posts_today, max_daily=3) is False
 
 
@@ -163,7 +163,7 @@ class TestRetryLogicIntegration:
 
     def _insert_unpublished(self, db, content="retry me", score=8.0):
         return db.insert_generated_content(
-            content_type="x_post",
+            content_type="x_thread",
             source_commits=["sha1"],
             source_messages=["uuid1"],
             content=content,

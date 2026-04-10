@@ -406,6 +406,45 @@ class TestMarkActionDismissed:
         assert row["status"] == "dismissed"
 
 
+# -- update_action_payload tests -----------------------------------------------
+
+
+class TestUpdateActionPayload:
+    def test_writes_payload_to_empty_action(self, bridge, cultivate_db):
+        bridge.update_action_payload("act-2", {"execution_type": "reply", "tweet_id": "tw-500"})
+
+        row = cultivate_db.execute(
+            "SELECT payload FROM actions WHERE id = 'act-2'"
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        assert payload["execution_type"] == "reply"
+        assert payload["tweet_id"] == "tw-500"
+
+    def test_merges_with_existing_payload(self, bridge, cultivate_db):
+        # act-1 has existing payload: {"tweet_id": "tw-200", "tweet_content": "Just shipped v2"}
+        bridge.update_action_payload("act-1", {"execution_type": "like", "resolved_at": "2026-04-09"})
+
+        row = cultivate_db.execute(
+            "SELECT payload FROM actions WHERE id = 'act-1'"
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        # Existing fields preserved
+        assert payload["tweet_id"] == "tw-200"
+        assert payload["tweet_content"] == "Just shipped v2"
+        # New fields added
+        assert payload["execution_type"] == "like"
+        assert payload["resolved_at"] == "2026-04-09"
+
+    def test_overwrites_existing_key(self, bridge, cultivate_db):
+        bridge.update_action_payload("act-1", {"tweet_id": "tw-new"})
+
+        row = cultivate_db.execute(
+            "SELECT payload FROM actions WHERE id = 'act-1'"
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        assert payload["tweet_id"] == "tw-new"
+
+
 # -- PersonContext serialization tests ----------------------------------------
 
 

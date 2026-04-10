@@ -301,6 +301,126 @@ class TestFollow:
         assert "Blocked" in result.error
 
 
+# --- XClient.get_user_tweets() ---
+
+
+class TestGetUserTweets:
+    def test_returns_tweet_list(self):
+        client, mock_tweepy = make_x_client()
+
+        tweet1 = MagicMock()
+        tweet1.id = 100
+        tweet1.text = "Hello world"
+        tweet1.created_at = None
+        tweet1.public_metrics = {"like_count": 5}
+        tweet1.reply_settings = "everyone"
+
+        response = MagicMock()
+        response.data = [tweet1]
+        mock_tweepy.get_users_tweets.return_value = response
+
+        result = client.get_user_tweets("user123", count=10)
+
+        assert len(result) == 1
+        assert result[0]["id"] == "100"
+        assert result[0]["text"] == "Hello world"
+        assert result[0]["reply_settings"] == "everyone"
+        assert result[0]["public_metrics"] == {"like_count": 5}
+
+    def test_returns_empty_on_no_data(self):
+        client, mock_tweepy = make_x_client()
+        response = MagicMock()
+        response.data = None
+        mock_tweepy.get_users_tweets.return_value = response
+
+        result = client.get_user_tweets("user123")
+
+        assert result == []
+
+    def test_returns_empty_on_error(self):
+        import tweepy
+
+        client, mock_tweepy = make_x_client()
+        mock_tweepy.get_users_tweets.side_effect = tweepy.TweepyException("Rate limit")
+
+        result = client.get_user_tweets("user123")
+
+        assert result == []
+
+    def test_passes_user_auth(self):
+        client, mock_tweepy = make_x_client()
+        response = MagicMock()
+        response.data = None
+        mock_tweepy.get_users_tweets.return_value = response
+
+        client.get_user_tweets("user123")
+
+        _, kwargs = mock_tweepy.get_users_tweets.call_args
+        assert kwargs["user_auth"] is True
+
+    def test_clamps_max_results_to_100(self):
+        client, mock_tweepy = make_x_client()
+        response = MagicMock()
+        response.data = None
+        mock_tweepy.get_users_tweets.return_value = response
+
+        client.get_user_tweets("user123", count=200)
+
+        _, kwargs = mock_tweepy.get_users_tweets.call_args
+        assert kwargs["max_results"] == 100
+
+    def test_clamps_min_results_to_5(self):
+        client, mock_tweepy = make_x_client()
+        response = MagicMock()
+        response.data = None
+        mock_tweepy.get_users_tweets.return_value = response
+
+        client.get_user_tweets("user123", count=1)
+
+        _, kwargs = mock_tweepy.get_users_tweets.call_args
+        assert kwargs["max_results"] == 5
+
+    def test_limits_results_to_count(self):
+        client, mock_tweepy = make_x_client()
+
+        tweets = []
+        for i in range(10):
+            t = MagicMock()
+            t.id = i
+            t.text = f"Tweet {i}"
+            t.created_at = None
+            t.public_metrics = {}
+            t.reply_settings = "everyone"
+            tweets.append(t)
+
+        response = MagicMock()
+        response.data = tweets
+        mock_tweepy.get_users_tweets.return_value = response
+
+        result = client.get_user_tweets("user123", count=5)
+
+        assert len(result) == 5
+
+    def test_handles_missing_optional_attrs(self):
+        client, mock_tweepy = make_x_client()
+
+        tweet = MagicMock(spec=[])
+        tweet.id = 42
+        tweet.text = "minimal"
+        tweet.created_at = None
+
+        response = MagicMock()
+        response.data = [tweet]
+        mock_tweepy.get_users_tweets.return_value = response
+
+        result = client.get_user_tweets("user123", count=5)
+
+        assert len(result) == 1
+        assert result[0]["id"] == "42"
+        assert result[0]["public_metrics"] == {}
+        assert result[0]["reply_settings"] == "everyone"
+
+
 # --- XClient.get_mentions() ---
 
 
