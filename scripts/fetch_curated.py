@@ -9,8 +9,7 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from config import load_config
-from storage.db import Database
+from runner import script_context
 from knowledge.embeddings import get_embedding_provider
 from knowledge.store import KnowledgeStore
 from knowledge.ingest import InsightExtractor, ingest_curated_post
@@ -60,70 +59,64 @@ def main():
     )
     logger = logging.getLogger(__name__)
 
-    config = load_config()
+    with script_context() as (config, db):
+        if not config.embeddings:
+            logger.error("embeddings not configured")
+            sys.exit(1)
 
-    if not config.embeddings:
-        logger.error("embeddings not configured")
-        sys.exit(1)
+        if not config.curated_sources:
+            logger.info("No curated sources configured")
+            sys.exit(0)
 
-    if not config.curated_sources:
-        logger.info("No curated sources configured")
-        sys.exit(0)
+        # Initialize
+        embedder = get_embedding_provider(
+            config.embeddings.provider,
+            config.embeddings.api_key,
+            config.embeddings.model
+        )
 
-    # Initialize
-    db = Database(config.paths.database)
-    db.connect()
-    db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
+        store = KnowledgeStore(db.conn, embedder)
+        extractor = InsightExtractor(config.anthropic.api_key, config.synthesis.model)
 
-    embedder = get_embedding_provider(
-        config.embeddings.provider,
-        config.embeddings.api_key,
-        config.embeddings.model
-    )
+        x_client = XClient(
+            config.x.api_key,
+            config.x.api_secret,
+            config.x.access_token,
+            config.x.access_token_secret
+        )
 
-    store = KnowledgeStore(db.conn, embedder)
-    extractor = InsightExtractor(config.anthropic.api_key, config.synthesis.model)
+        # Fetch from curated X accounts
+        logger.info("=== Fetching from curated X accounts ===")
+        for account in config.curated_sources.x_accounts:
+            logger.info(f"Fetching @{account.identifier}...")
+            tweets = fetch_user_tweets(x_client, account.identifier, limit=5)
 
-    x_client = XClient(
-        config.x.api_key,
-        config.x.api_secret,
-        config.x.access_token,
-        config.x.access_token_secret
-    )
+            for tweet in tweets:
+                if store.exists("curated_x", tweet["id"]):
+                    logger.debug(f"Skipping {tweet['id']} (already exists)")
+                    continue
 
-    # Fetch from curated X accounts
-    logger.info("=== Fetching from curated X accounts ===")
-    for account in config.curated_sources.x_accounts:
-        logger.info(f"Fetching @{account.identifier}...")
-        tweets = fetch_user_tweets(x_client, account.identifier, limit=5)
+                # Skip retweets and very short tweets
+                if tweet["text"].startswith("RT @") or len(tweet["text"]) < 50:
+                    continue
 
-        for tweet in tweets:
-            if store.exists("curated_x", tweet["id"]):
-                logger.debug(f"Skipping {tweet['id']} (already exists)")
-                continue
+                logger.info(f"Processing tweet {tweet['id']}...")
+                try:
+                    ingest_curated_post(
+                        store=store,
+                        extractor=extractor,
+                        post_id=tweet["id"],
+                        content=tweet["text"],
+                        url=tweet["url"],
+                        author=account.identifier,
+                        license_type=account.license
+                    )
+                    logger.info(f"Ingested tweet {tweet['id']}")
+                    time.sleep(1)  # Rate limiting
+                except Exception as e:
+                    logger.error(f"Failed to ingest tweet {tweet['id']}: {e}")
 
-            # Skip retweets and very short tweets
-            if tweet["text"].startswith("RT @") or len(tweet["text"]) < 50:
-                continue
-
-            logger.info(f"Processing tweet {tweet['id']}...")
-            try:
-                ingest_curated_post(
-                    store=store,
-                    extractor=extractor,
-                    post_id=tweet["id"],
-                    content=tweet["text"],
-                    url=tweet["url"],
-                    author=account.identifier,
-                    license_type=account.license
-                )
-                logger.info(f"Ingested tweet {tweet['id']}")
-                time.sleep(1)  # Rate limiting
-            except Exception as e:
-                logger.error(f"Failed to ingest tweet {tweet['id']}: {e}")
-
-    db.close()
-    logger.info("=== Done ===")
+        logger.info("=== Done ===")
 
 
 if __name__ == "__main__":
