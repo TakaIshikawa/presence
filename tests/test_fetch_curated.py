@@ -30,12 +30,10 @@ def _make_tweet(tweet_id="999", text="A substantial tweet with enough content"):
 class TestFetchUserTweets:
     def test_returns_tweet_dicts(self):
         x_client = MagicMock()
-        user_data = MagicMock()
-        user_data.id = 12345
-        x_client.client.get_user.return_value = MagicMock(data=user_data)
-        x_client.client.get_users_tweets.return_value = MagicMock(
-            data=[_make_tweet(tweet_id="100", text="Hello world")]
-        )
+        x_client.get_user_id.return_value = "12345"
+        x_client.get_user_tweets.return_value = [
+            {"id": "100", "text": "Hello world"},
+        ]
 
         result = fetch_user_tweets(x_client, "testuser", limit=5)
 
@@ -43,10 +41,12 @@ class TestFetchUserTweets:
         assert result[0]["id"] == "100"
         assert result[0]["text"] == "Hello world"
         assert "testuser" in result[0]["url"]
+        x_client.get_user_id.assert_called_once_with("testuser")
+        x_client.get_user_tweets.assert_called_once_with("12345", count=5)
 
     def test_user_not_found(self):
         x_client = MagicMock()
-        x_client.client.get_user.return_value = MagicMock(data=None)
+        x_client.get_user_id.return_value = None
 
         result = fetch_user_tweets(x_client, "nonexistent")
 
@@ -54,7 +54,7 @@ class TestFetchUserTweets:
 
     def test_api_error(self):
         x_client = MagicMock()
-        x_client.client.get_user.side_effect = Exception("Rate limited")
+        x_client.get_user_id.side_effect = Exception("Rate limited")
 
         result = fetch_user_tweets(x_client, "testuser")
 

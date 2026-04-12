@@ -37,6 +37,19 @@ class XClient:
             self._username = me.data.username
         return self._username
 
+    def get_user_id(self, username: str) -> Optional[str]:
+        """Resolve a username to a user ID.
+
+        Returns None if user not found or API error.
+        """
+        try:
+            user = self.client.get_user(username=username)
+            if user.data:
+                return str(user.data.id)
+            return None
+        except tweepy.TweepyException:
+            return None
+
     def post(self, text: str) -> PostResult:
         """Post a single tweet."""
         try:

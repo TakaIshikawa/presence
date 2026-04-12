@@ -99,27 +99,57 @@ class CrossModelEvaluator:
     def _build_calibration_section(
         resonated: list[dict] = None,
         low_resonance: list[dict] = None,
+        engagement_stats: dict = None,
     ) -> str:
         """Build engagement calibration section from real audience data."""
-        if not resonated and not low_resonance:
-            return ""
+        parts = []
 
-        lines = [
-            "ENGAGEMENT REALITY CHECK — calibrate your scoring with real audience data:"
-        ]
-        if resonated:
-            lines.append("\nPosts that GOT engagement (likes/replies/retweets):")
-            for p in resonated[:3]:
-                lines.append(f"- \"{p['content'][:200]}\"")
-        if low_resonance:
-            lines.append("\nPosts that got ZERO engagement (audience scrolled past):")
-            for p in low_resonance[:3]:
-                lines.append(f"- \"{p['content'][:200]}\"")
-        lines.append(
-            "\nUse these to calibrate: if a candidate resembles the zero-engagement "
-            "posts, score ENGAGEMENT_POTENTIAL 5 or below regardless of writing quality."
-        )
-        return "\n".join(lines)
+        # Quantitative accuracy report
+        if engagement_stats and engagement_stats.get("total_classified", 0) >= 10:
+            stats_lines = [
+                "EVALUATOR ACCURACY REPORT — your historical scoring track record:"
+            ]
+            s7_total = engagement_stats.get("scored_7plus_total", 0)
+            s7_zero = engagement_stats.get("scored_7plus_zero_engagement", 0)
+            s7_pct = engagement_stats.get("scored_7plus_zero_pct", 0)
+            if s7_total > 0:
+                stats_lines.append(
+                    f"- You scored {s7_total} posts at 7.0+. "
+                    f"Of those, {s7_zero} ({s7_pct}%) got ZERO engagement."
+                )
+            avg_res = engagement_stats.get("avg_eval_score_resonated")
+            avg_low = engagement_stats.get("avg_eval_score_low_resonance")
+            if avg_res is not None and avg_low is not None:
+                stats_lines.append(
+                    f"- Average score for posts that resonated: {avg_res}. "
+                    f"For zero-engagement posts: {avg_low}."
+                )
+            stats_lines.append(
+                "RECALIBRATE: Score 7+ only if the post will ACTUALLY provoke a reaction. "
+                "If uncertain, score 5-6. A harsh false negative beats another false positive."
+            )
+            parts.append("\n".join(stats_lines))
+
+        # Example-based calibration
+        if resonated or low_resonance:
+            lines = [
+                "ENGAGEMENT REALITY CHECK — calibrate your scoring with real audience data:"
+            ]
+            if resonated:
+                lines.append("\nPosts that GOT engagement (likes/replies/retweets):")
+                for p in resonated[:3]:
+                    lines.append(f"- \"{p['content'][:200]}\"")
+            if low_resonance:
+                lines.append("\nPosts that got ZERO engagement (audience scrolled past):")
+                for p in low_resonance[:3]:
+                    lines.append(f"- \"{p['content'][:200]}\"")
+            lines.append(
+                "\nUse these to calibrate: if a candidate resembles the zero-engagement "
+                "posts, score ENGAGEMENT_POTENTIAL 5 or below regardless of writing quality."
+            )
+            parts.append("\n".join(lines))
+
+        return "\n\n".join(parts)
 
     def evaluate(
         self,
@@ -130,6 +160,7 @@ class CrossModelEvaluator:
         negative_examples: list[str] = None,
         calibration_resonated: list[dict] = None,
         calibration_low_resonance: list[dict] = None,
+        engagement_stats: dict = None,
     ) -> ComparisonResult:
         """Evaluate multiple candidates comparatively and return ranking with feedback."""
         template = self._load_prompt()
@@ -151,7 +182,7 @@ class CrossModelEvaluator:
 
         negative_examples_section = self._build_negative_section(negative_examples)
         engagement_calibration_section = self._build_calibration_section(
-            calibration_resonated, calibration_low_resonance
+            calibration_resonated, calibration_low_resonance, engagement_stats
         )
 
         filled = template.format(

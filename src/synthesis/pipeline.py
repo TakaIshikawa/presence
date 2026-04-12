@@ -1,5 +1,6 @@
 """Multi-stage synthesis pipeline for content generation."""
 
+import json
 import logging
 import random
 import re
@@ -126,7 +127,9 @@ class SynthesisPipeline:
         anthropic_timeout: float = 300.0,
         embedder=None,
         semantic_threshold: float = 0.82,
+        knowledge_store=None,
     ):
+        self.api_key = api_key
         self.generator = ContentGenerator(api_key, generator_model, timeout=anthropic_timeout)
         self.evaluator = CrossModelEvaluator(api_key, evaluator_model, timeout=anthropic_timeout)
         self.refiner = ContentRefiner(
@@ -141,6 +144,7 @@ class SynthesisPipeline:
         self.num_candidates = num_candidates
         self.embedder = embedder
         self.semantic_threshold = semantic_threshold
+        self.knowledge_store = knowledge_store
 
     # Character limits per content type
     CHAR_LIMITS = {
@@ -232,6 +236,27 @@ class SynthesisPipeline:
             + "\n".join(topics)
             + "\n\n"
         )
+
+    def _build_pattern_context(self) -> str:
+        """Build pattern context from latest analysis for injection into generator."""
+        raw = self.db.get_meta("pattern_analysis")
+        if not raw or not isinstance(raw, str):
+            return ""
+
+        try:
+            analysis = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+
+        rules = analysis.get("actionable_rules", [])
+        if not rules:
+            return ""
+
+        lines = ["ENGAGEMENT PATTERNS (learned from audience data — follow these):"]
+        for rule in rules:
+            lines.append(f"- {rule}")
+        lines.append("")
+        return "\n".join(lines)
 
     def _filter_semantic_duplicates(self, candidates: list[str]) -> list[str]:
         """Remove candidates semantically similar to recently published content."""
@@ -343,6 +368,9 @@ class SynthesisPipeline:
             quality="resonated", content_type=content_type, limit=3
         )
 
+        # Stage 0.5: Engagement calibration stats
+        engagement_stats = self.db.get_engagement_calibration_stats(content_type)
+
         # Build negative examples with source annotations for the evaluator
         negative_examples = []
         for p in too_specific_posts:
@@ -364,6 +392,20 @@ class SynthesisPipeline:
 
         # Stage 2: Multi-candidate generation with format variation
         avoidance_context = self._build_avoidance_context()
+        pattern_context = self._build_pattern_context()
+
+        # Stage 1.5: Trend context from curated sources
+        trend_context = ""
+        if self.knowledge_store:
+            from synthesis.trend_context import TrendContextBuilder
+            trend_builder = TrendContextBuilder(
+                knowledge_store=self.knowledge_store,
+                api_key=self.api_key,
+                model=self.generator.model,
+                db=self.db,
+            )
+            trend_context = trend_builder.build_context()
+
         format_directives = self._select_format_directives(self.num_candidates, content_type)
         candidates = self.generator.generate_candidates(
             prompts=prompts,
@@ -373,6 +415,8 @@ class SynthesisPipeline:
             num_candidates=self.num_candidates,
             format_directives=format_directives,
             avoidance_context=avoidance_context,
+            pattern_context=pattern_context,
+            trend_context=trend_context,
         )
         candidate_texts = [c.content for c in candidates]
 
@@ -435,6 +479,7 @@ class SynthesisPipeline:
             negative_examples=negative_examples or None,
             calibration_resonated=resonated_posts or None,
             calibration_low_resonance=low_resonance_posts or None,
+            engagement_stats=engagement_stats,
         )
 
         best_idx = comparison.ranking[0] if comparison.ranking else 0
