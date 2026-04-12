@@ -160,6 +160,99 @@ class TestGetEmbeddingProvider:
             get_embedding_provider("nonexistent", "fake-key")
 
 
+# --- KnowledgeItem ---
+
+
+class TestKnowledgeItemToDict:
+    def test_to_dict_includes_expected_keys(self):
+        item = _make_item()
+        result = item.to_dict()
+
+        expected_keys = {
+            "id", "source_type", "source_id", "source_url", "author",
+            "content", "insight", "attribution_required", "approved"
+        }
+        assert set(result.keys()) == expected_keys
+
+    def test_to_dict_excludes_embedding_and_created_at(self):
+        from datetime import datetime
+
+        item = _make_item(embedding=[0.1, 0.2, 0.3])
+        # Manually set created_at since _make_item sets it to None
+        item.created_at = datetime.now()
+
+        result = item.to_dict()
+
+        assert "embedding" not in result
+        assert "created_at" not in result
+
+    def test_to_dict_values_match_fields(self):
+        item = _make_item(
+            source_type="own_post",
+            source_id="post-123",
+            source_url="https://example.com/post",
+            author="test_author",
+            content="test content here",
+            insight="key insight here",
+            attribution_required=True,
+            approved=False,
+        )
+        item.id = 42  # Set id explicitly
+
+        result = item.to_dict()
+
+        assert result["id"] == 42
+        assert result["source_type"] == "own_post"
+        assert result["source_id"] == "post-123"
+        assert result["source_url"] == "https://example.com/post"
+        assert result["author"] == "test_author"
+        assert result["content"] == "test content here"
+        assert result["insight"] == "key insight here"
+        assert result["attribution_required"] is True
+        assert result["approved"] is False
+
+    def test_to_dict_with_none_optional_fields(self):
+        item = _make_item(
+            source_url=None,
+            insight=None,
+        )
+        item.id = None
+
+        result = item.to_dict()
+
+        assert result["id"] is None
+        assert result["source_url"] is None
+        assert result["insight"] is None
+        # Non-optional fields should still be present
+        assert result["source_type"] == "curated_x"
+        assert result["content"] == "test content"
+
+    def test_to_dict_with_all_fields_populated(self):
+        item = _make_item(
+            source_type="curated_article",
+            source_id="article-789",
+            source_url="https://example.com/article",
+            author="article_author",
+            content="full article content",
+            insight="extracted insight",
+            attribution_required=True,
+            approved=True,
+        )
+        item.id = 100
+
+        result = item.to_dict()
+
+        # Verify all 9 expected fields are present and populated
+        assert len(result) == 9
+        assert all(key in result for key in [
+            "id", "source_type", "source_id", "source_url", "author",
+            "content", "insight", "attribution_required", "approved"
+        ])
+        assert result["id"] == 100
+        assert result["source_type"] == "curated_article"
+        assert result["source_id"] == "article-789"
+
+
 # --- KnowledgeStore ---
 
 
