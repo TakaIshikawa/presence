@@ -101,6 +101,8 @@ class ContentGenerator:
         num_candidates: int = 3,
         format_directives: list[str] | None = None,
         avoidance_context: str = "",
+        pattern_context: str = "",
+        trend_context: str = "",
     ) -> list[GeneratedContent]:
         """Generate multiple candidates with temperature and format variation."""
         type_config = self.CONTENT_TYPE_CONFIG.get(
@@ -162,6 +164,8 @@ class ContentGenerator:
                 format_directive=format_directive,
                 historical_section=historical_section,
                 avoidance_context=avoidance_context,
+                pattern_context=pattern_context,
+                trend_context=trend_context,
             )
 
             response = self.client.messages.create(

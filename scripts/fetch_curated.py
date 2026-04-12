@@ -17,37 +17,25 @@ from output.x_client import XClient
 
 
 def fetch_user_tweets(x_client, username: str, limit: int = 10) -> list[dict]:
-    """Fetch recent tweets from a user."""
+    """Fetch recent tweets from a user using XClient methods."""
     logger = logging.getLogger(__name__)
     try:
-        # Get user ID first
-        user = x_client.client.get_user(username=username)
-        if not user.data:
+        user_id = x_client.get_user_id(username)
+        if not user_id:
             logger.error(f"User @{username} not found")
             return []
 
-        user_id = user.data.id
-
-        # Get recent tweets
-        tweets = x_client.client.get_users_tweets(
-            user_id,
-            max_results=limit,
-            tweet_fields=["created_at", "public_metrics"]
-        )
-
-        if not tweets.data:
-            return []
-
+        tweets = x_client.get_user_tweets(user_id, count=limit)
         return [
             {
-                "id": str(tweet.id),
-                "text": tweet.text,
-                "url": f"https://x.com/{username}/status/{tweet.id}"
+                "id": t["id"],
+                "text": t["text"],
+                "url": f"https://x.com/{username}/status/{t['id']}",
             }
-            for tweet in tweets.data
+            for t in tweets
         ]
     except Exception as e:
-        logger.error(f"Error fetching @{username}: {e}")
+        logger.error(f"Error fetching tweets for @{username}: {e}")
         return []
 
 

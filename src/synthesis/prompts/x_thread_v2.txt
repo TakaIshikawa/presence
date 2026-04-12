@@ -11,6 +11,8 @@ The founder's voice characteristics:
 {format_directive}
 {historical_section}
 {avoidance_context}
+{pattern_context}
+{trend_context}
 ---
 
 Given: Recent prompts (their intent) and commits (what they built).

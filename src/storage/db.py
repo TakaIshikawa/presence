@@ -68,6 +68,14 @@ class Database:
             self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
         if pr_cols and "filter_stats" not in pr_cols:
             self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
+        # Migrate: create meta table if missing
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self.conn.commit()
 
     # Claude messages
@@ -517,6 +525,111 @@ class Database:
             (quality, content_type, limit)
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    # Engagement calibration stats
+    def get_engagement_calibration_stats(self, content_type: str = "x_post") -> dict:
+        """Quantitative correlation between eval scores and real engagement.
+
+        Returns dict with total counts, average eval scores per outcome,
+        and accuracy metrics for posts scored 7+.
+        """
+        stats = {
+            "total_classified": 0,
+            "resonated_count": 0,
+            "low_resonance_count": 0,
+            "avg_eval_score_resonated": None,
+            "avg_eval_score_low_resonance": None,
+            "scored_7plus_total": 0,
+            "scored_7plus_zero_engagement": 0,
+            "scored_7plus_zero_pct": 0.0,
+        }
+
+        # Average eval_score by auto_quality
+        cursor = self.conn.execute(
+            """SELECT auto_quality, COUNT(*) AS cnt, AVG(eval_score) AS avg_score
+               FROM generated_content
+               WHERE content_type = ? AND auto_quality IS NOT NULL
+               GROUP BY auto_quality""",
+            (content_type,)
+        )
+        for row in cursor.fetchall():
+            quality = row[0]
+            count = row[1]
+            avg = row[2]
+            stats["total_classified"] += count
+            if quality == "resonated":
+                stats["resonated_count"] = count
+                stats["avg_eval_score_resonated"] = round(avg, 2) if avg else None
+            elif quality == "low_resonance":
+                stats["low_resonance_count"] = count
+                stats["avg_eval_score_low_resonance"] = round(avg, 2) if avg else None
+
+        # Accuracy of 7+ scores
+        cursor = self.conn.execute(
+            """SELECT
+                   COUNT(*) AS total_7plus,
+                   SUM(CASE WHEN auto_quality = 'low_resonance' THEN 1 ELSE 0 END)
+                       AS zero_engagement_7plus
+               FROM generated_content
+               WHERE content_type = ? AND eval_score >= 7.0
+                 AND auto_quality IS NOT NULL""",
+            (content_type,)
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            stats["scored_7plus_total"] = row[0]
+            stats["scored_7plus_zero_engagement"] = row[1] or 0
+            stats["scored_7plus_zero_pct"] = round(
+                (row[1] or 0) / row[0] * 100, 1
+            ) if row[0] > 0 else 0.0
+
+        return stats
+
+    def get_all_classified_posts(self, content_type: str = "x_post") -> dict:
+        """Get all auto-classified posts grouped by quality for pattern analysis.
+
+        Returns {"resonated": [...], "low_resonance": [...]} with latest engagement scores.
+        """
+        result = {"resonated": [], "low_resonance": []}
+        for quality in ("resonated", "low_resonance"):
+            cursor = self.conn.execute(
+                """SELECT gc.id, gc.content, gc.eval_score, gc.auto_quality,
+                          COALESCE(pe.engagement_score, 0) AS engagement_score
+                   FROM generated_content gc
+                   LEFT JOIN (
+                       SELECT content_id, engagement_score,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY content_id ORDER BY fetched_at DESC
+                              ) AS rn
+                       FROM post_engagement
+                   ) pe ON pe.content_id = gc.id AND pe.rn = 1
+                   WHERE gc.auto_quality = ? AND gc.content_type = ?
+                   ORDER BY pe.engagement_score DESC""",
+                (quality, content_type)
+            )
+            result[quality] = [dict(row) for row in cursor.fetchall()]
+        return result
+
+    # Meta key-value store
+    def get_meta(self, key: str) -> Optional[str]:
+        """Get a meta value by key."""
+        cursor = self.conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Set a meta value (upsert)."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """INSERT INTO meta (key, value, updated_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value, updated_at = excluded.updated_at""",
+            (key, value, now)
+        )
+        self.conn.commit()
 
     # Reply queue
     def is_reply_processed(self, inbound_tweet_id: str) -> bool:

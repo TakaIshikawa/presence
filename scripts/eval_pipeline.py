@@ -30,6 +30,12 @@ def main():
             )
             semantic_threshold = config.embeddings.semantic_dedup_threshold
 
+        # Initialize knowledge store for trend context
+        knowledge_store = None
+        if embedder and config.curated_sources:
+            from knowledge.store import KnowledgeStore
+            knowledge_store = KnowledgeStore(db.conn, embedder)
+
         pipeline = SynthesisPipeline(
             api_key=config.anthropic.api_key,
             generator_model=config.synthesis.model,
@@ -39,6 +45,7 @@ def main():
             anthropic_timeout=config.timeouts.anthropic_seconds,
             embedder=embedder,
             semantic_threshold=semantic_threshold,
+            knowledge_store=knowledge_store,
         )
 
         # Gather prompts and commits for different time windows

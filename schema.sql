@@ -199,3 +199,10 @@ CREATE TABLE IF NOT EXISTS reply_state (
     last_mention_id TEXT,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Key-value store for cached analytics (pattern analysis, trend themes, etc.)
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);

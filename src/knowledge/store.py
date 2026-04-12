@@ -196,6 +196,43 @@ class KnowledgeStore:
             ))
         return items
 
+    def get_recent_by_source_type(
+        self,
+        source_type: str,
+        limit: int = 20,
+        max_age_hours: int = 72,
+    ) -> list[KnowledgeItem]:
+        """Get recent knowledge items by source type, ordered by recency.
+
+        Used for trend context: fetch recent curated tweets without
+        requiring a semantic search query.
+        """
+        cursor = self.conn.execute(
+            """SELECT * FROM knowledge
+               WHERE source_type = ?
+                 AND approved = 1
+                 AND created_at >= datetime('now', ?)
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (source_type, f'-{max_age_hours} hours', limit)
+        )
+        items = []
+        for row in cursor.fetchall():
+            items.append(KnowledgeItem(
+                id=row["id"],
+                source_type=row["source_type"],
+                source_id=row["source_id"],
+                source_url=row["source_url"],
+                author=row["author"],
+                content=row["content"],
+                insight=row["insight"],
+                embedding=None,  # Skip deserialization — not needed for trend context
+                attribution_required=bool(row["attribution_required"]),
+                approved=bool(row["approved"]),
+                created_at=row["created_at"],
+            ))
+        return items
+
     def link_to_content(self, content_id: int, knowledge_id: int, relevance: float) -> None:
         """Track which knowledge was used in generated content."""
         self.conn.execute(

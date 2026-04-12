@@ -25,6 +25,7 @@ from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
+from knowledge.store import KnowledgeStore
 
 
 def estimate_tokens(texts: list[str]) -> int:
@@ -78,6 +79,11 @@ def main():
             )
             semantic_threshold = config.embeddings.semantic_dedup_threshold
 
+        # Initialize knowledge store for trend context
+        knowledge_store = None
+        if embedder and config.curated_sources:
+            knowledge_store = KnowledgeStore(db.conn, embedder)
+
         pipeline = SynthesisPipeline(
             api_key=config.anthropic.api_key,
             generator_model=config.synthesis.model,
@@ -87,6 +93,7 @@ def main():
             anthropic_timeout=config.timeouts.anthropic_seconds,
             embedder=embedder,
             semantic_threshold=semantic_threshold,
+            knowledge_store=knowledge_store,
         )
         x_client = XClient(
             config.x.api_key,
