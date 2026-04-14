@@ -823,6 +823,16 @@ class Database:
         )
         return cursor.fetchone()[0]
 
+    def get_pipeline_runs(self, content_type: str, since_days: int = 30) -> list[dict]:
+        """Get pipeline runs with parsed filter_stats."""
+        cursor = self.conn.execute(
+            """SELECT * FROM pipeline_runs
+               WHERE content_type = ? AND created_at >= datetime('now', ?)
+               ORDER BY created_at DESC""",
+            (content_type, f'-{since_days} days')
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     # Pipeline runs
     def insert_pipeline_run(
         self,
