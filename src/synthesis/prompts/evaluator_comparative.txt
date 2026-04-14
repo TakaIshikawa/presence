@@ -28,6 +28,7 @@ Rank these candidates from best to worst. For each candidate, assess:
    - Score 7-8: Strong "yes, exactly" or "wait, no" reaction. You'd like, reply, or bookmark it.
    - Score 5-6: Reads fine but provokes nothing — you'd keep scrolling. No emotional reaction.
    - Score 1-4: Generic wisdom that blends into the feed
+   - AUTOMATIC LOW SCORE (5 max): Posts that state a principle without showing how you discovered it. "The best X is Y" without a specific story of discovery = 5 max, no matter how well-written.
    - HOOK: Does the opening line create tension, curiosity, or surprise? A strong hook is essential — if the first line doesn't stop scrolling, nothing else matters.
    - SHAREABILITY: Would someone quote-tweet this or send it to a friend? This matters more than whether the reader can "apply" the insight.
    - PENALIZE: Posts that sound like AI-generated thought-leadership content
@@ -38,15 +39,18 @@ Rank these candidates from best to worst. For each candidate, assess:
    - AUTOMATIC REJECT: Any post with fabricated statistics not present in source material
 
 3. NARRATIVE_SPECIFICITY: Does the post show a journey the reader can connect with?
-   - Score HIGH: Shows the process — what went wrong, what was tried, what surprised you. The reader can see themselves in the story.
-   - Score LOW: States a takeaway without showing how you got there
+   - Score 9-10: The reader can name the exact moment something changed. You can picture the screen, the error, the aha.
+   - Score 7-8: Clear sequence of events with a genuine surprise or shift.
+   - Score 5-6: Generic process description. Could be anyone's day.
+   - Score 1-4: Abstract principle with no supporting experience.
    - NOTE: Concrete details alone don't drive engagement. What matters is whether the details serve a narrative that provokes recognition or surprise.
-   - PENALIZE: "AI isn't about X—it's about Y" or any abstract aphorism
+   - PENALIZE: "AI isn't about X—it's about Y" or any abstract aphorism stated without evidence
 
 4. RAWNESS: Does it feel like a real person, not a content machine?
    - Score HIGH: Messy, honest, specific — "spent 3 hours on the wrong thing"
-   - Score LOW: Polished, structured, could be any AI consultant's tweet
-   - PENALIZE: Em-dash contrast pivots, "the real X is Y" structures, thought-leader cadence
+   - Score LOW: Polished, structured, could be any AI consultant's tweet. If you could swap the subject (AI/data/cloud/testing) and it still reads the same, it's generic.
+   - PENALIZE: Em-dash contrast pivots UNLESS preceded by a specific story or discovery. "X isn't about Y—it's about Z" with no evidence = penalize. "After debugging for two hours, I realized X isn't about Y—it's about Z" = acceptable.
+   - PENALIZE: "the real X is Y" structures, thought-leader cadence
 
 5. VOICE: Does it match the founder's direct, practical style?
 
@@ -60,6 +64,12 @@ IMPORTANT: Posts that are polished and well-structured but generic should score 
 A raw, specific, slightly messy post that tells a real story should outscore a polished aphorism.
 
 Posts that make people FEEL something (recognition, surprise, disagreement) outperform posts that inform without provoking a reaction. When in doubt, ask: "Would someone share this?" not "Is this well-written?"
+
+SCORING ANCHORS — calibrate against these:
+
+A previous evaluator scored "The best AI workflows aren't about perfect prompts—it's about visibility" at 8.0. That post got ZERO engagement. The score was wrong — it should have been 5. Generic principle, no story of discovery, reads like a LinkedIn post.
+
+If a candidate resembles that pattern more than a specific story, score ENGAGEMENT_POTENTIAL at 5 or below.
 
 Provide your evaluation in this exact format:
 

@@ -20,6 +20,7 @@ class PatternAnalysis:
     actionable_rules: list[str]
     analyzed_at: str
     raw_response: str
+    confidence: str = "low"  # "low" (<10 resonated), "medium" (10-25), "high" (>25)
 
 
 class PatternAnalyzer:
@@ -60,7 +61,18 @@ class PatternAnalyzer:
             messages=[{"role": "user", "content": prompt}],
         )
 
-        return self._parse_response(response.content[0].text)
+        analysis = self._parse_response(response.content[0].text)
+
+        # Set confidence based on sample size
+        n = len(resonated)
+        if n >= 25:
+            analysis.confidence = "high"
+        elif n >= 10:
+            analysis.confidence = "medium"
+        else:
+            analysis.confidence = "low"
+
+        return analysis
 
     def _build_prompt(
         self, resonated: list[dict], low_resonance: list[dict]
@@ -74,6 +86,18 @@ class PatternAnalyzer:
             f"{p['content'][:300]}"
             for p in low_resonance[:20]  # Cap to avoid prompt bloat
         )
+
+        if len(resonated) < 10:
+            rule_phrasing = (
+                'Use "Consider..." or "Try..." phrasing since the sample size '
+                f'is small ({len(resonated)} posts). Avoid "Always..." or "Never...".'
+            )
+        else:
+            rule_phrasing = (
+                'Use imperative phrasing ("Always open with...", "Never state..."). '
+                'E.g., "Always open with a specific moment of surprise or confusion, '
+                'not a general statement"'
+            )
 
         return f"""You are analyzing X (Twitter) posts from a tech founder's account to understand what drives engagement.
 
@@ -90,7 +114,7 @@ Return your analysis as JSON wrapped in <json></json> tags with exactly these fi
 - "positive_patterns": 3-5 patterns seen in engaging posts (be specific about structure, not just "good writing")
 - "negative_patterns": 3-5 patterns seen in zero-engagement posts
 - "key_differences": 3-5 direct contrasts between the two groups
-- "actionable_rules": 3-5 concrete, imperative rules a content generator should follow to maximize engagement (e.g., "Always open with a specific moment of surprise or confusion, not a general statement")
+- "actionable_rules": 3-5 concrete rules a content generator should follow to maximize engagement. {rule_phrasing}
 
 Focus on structural patterns (opening style, sentence structure, use of specifics, narrative arc) rather than topic choice. Be concrete and actionable.
 

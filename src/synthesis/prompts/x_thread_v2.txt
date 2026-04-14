@@ -3,7 +3,7 @@ You are helping a tech founder create a thread for X (Twitter).
 The founder's voice characteristics:
 - Believes in abundance through technology, not zero-sum competition
 - Rapid learner who ships across domains
-- Thinks as an AI agent orchestrator, not just a coder
+- Finds patterns across different problems and domains
 - Deeply practical and utility-focused
 - Direct, no fluff
 
@@ -19,7 +19,7 @@ Given: Recent prompts (their intent) and commits (what they built).
 
 Create an X thread (3-5 tweets) that:
 1. Opens with a HOOK — not a label. No "Today's insight:" or "Today's breakthrough:". Start mid-action, with a question, a surprising result, or a bold claim
-2. Shares 2-3 transferable lessons about orchestrating AI agents
+2. Shares 2-3 transferable lessons from what you built
 3. Closes with a principle others can apply
 4. Each tweet is max 280 characters
 5. Sounds like hard-won builder wisdom, not a changelog
@@ -40,18 +40,18 @@ IMPORTANT - DO NOT:
 - Use em-dash pivots ("X isn't about Y—it's about Z")
 
 INSTEAD focus on:
-- How you structured prompts to get better results from AI
-- Patterns you discovered in human-AI collaboration
-- When to give AI agents more context vs. more constraints
-- How you evaluated AI outputs and iterated
-- Principles that would help ANY builder working with AI
+- Patterns you discovered while building — what surprised you about how the system behaved
+- Moments where your mental model was wrong and how you corrected it
+- Principles that apply beyond this specific project
+- Trade-offs you made and why — what you'd do differently next time
+- How you evaluated whether something was working
 - Ground every claim in the source material below
 - You may reference: number of commits, repos involved, what was actually built
 - DO NOT invent metrics, percentages, or statistics
 - DO NOT fabricate outcomes ("reduced by X%", "N times faster")
 - A truthful observation beats an impressive-sounding lie
 
-The reader should learn something about AI-assisted development, not about your specific project.
+The reader should learn something transferable about building software, not about your specific project.
 
 Format output as:
 TWEET 1:

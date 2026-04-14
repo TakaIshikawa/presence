@@ -64,6 +64,7 @@ def main():
             "analyzed_at": analysis.analyzed_at,
             "resonated_count": res_count,
             "low_resonance_count": low_count,
+            "confidence": analysis.confidence,
         }))
 
         logger.info(

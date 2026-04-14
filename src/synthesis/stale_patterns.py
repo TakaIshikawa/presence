@@ -11,7 +11,6 @@ import re
 # Overused rhetorical patterns to reject
 STALE_PATTERNS = [
     re.compile(r"(?i)^AI\s"),
-    re.compile(r"(?i)isn.t about .{5,40}[—\-].{0,5}it.s about"),
     re.compile(r"(?i)\bbreakthrough\b"),
     re.compile(r"(?i)perfect (prompts?|memory|agents?|handoffs?|context)"),
     re.compile(r"\d+ commits? across \d+"),
@@ -22,7 +21,6 @@ STALE_PATTERNS = [
     re.compile(r"(?i)^the (secret|trick) to\b"),
     re.compile(r"(?i)^stop \w[\w ]{0,30}\.\s*start \w"),
     re.compile(r"(?i)\w[\w ]{0,30} (is|are) dead\.\s*long live\b"),
-    re.compile(r"(?i)^I spent \d+\s*(hours?|days?|weeks?|months?)"),
     re.compile(r"(?i)^most (people|developers?|devs|engineers?) don.t\b"),
     re.compile(r"(?i)^everyone (says|preaches|thinks|knows|believes)\b"),
 ]

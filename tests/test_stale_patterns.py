@@ -20,19 +20,6 @@ class TestStalePatternMatching:
             ("AI is transforming everything", "starts with 'AI '"),
             ("AI agents are the future", "starts with 'AI ' (uppercase)"),
             ("ai systems need better design", "starts with 'ai ' (lowercase)"),
-            # Pattern: r"(?i)isn.t about .{5,40}[—\-].{0,5}it.s about"
-            (
-                "Development isn't about writing code—it's about solving problems",
-                "'isn't about X—it's about Y'",
-            ),
-            (
-                "Success isn't about the tools - it's about the mindset",
-                "'isn't about X - it's about Y' (hyphen)",
-            ),
-            (
-                "Leadership isn't about authority—it's about trust",
-                "'isn't about X—it's about Y' (em dash)",
-            ),
             # Pattern: r"(?i)\bbreakthrough\b"
             ("This is a major breakthrough in AI", "contains 'breakthrough'"),
             ("Breakthrough discovery today", "contains 'Breakthrough' (capitalized)"),
@@ -78,12 +65,6 @@ class TestStalePatternMatching:
             ("REST is dead. Long live GraphQL", "X is dead. Long live Y"),
             ("Monoliths are dead. Long live microservices", "X are dead. Long live Y"),
             ("Waterfall is dead. Long live agile", "X is dead. Long live Y"),
-            # Pattern: r"(?i)^I spent \d+\s*(hours?|days?|weeks?|months?)"
-            ("I spent 3 hours debugging this", "I spent N hours"),
-            ("I spent 2 days refactoring", "I spent N days"),
-            ("I spent 4 weeks on this feature", "I spent N weeks"),
-            ("I spent 6 months building this", "I spent N months"),
-            ("I spent 1 hour learning regex", "I spent 1 hour"),
             # Pattern: r"(?i)^most (people|developers?|devs|engineers?) don.t\b"
             ("Most developers don't understand async", "Most developers don't"),
             ("Most people don't know about this", "Most people don't"),
@@ -132,6 +113,11 @@ class TestCleanTextPassing:
             "Code review feedback: looks good",  # Contains colon but not stale pattern
             "10 changes in 5 files",  # Numbers but not 'commits across' pattern
             "It's about quality",  # 'it's about' but no 'isn't about' before it
+            # These structures sometimes work in resonated posts — evaluator handles nuance
+            "Development isn't about writing code—it's about solving problems",
+            "Success isn't about the tools - it's about the mindset",
+            "I spent 3 hours debugging this",
+            "I spent 2 days refactoring",
         ],
     )
     def test_clean_text_passes(self, text):
@@ -157,6 +143,6 @@ class TestStalePatternsStructure:
 
     def test_expected_pattern_count(self):
         """Verify we have the expected number of patterns."""
-        # As of this test file creation, there are 14 patterns
-        # Update this if patterns are added/removed
-        assert len(STALE_PATTERNS) == 14
+        # 12 patterns: removed "isn't about X—it's about Y" and "I spent N hours"
+        # (evaluator handles these with nuance instead of hard-filtering)
+        assert len(STALE_PATTERNS) == 12
