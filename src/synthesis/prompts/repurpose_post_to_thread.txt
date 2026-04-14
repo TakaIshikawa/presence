@@ -1,0 +1,13 @@
+A developer's X post resonated with their audience. Your job is to expand the core idea into a 3-5 tweet thread that goes deeper.
+
+Original post (high engagement):
+"{original_content}"
+
+Expand this into a thread that:
+- Opens with the same hook energy (don't just restate — evolve the idea)
+- Adds concrete examples, code snippets, or specific details the post hinted at
+- Each tweet should stand alone as a useful thought
+- Final tweet should land on a specific, memorable takeaway
+- Do NOT repeat the original post verbatim as tweet 1
+
+Format: TWEET 1:\n...\n\nTWEET 2:\n... etc.
