@@ -87,31 +87,31 @@ class SynthesisPipeline:
         (
             "mid_action",
             "THREAD HOOK: Start Tweet 1 mid-action. Drop the reader into a moment. "
-            "'I was halfway through a refactor when the agent did something unexpected.' "
+            "'I was halfway through a refactor when something unexpected happened.' "
             "No labels, no preamble — open with a scene.",
         ),
         (
             "bold_claim",
             "THREAD HOOK: Open Tweet 1 with a bold, specific claim the thread will prove. "
-            "'Most AI agent failures happen before a single line of code runs.' "
+            "'Most system failures happen before a single line of code runs.' "
             "Make it falsifiable and surprising. The thread is the evidence.",
         ),
         (
             "question_hook",
             "THREAD HOOK: Start Tweet 1 with a genuine question that came up in your work. "
-            "'Why do agents silently give up instead of asking for help?' "
+            "'Why do systems silently give up instead of failing loudly?' "
             "The thread walks through what you found. End with the question evolved, not answered.",
         ),
         (
             "surprising_result",
             "THREAD HOOK: Lead Tweet 1 with a concrete, unexpected result. "
-            "'Gave two agents the same task. One finished in 3 minutes, the other looped for an hour.' "
+            "'Gave two approaches the same problem. One finished in 3 minutes, the other looped for an hour.' "
             "State the outcome first — the thread explains why.",
         ),
         (
             "contrarian_thread",
             "THREAD HOOK: Open Tweet 1 by challenging a common practice. "
-            "'Stop giving your AI agent detailed instructions. Seriously.' "
+            "'Stop writing detailed specs before building. Seriously.' "
             "The thread unpacks what works better and why.",
         ),
     ]
@@ -230,10 +230,24 @@ class SynthesisPipeline:
         if not topics:
             return ""
 
+        # Detect dominant topic and add explicit warning
+        dominant_warning = ""
+        all_text = " ".join(t.lower() for t in topics)
+        agent_mentions = len(re.findall(r'\bagent', all_text))
+        if len(topics) > 0 and agent_mentions / len(topics) > 0.6:
+            dominant_warning = (
+                f"\nWARNING: {agent_mentions}/{len(topics)} of your recent posts "
+                f"are about AI agents. Your audience has seen enough of this topic. "
+                f"Write about something DIFFERENT — architecture, testing, "
+                f"data modeling, performance, developer tooling, or any other "
+                f"aspect of what you built.\n"
+            )
+
         return (
             "TOPICS RECENTLY COVERED (do NOT repeat these themes — "
             "find a DIFFERENT angle from the source material):\n"
             + "\n".join(topics)
+            + dominant_warning
             + "\n\n"
         )
 
@@ -252,11 +266,77 @@ class SynthesisPipeline:
         if not rules:
             return ""
 
-        lines = ["ENGAGEMENT PATTERNS (learned from audience data — follow these):"]
+        confidence = analysis.get("confidence", "low")
+        resonated_count = analysis.get("resonated_count", 0)
+
+        if confidence == "high":
+            header = "ENGAGEMENT PATTERNS (learned from audience data — follow these):"
+        elif confidence == "medium":
+            header = "ENGAGEMENT PATTERNS (learned from audience data — follow these when relevant):"
+        else:
+            header = (
+                f"ENGAGEMENT PATTERNS (based on limited data — {resonated_count} "
+                f"resonated posts. Use as suggestions, not hard rules):"
+            )
+
+        lines = [header]
         for rule in rules:
             lines.append(f"- {rule}")
         lines.append("")
         return "\n".join(lines)
+
+    def _filter_topic_saturated(
+        self, candidates: list[str], threshold: float = 0.65
+    ) -> tuple[list[str], int]:
+        """Reject candidates whose average similarity to recent posts exceeds threshold.
+
+        Unlike semantic dedup (max similarity to any single post), this catches
+        candidates thematically similar to the bulk of recent content.
+
+        Returns (filtered_candidates, rejection_count).
+        """
+        if not self.embedder:
+            return candidates, 0
+
+        recent = self.db.get_recent_published_content_all(limit=10)
+        recent_with_embeddings = [
+            r for r in recent if r.get("content_embedding")
+        ]
+        if len(recent_with_embeddings) < 3:
+            return candidates, 0
+
+        from knowledge.embeddings import deserialize_embedding, cosine_similarity
+
+        recent_embeddings = [
+            deserialize_embedding(r["content_embedding"])
+            for r in recent_with_embeddings
+        ]
+
+        try:
+            candidate_embeddings = self.embedder.embed_batch(candidates)
+        except Exception as e:
+            logger.warning(
+                f"  Topic saturation filter skipped (embedding error): {e}"
+            )
+            return candidates, 0
+
+        filtered = []
+        rejected = 0
+        for candidate, c_emb in zip(candidates, candidate_embeddings):
+            avg_sim = sum(
+                cosine_similarity(c_emb, r_emb)
+                for r_emb in recent_embeddings
+            ) / len(recent_embeddings)
+            if avg_sim > threshold:
+                logger.debug(
+                    f"  Rejected topic-saturated (avg_sim={avg_sim:.3f}): "
+                    f"{candidate[:40]}..."
+                )
+                rejected += 1
+            else:
+                filtered.append(candidate)
+
+        return filtered, rejected
 
     def _filter_semantic_duplicates(self, candidates: list[str]) -> list[str]:
         """Remove candidates semantically similar to recently published content."""
@@ -277,7 +357,13 @@ class SynthesisPipeline:
             for r in recent_with_embeddings
         ]
 
-        candidate_embeddings = self.embedder.embed_batch(candidates)
+        try:
+            candidate_embeddings = self.embedder.embed_batch(candidates)
+        except Exception as e:
+            logger.warning(
+                f"  Semantic dedup skipped (embedding error): {e}"
+            )
+            return candidates
 
         filtered = []
         for candidate, c_emb in zip(candidates, candidate_embeddings):
@@ -432,11 +518,17 @@ class SynthesisPipeline:
         # Stage 2.7: Stale pattern filter
         candidate_texts, stale_pattern_rejected, stale_patterns_matched = self._filter_stale_patterns(candidate_texts)
 
+        # Stage 2.75: Topic saturation filter
+        topic_saturated_rejected = 0
+        if candidate_texts:
+            candidate_texts, topic_saturated_rejected = self._filter_topic_saturated(candidate_texts)
+
         filter_stats = {
             "char_limit_rejected": char_limit_rejected,
             "repetition_rejected": repetition_rejected,
             "stale_pattern_rejected": stale_pattern_rejected,
             "stale_patterns_matched": stale_patterns_matched,
+            "topic_saturated_rejected": topic_saturated_rejected,
         }
 
         # Stage 2.8: Semantic dedup filter

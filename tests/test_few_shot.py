@@ -152,8 +152,9 @@ class TestEffortBragPattern:
         "I spent 2 weeks building an agent framework",
         "I spent 6 months on this side project",
     ])
-    def test_matches(self, text):
-        assert _both_detect(text)
+    def test_no_longer_matches(self, text):
+        """'I spent N hours' pattern was removed — resonated posts often use it."""
+        assert not has_stale_pattern(text)
 
     @pytest.mark.parametrize("text", [
         "The team spent 3 days on the migration",
@@ -197,7 +198,6 @@ class TestMostPeopleDontPattern:
 class TestExistingPatternsRegression:
     @pytest.mark.parametrize("text", [
         "AI is changing everything",
-        "Coding isn't about syntax—it's about thinking",
         "This is a major breakthrough for LLMs",
         "perfect prompts are a myth",
         "42 commits across 8 repos",
@@ -245,18 +245,19 @@ class TestStalePatternDetection:
         assert has_stale_pattern("AI will change how we code")
         assert has_stale_pattern("AI agents are the future")
 
-    def test_isnt_about_its_about_pattern(self):
-        assert has_stale_pattern("Coding isn't about syntax—it's about thinking")
-        assert has_stale_pattern("This isn't about syntax - it's about clarity")
-        assert has_stale_pattern("Testing isn't about test coverage — it's about confidence")
+    def test_isnt_about_its_about_no_longer_stale(self):
+        """Pattern removed — evaluator handles with nuance."""
+        assert not has_stale_pattern("Coding isn't about syntax—it's about thinking")
+        assert not has_stale_pattern("This isn't about syntax - it's about clarity")
 
     def test_unpopular_opinion_engagement_bait(self):
         assert has_stale_pattern("Unpopular opinion: tests are overrated")
         assert has_stale_pattern("Controversial take: microservices are harmful")
 
-    def test_i_spent_effort_brag(self):
-        assert has_stale_pattern("I spent 3 hours debugging this")
-        assert has_stale_pattern("I spent 2 weeks building this framework")
+    def test_i_spent_no_longer_stale(self):
+        """Pattern removed — resonated posts often use it."""
+        assert not has_stale_pattern("I spent 3 hours debugging this")
+        assert not has_stale_pattern("I spent 2 weeks building this framework")
 
     def test_most_people_dont_pattern(self):
         assert has_stale_pattern("Most developers don't understand async")
@@ -727,14 +728,16 @@ class TestStalePatternFiltering:
         assert has_stale_pattern("The AI model works well") is False
 
     def test_isnt_about_its_about(self):
+        # Pattern removed in P3 — evaluator handles nuance instead
         assert has_stale_pattern(
             "Engineering isn't about writing code—it's about solving problems"
-        ) is True
+        ) is False
 
     def test_isnt_about_its_about_with_dash(self):
+        # Pattern removed in P3 — evaluator handles nuance instead
         assert has_stale_pattern(
             "Success isn't about perfection-it's about progress"
-        ) is True
+        ) is False
 
     def test_breakthrough(self):
         assert has_stale_pattern("This is a breakthrough in AI") is True

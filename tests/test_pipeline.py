@@ -543,6 +543,7 @@ class TestPipelineResult:
         assert result.filter_stats["repetition_rejected"] == 0
         assert result.filter_stats["stale_pattern_rejected"] == 0
         assert result.filter_stats["stale_patterns_matched"] == []
+        assert result.filter_stats["topic_saturated_rejected"] == 0
 
     @patch("synthesis.pipeline.ContentRefiner")
     @patch("synthesis.pipeline.CrossModelEvaluator")

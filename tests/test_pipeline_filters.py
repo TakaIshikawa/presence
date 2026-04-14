@@ -203,7 +203,9 @@ class TestFilterStalePatterns:
         assert len(filtered) == 1
         assert filtered[0] == "This is a clean post without stale patterns."
 
-    def test_rejects_isnt_about_pattern(self, pipeline):
+    def test_allows_isnt_about_pattern(self, pipeline):
+        """The 'isn't about X—it's about Y' pattern was removed from stale filters.
+        Evaluator handles this with nuance instead of hard-filtering."""
         candidates = [
             "Debugging isn't about the tools—it's about the mindset.",
             "Error handling requires discipline.",
@@ -211,8 +213,8 @@ class TestFilterStalePatterns:
 
         filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
-        assert len(filtered) == 1
-        assert "Error handling" in filtered[0]
+        assert len(filtered) == 2
+        assert rejected == 0
 
     def test_rejects_breakthrough(self, pipeline):
         candidates = [
@@ -320,7 +322,9 @@ class TestFilterStalePatterns:
         assert len(filtered) == 1
         assert "Old approaches" in filtered[0]
 
-    def test_rejects_i_spent_time_pattern(self, pipeline):
+    def test_allows_i_spent_time_pattern(self, pipeline):
+        """The 'I spent N hours' pattern was removed from stale filters.
+        Resonated posts often use this structure."""
         candidates = [
             "I spent 3 hours debugging this one issue.",
             "I spent 2 weeks building this feature.",
@@ -329,8 +333,8 @@ class TestFilterStalePatterns:
 
         filtered, rejected, matched_patterns = pipeline._filter_stale_patterns(candidates)
 
-        assert len(filtered) == 1
-        assert "After a few" in filtered[0]
+        assert len(filtered) == 3
+        assert rejected == 0
 
     def test_rejects_most_people_dont_pattern(self, pipeline):
         candidates = [
@@ -536,3 +540,68 @@ class TestEnforceCharLimit:
         assert len(filtered) == 4
         assert "Valid short post" in filtered
         assert "Another valid one" in filtered
+
+
+# --- Topic saturation filter tests ---
+
+
+class TestFilterTopicSaturated:
+    """Test the _filter_topic_saturated method."""
+
+    def test_passes_all_without_embedder(self, pipeline, mock_db):
+        """Without embedder, all candidates pass through."""
+        pipeline.embedder = None
+        candidates = ["post about agents", "post about testing"]
+        filtered, rejected = pipeline._filter_topic_saturated(candidates)
+        assert filtered == candidates
+        assert rejected == 0
+
+    def test_passes_with_insufficient_history(self, pipeline, mock_db):
+        """With fewer than 3 embedded recent posts, skip filter."""
+        pipeline.embedder = MagicMock()
+        mock_db.get_recent_published_content_all.return_value = [
+            {"content": "post1", "content_embedding": b"\x00"},
+            {"content": "post2", "content_embedding": b"\x00"},
+        ]
+        candidates = ["candidate"]
+        filtered, rejected = pipeline._filter_topic_saturated(candidates)
+        assert filtered == candidates
+        assert rejected == 0
+
+    @patch("knowledge.embeddings.cosine_similarity")
+    @patch("knowledge.embeddings.deserialize_embedding")
+    def test_rejects_topic_saturated(self, mock_deser, mock_cos, pipeline, mock_db):
+        """Candidate with avg similarity > 0.65 to recent posts is rejected."""
+        pipeline.embedder = MagicMock()
+        pipeline.embedder.embed_batch.return_value = [[0.1, 0.2]]
+
+        mock_db.get_recent_published_content_all.return_value = [
+            {"content": f"post {i}", "content_embedding": b"\x00"}
+            for i in range(5)
+        ]
+        mock_deser.return_value = [0.1, 0.2]
+        mock_cos.return_value = 0.75  # Above 0.65 threshold
+
+        candidates = ["yet another agent post"]
+        filtered, rejected = pipeline._filter_topic_saturated(candidates)
+        assert filtered == []
+        assert rejected == 1
+
+    @patch("knowledge.embeddings.cosine_similarity")
+    @patch("knowledge.embeddings.deserialize_embedding")
+    def test_passes_diverse_candidate(self, mock_deser, mock_cos, pipeline, mock_db):
+        """Candidate with avg similarity < 0.65 passes through."""
+        pipeline.embedder = MagicMock()
+        pipeline.embedder.embed_batch.return_value = [[0.5, 0.6]]
+
+        mock_db.get_recent_published_content_all.return_value = [
+            {"content": f"post {i}", "content_embedding": b"\x00"}
+            for i in range(5)
+        ]
+        mock_deser.return_value = [0.1, 0.2]
+        mock_cos.return_value = 0.45  # Below 0.65 threshold
+
+        candidates = ["a post about database design"]
+        filtered, rejected = pipeline._filter_topic_saturated(candidates)
+        assert filtered == ["a post about database design"]
+        assert rejected == 0
