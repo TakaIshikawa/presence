@@ -1,0 +1,15 @@
+A developer's post/thread resonated with their audience. Generate a blog post outline and opening draft.
+
+Original content:
+"{original_content}"
+
+Generate:
+TITLE: [compelling title]
+
+OUTLINE:
+1. [section]
+2. [section]
+...
+
+DRAFT OPENING (2-3 paragraphs):
+[opening that captures the same energy as the original]

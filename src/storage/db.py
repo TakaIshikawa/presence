@@ -52,6 +52,8 @@ class Database:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_auto_quality ON generated_content(auto_quality)")
         if "content_embedding" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_embedding BLOB")
+        if "repurposed_from" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN repurposed_from INTEGER REFERENCES generated_content(id)")
         # Migrate reply_queue for cultivate enrichment
         rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
         if rq_cols and "relationship_context" not in rq_cols:
@@ -855,6 +857,54 @@ class Database:
              final_score, 1 if published else 0, content_id,
              outcome, rejection_reason,
              json.dumps(filter_stats) if filter_stats else None)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    # Content repurposing
+    def get_repurpose_candidates(
+        self, min_engagement: float = 10.0, max_age_days: int = 14
+    ) -> list[dict]:
+        """Find published posts with high engagement that haven't been repurposed yet.
+
+        Returns posts where:
+        - auto_quality = 'resonated' OR latest engagement_score >= min_engagement
+        - No existing generated_content has repurposed_from pointing to this id
+        - Published within max_age_days
+        """
+        cursor = self.conn.execute(
+            """SELECT gc.id, gc.content, gc.content_type, gc.eval_score,
+                      gc.published_at, pe.engagement_score
+               FROM generated_content gc
+               INNER JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               WHERE gc.published = 1
+                 AND (gc.auto_quality = 'resonated' OR pe.engagement_score >= ?)
+                 AND gc.published_at >= datetime('now', ?)
+                 AND gc.id NOT IN (SELECT repurposed_from FROM generated_content WHERE repurposed_from IS NOT NULL)
+               ORDER BY pe.engagement_score DESC""",
+            (min_engagement, f'-{max_age_days} days')
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def insert_repurposed_content(
+        self,
+        content_type: str,
+        source_content_id: int,
+        content: str,
+        eval_score: float,
+        eval_feedback: str,
+    ) -> int:
+        """Insert content that was repurposed from an existing post."""
+        cursor = self.conn.execute(
+            """INSERT INTO generated_content
+               (content_type, source_commits, source_messages, content,
+                eval_score, eval_feedback, repurposed_from)
+               VALUES (?, '[]', '[]', ?, ?, ?, ?)""",
+            (content_type, content, eval_score, eval_feedback, source_content_id)
         )
         self.conn.commit()
         return cursor.lastrowid
