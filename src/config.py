@@ -46,6 +46,7 @@ class SynthesisConfig:
     eval_model: str
     eval_threshold: float
     num_candidates: int
+    format_weighting_enabled: bool = True
 
 
 @dataclass
@@ -335,6 +336,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             eval_model=data["synthesis"].get("eval_model", _require(data, "synthesis", "model", section="synthesis")),
             eval_threshold=_require(data, "synthesis", "eval_threshold", section="synthesis"),
             num_candidates=data["synthesis"].get("num_candidates", 3),
+            format_weighting_enabled=data["synthesis"].get("format_weighting_enabled", True),
         ),
         polling=PollingConfig(
             interval_minutes=_require(data, "polling", "interval_minutes", section="polling"),
