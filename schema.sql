@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS post_engagement (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Track Bluesky engagement metrics (time-series)
+CREATE TABLE IF NOT EXISTS bluesky_engagement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    bluesky_uri TEXT NOT NULL,
+    like_count INTEGER DEFAULT 0,
+    repost_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    quote_count INTEGER DEFAULT 0,
+    engagement_score REAL,
+    fetched_at TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Track engagement predictions from EngagementPredictor
 CREATE TABLE IF NOT EXISTS engagement_predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,6 +186,8 @@ CREATE INDEX IF NOT EXISTS idx_github_commits_timestamp ON github_commits(timest
 CREATE INDEX IF NOT EXISTS idx_generated_content_type ON generated_content(content_type);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_content ON post_engagement(content_id);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_tweet ON post_engagement(tweet_id);
+CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id);
+CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_uri ON bluesky_engagement(bluesky_uri);
 
 -- Newsletter send tracking
 CREATE TABLE IF NOT EXISTS newsletter_sends (

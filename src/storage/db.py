@@ -80,6 +80,23 @@ class Database:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migrate: create bluesky_engagement table if missing
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS bluesky_engagement (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                bluesky_uri TEXT NOT NULL,
+                like_count INTEGER DEFAULT 0,
+                repost_count INTEGER DEFAULT 0,
+                reply_count INTEGER DEFAULT 0,
+                quote_count INTEGER DEFAULT 0,
+                engagement_score REAL,
+                fetched_at TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_uri ON bluesky_engagement(bluesky_uri)")
         self.conn.commit()
 
     # Claude messages
@@ -1315,3 +1332,146 @@ class Database:
             (content_id,)
         )
         self.conn.commit()
+
+    # Bluesky engagement tracking
+    def insert_bluesky_engagement(
+        self,
+        content_id: int,
+        bluesky_uri: str,
+        like_count: int,
+        repost_count: int,
+        reply_count: int,
+        quote_count: int,
+        engagement_score: float
+    ) -> int:
+        """Insert a Bluesky engagement metrics snapshot.
+
+        Args:
+            content_id: ID of the generated content
+            bluesky_uri: AT Protocol URI of the post
+            like_count: Number of likes
+            repost_count: Number of reposts
+            reply_count: Number of replies
+            quote_count: Number of quote posts
+            engagement_score: Computed engagement score
+
+        Returns:
+            ID of the inserted engagement record
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO bluesky_engagement
+               (content_id, bluesky_uri, like_count, repost_count,
+                reply_count, quote_count, engagement_score, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (content_id, bluesky_uri, like_count, repost_count,
+             reply_count, quote_count, engagement_score, now)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_bluesky_engagement(self, content_id: int) -> list[dict]:
+        """Get time-series of Bluesky engagement metrics for a post.
+
+        Args:
+            content_id: ID of the generated content
+
+        Returns:
+            List of engagement snapshots ordered by fetched_at
+        """
+        cursor = self.conn.execute(
+            """SELECT * FROM bluesky_engagement
+               WHERE content_id = ?
+               ORDER BY fetched_at ASC""",
+            (content_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_content_needing_bluesky_engagement(
+        self,
+        max_age_days: int = 7
+    ) -> list[dict]:
+        """Get content with bluesky_uri but no recent engagement fetch.
+
+        Args:
+            max_age_days: Only fetch for posts published within this many days
+
+        Returns:
+            List of content dicts needing Bluesky engagement fetch
+        """
+        cursor = self.conn.execute(
+            """SELECT gc.id, gc.bluesky_uri, gc.content, gc.published_at,
+                      be.fetched_at AS last_fetched
+               FROM generated_content gc
+               LEFT JOIN (
+                   SELECT content_id, MAX(fetched_at) AS fetched_at
+                   FROM bluesky_engagement
+                   GROUP BY content_id
+               ) be ON be.content_id = gc.id
+               WHERE gc.published = 1
+                 AND gc.bluesky_uri IS NOT NULL
+                 AND gc.published_at >= datetime('now', ?)
+                 AND (be.fetched_at IS NULL
+                      OR be.fetched_at < datetime('now', '-6 hours'))
+               ORDER BY gc.published_at DESC""",
+            (f'-{max_age_days} days',)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_combined_engagement(self, content_id: int) -> dict:
+        """Get unified engagement view combining X and Bluesky metrics.
+
+        Args:
+            content_id: ID of the generated content
+
+        Returns:
+            Dict with latest X metrics, Bluesky metrics, and combined score
+        """
+        # Get latest X engagement
+        x_cursor = self.conn.execute(
+            """SELECT like_count, retweet_count, reply_count, quote_count, engagement_score
+               FROM post_engagement
+               WHERE content_id = ?
+               ORDER BY fetched_at DESC LIMIT 1""",
+            (content_id,)
+        )
+        x_row = x_cursor.fetchone()
+
+        # Get latest Bluesky engagement
+        bsky_cursor = self.conn.execute(
+            """SELECT like_count, repost_count, reply_count, quote_count, engagement_score
+               FROM bluesky_engagement
+               WHERE content_id = ?
+               ORDER BY fetched_at DESC LIMIT 1""",
+            (content_id,)
+        )
+        bsky_row = bsky_cursor.fetchone()
+
+        result = {
+            'content_id': content_id,
+            'x_engagement': None,
+            'bluesky_engagement': None,
+            'combined_score': 0.0,
+        }
+
+        if x_row:
+            result['x_engagement'] = {
+                'like_count': x_row[0],
+                'retweet_count': x_row[1],
+                'reply_count': x_row[2],
+                'quote_count': x_row[3],
+                'engagement_score': x_row[4],
+            }
+            result['combined_score'] += x_row[4]
+
+        if bsky_row:
+            result['bluesky_engagement'] = {
+                'like_count': bsky_row[0],
+                'repost_count': bsky_row[1],
+                'reply_count': bsky_row[2],
+                'quote_count': bsky_row[3],
+                'engagement_score': bsky_row[4],
+            }
+            result['combined_score'] += bsky_row[4]
+
+        return result
