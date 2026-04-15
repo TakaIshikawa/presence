@@ -54,6 +54,8 @@ class Database:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_embedding BLOB")
         if "repurposed_from" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN repurposed_from INTEGER REFERENCES generated_content(id)")
+        if "bluesky_uri" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN bluesky_uri TEXT")
         # Migrate reply_queue for cultivate enrichment
         rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
         if rq_cols and "relationship_context" not in rq_cols:
@@ -240,6 +242,14 @@ class Database:
                SET published = 1, published_url = ?, tweet_id = ?, published_at = ?
                WHERE id = ?""",
             (url, tweet_id, now, content_id)
+        )
+        self.conn.commit()
+
+    def mark_published_bluesky(self, content_id: int, uri: str) -> None:
+        """Mark content as cross-posted to Bluesky by storing its AT URI."""
+        self.conn.execute(
+            "UPDATE generated_content SET bluesky_uri = ? WHERE id = ?",
+            (uri, content_id)
         )
         self.conn.commit()
 
