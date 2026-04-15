@@ -46,6 +46,7 @@ class TestSchemaInit:
         assert "published_at" in cols
         assert "curation_quality" in cols
         assert "auto_quality" in cols
+        assert "bluesky_uri" in cols
 
     def test_pipeline_runs_columns_exist(self, db):
         cols = {
@@ -1426,6 +1427,20 @@ class TestMarkPublished:
     def test_mark_published_nonexistent_id_is_noop(self, db):
         """Updating a nonexistent row should not raise."""
         db.mark_published(9999, "https://example.com")  # no error
+
+    def test_mark_published_bluesky_sets_uri(self, db, sample_content):
+        """Test marking content as published to Bluesky."""
+        cid = db.insert_generated_content(**sample_content)
+        db.mark_published_bluesky(cid, "at://did:plc:xyz/app.bsky.feed.post/abc123")
+
+        row = db.conn.execute(
+            "SELECT bluesky_uri FROM generated_content WHERE id = ?", (cid,)
+        ).fetchone()
+        assert row[0] == "at://did:plc:xyz/app.bsky.feed.post/abc123"
+
+    def test_mark_published_bluesky_nonexistent_id_is_noop(self, db):
+        """Updating a nonexistent row should not raise."""
+        db.mark_published_bluesky(9999, "at://did:plc:xyz/app.bsky.feed.post/abc")
 
 
 # ---------------------------------------------------------------------------

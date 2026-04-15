@@ -24,6 +24,7 @@ from ingestion.github_commits import GitHubClient
 from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
+from output.bluesky_client import BlueskyClient
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 from knowledge.store import KnowledgeStore
 from evaluation.engagement_predictor import EngagementPredictor
@@ -111,6 +112,14 @@ def main():
             config.x.access_token_secret
         )
 
+        # Initialize Bluesky client if configured
+        bluesky_client = None
+        if config.bluesky and config.bluesky.enabled:
+            bluesky_client = BlueskyClient(
+                config.bluesky.handle,
+                config.bluesky.app_password
+            )
+
         # Get last poll time from DB, or use fallback window
         last_poll = db.get_last_poll_time()
         if last_poll:
@@ -140,6 +149,18 @@ def main():
                 db.mark_published(item["id"], result.url, tweet_id=result.tweet_id)
                 logger.info(f"  Posted queued: {result.url}")
                 posted = True
+
+                # Cross-post to Bluesky if configured
+                if bluesky_client:
+                    from output.cross_poster import CrossPoster
+                    cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                    bsky_tweets = [cross_poster.adapt_for_bluesky(t, "x_thread") for t in tweets]
+                    bsky_result = bluesky_client.post_thread(bsky_tweets)
+                    if bsky_result.success:
+                        db.mark_published_bluesky(item["id"], bsky_result.uri)
+                        logger.info(f"  Cross-posted to Bluesky: {bsky_result.url}")
+                    else:
+                        logger.warning(f"  Bluesky cross-post failed (non-fatal): {bsky_result.error}")
             elif "429" in str(result.error):
                 logger.info(f"  Still rate limited, will retry next cycle")
                 rate_limited = True
@@ -350,6 +371,18 @@ def main():
                     logger.info(f"Posted: {result.url}")
                     posted = True
                     outcome = "published"
+
+                    # Cross-post to Bluesky if configured
+                    if bluesky_client:
+                        from output.cross_poster import CrossPoster
+                        cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                        bsky_tweets = [cross_poster.adapt_for_bluesky(t, "x_thread") for t in tweets]
+                        bsky_result = bluesky_client.post_thread(bsky_tweets)
+                        if bsky_result.success:
+                            db.mark_published_bluesky(content_id, bsky_result.uri)
+                            logger.info(f"Cross-posted to Bluesky: {bsky_result.url}")
+                        else:
+                            logger.warning(f"Bluesky cross-post failed (non-fatal): {bsky_result.error}")
                 else:
                     logger.error(f"Post failed: {result.error}")
                     outcome = "below_threshold"
