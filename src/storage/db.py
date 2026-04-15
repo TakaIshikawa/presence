@@ -1690,3 +1690,41 @@ class Database:
             (f'-{days} days',)
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    # Platform divergence analysis
+    def get_cross_platform_engagement(self, days: int = 60) -> list[dict]:
+        """Get engagement data for content published to both X and Bluesky.
+
+        Args:
+            days: Number of days to look back
+
+        Returns:
+            List of dicts with content_id, content_type, content_preview,
+            x_score, and bluesky_score for cross-posted content
+        """
+        cursor = self.conn.execute(
+            """SELECT gc.id AS content_id,
+                      gc.content_type,
+                      SUBSTR(gc.content, 1, 100) AS content_preview,
+                      COALESCE(pe.engagement_score, 0) AS x_score,
+                      COALESCE(be.engagement_score, 0) AS bluesky_score
+               FROM generated_content gc
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM bluesky_engagement
+               ) be ON be.content_id = gc.id AND be.rn = 1
+               WHERE gc.published = 1
+                 AND gc.tweet_id IS NOT NULL
+                 AND gc.bluesky_uri IS NOT NULL
+                 AND gc.published_at >= datetime('now', ?)
+                 AND (pe.engagement_score IS NOT NULL OR be.engagement_score IS NOT NULL)
+               ORDER BY gc.published_at DESC""",
+            (f'-{days} days',)
+        )
+        return [dict(row) for row in cursor.fetchall()]
