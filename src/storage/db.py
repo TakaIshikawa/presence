@@ -918,3 +918,126 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    # Engagement predictions
+    def insert_prediction(
+        self,
+        content_id: int,
+        predicted_score: float,
+        hook_strength: float = None,
+        specificity: float = None,
+        emotional_resonance: float = None,
+        novelty: float = None,
+        actionability: float = None,
+        prompt_version: str = None,
+    ) -> int:
+        """Store an engagement prediction for content."""
+        cursor = self.conn.execute(
+            """INSERT INTO engagement_predictions
+               (content_id, predicted_score, hook_strength, specificity,
+                emotional_resonance, novelty, actionability, prompt_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (content_id, predicted_score, hook_strength, specificity,
+             emotional_resonance, novelty, actionability, prompt_version)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def backfill_prediction_actuals(
+        self, content_id: int, actual_score: float
+    ) -> None:
+        """Update prediction with actual engagement score and error."""
+        # Get the predicted score
+        cursor = self.conn.execute(
+            """SELECT predicted_score FROM engagement_predictions
+               WHERE content_id = ?
+               ORDER BY created_at DESC LIMIT 1""",
+            (content_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return
+
+        predicted = row[0]
+        error = actual_score - predicted
+
+        self.conn.execute(
+            """UPDATE engagement_predictions
+               SET actual_engagement_score = ?, prediction_error = ?
+               WHERE content_id = ?""",
+            (actual_score, error, content_id)
+        )
+        self.conn.commit()
+
+    def get_prediction_accuracy(self, days: int = 30) -> dict:
+        """Calculate prediction accuracy metrics for the period.
+
+        Returns dict with:
+        - count: number of predictions with actuals
+        - mae: mean absolute error
+        - correlation: pearson correlation coefficient (if >= 3 samples)
+        - avg_predicted: average predicted score
+        - avg_actual: average actual score
+        """
+        cursor = self.conn.execute(
+            """SELECT predicted_score, actual_engagement_score, prediction_error,
+                      hook_strength, specificity, emotional_resonance,
+                      novelty, actionability
+               FROM engagement_predictions
+               WHERE actual_engagement_score IS NOT NULL
+                 AND created_at >= datetime('now', ?)
+               ORDER BY created_at DESC""",
+            (f'-{days} days',)
+        )
+        rows = cursor.fetchall()
+
+        if not rows:
+            return {
+                "count": 0,
+                "mae": None,
+                "correlation": None,
+                "avg_predicted": None,
+                "avg_actual": None,
+            }
+
+        predicted_scores = [row[0] for row in rows]
+        actual_scores = [row[1] for row in rows]
+        errors = [abs(row[2]) for row in rows]
+
+        mae = sum(errors) / len(errors)
+        avg_predicted = sum(predicted_scores) / len(predicted_scores)
+        avg_actual = sum(actual_scores) / len(actual_scores)
+
+        # Calculate Pearson correlation if we have enough samples
+        correlation = None
+        if len(rows) >= 3:
+            import statistics
+            try:
+                correlation = statistics.correlation(predicted_scores, actual_scores)
+            except statistics.StatisticsError:
+                correlation = None
+
+        # Per-criteria breakdown
+        criteria_breakdown = {}
+        for criterion, idx in [
+            ("hook_strength", 3),
+            ("specificity", 4),
+            ("emotional_resonance", 5),
+            ("novelty", 6),
+            ("actionability", 7),
+        ]:
+            values = [row[idx] for row in rows if row[idx] is not None]
+            if values:
+                criteria_breakdown[criterion] = {
+                    "avg": sum(values) / len(values),
+                    "count": len(values),
+                }
+
+        return {
+            "count": len(rows),
+            "mae": round(mae, 2),
+            "correlation": round(correlation, 3) if correlation is not None else None,
+            "avg_predicted": round(avg_predicted, 2),
+            "avg_actual": round(avg_actual, 2),
+            "criteria_breakdown": criteria_breakdown,
+        }

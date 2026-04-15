@@ -26,6 +26,7 @@ from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 from knowledge.store import KnowledgeStore
+from evaluation.engagement_predictor import EngagementPredictor
 
 
 def estimate_tokens(texts: list[str]) -> int:
@@ -84,6 +85,13 @@ def main():
         if embedder and config.curated_sources:
             knowledge_store = KnowledgeStore(db.conn, embedder)
 
+        # Initialize engagement predictor
+        engagement_predictor = EngagementPredictor(
+            api_key=config.anthropic.api_key,
+            model=config.synthesis.eval_model,
+            timeout=config.timeouts.anthropic_seconds,
+        )
+
         pipeline = SynthesisPipeline(
             api_key=config.anthropic.api_key,
             generator_model=config.synthesis.model,
@@ -94,6 +102,7 @@ def main():
             embedder=embedder,
             semantic_threshold=semantic_threshold,
             knowledge_store=knowledge_store,
+            engagement_predictor=engagement_predictor,
         )
         x_client = XClient(
             config.x.api_key,
@@ -290,6 +299,24 @@ def main():
             eval_score=pipeline_result.final_score,
             eval_feedback=pipeline_result.comparison.best_feedback,
         )
+
+        # Store engagement prediction if available
+        if pipeline_result.engagement_prediction_detail and content_id:
+            try:
+                detail = pipeline_result.engagement_prediction_detail
+                db.insert_prediction(
+                    content_id=content_id,
+                    predicted_score=detail["predicted_score"],
+                    hook_strength=detail.get("hook_strength"),
+                    specificity=detail.get("specificity"),
+                    emotional_resonance=detail.get("emotional_resonance"),
+                    novelty=detail.get("novelty"),
+                    actionability=detail.get("actionability"),
+                    prompt_version=detail.get("prompt_version", "v1"),
+                )
+                logger.info(f"  Stored engagement prediction: {detail['predicted_score']:.1f}")
+            except Exception as e:
+                logger.warning(f"Failed to store prediction (non-fatal): {e}")
 
         # Determine outcome and post if passes threshold
         passes = pipeline_result.final_score >= config.synthesis.eval_threshold * 10

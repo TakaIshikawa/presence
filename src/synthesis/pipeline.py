@@ -30,6 +30,8 @@ class PipelineResult:
     source_prompts: list[str]
     source_commits: list[str]
     filter_stats: Optional[dict] = None
+    predicted_engagement: Optional[float] = None
+    engagement_prediction_detail: Optional[dict] = None
 
 
 class SynthesisPipeline:
@@ -128,6 +130,7 @@ class SynthesisPipeline:
         embedder=None,
         semantic_threshold: float = 0.82,
         knowledge_store=None,
+        engagement_predictor=None,
     ):
         self.api_key = api_key
         self.generator = ContentGenerator(api_key, generator_model, timeout=anthropic_timeout)
@@ -145,6 +148,7 @@ class SynthesisPipeline:
         self.embedder = embedder
         self.semantic_threshold = semantic_threshold
         self.knowledge_store = knowledge_store
+        self.engagement_predictor = engagement_predictor
 
     # Character limits per content type
     CHAR_LIMITS = {
@@ -619,6 +623,37 @@ class SynthesisPipeline:
                 final_content = truncated or final_content[:char_limit]
                 logger.warning(f"  Hard truncated to {len(final_content)} chars")
 
+        # Stage 6: Engagement prediction (informational only)
+        predicted_engagement = None
+        engagement_prediction_detail = None
+        if self.engagement_predictor:
+            try:
+                from evaluation.engagement_predictor import EngagementPredictor
+                predictions = self.engagement_predictor.predict_batch(
+                    tweets=[{"id": "draft", "text": final_content}],
+                    prompt_version="v1",
+                )
+                if predictions:
+                    pred = predictions[0]
+                    predicted_engagement = pred.predicted_score
+                    engagement_prediction_detail = {
+                        "predicted_score": pred.predicted_score,
+                        "hook_strength": pred.hook_strength,
+                        "specificity": pred.specificity,
+                        "emotional_resonance": pred.emotional_resonance,
+                        "novelty": pred.novelty,
+                        "actionability": pred.actionability,
+                        "prompt_version": "v1",
+                    }
+                    logger.info(
+                        f"  Predicted engagement: {predicted_engagement:.1f} "
+                        f"(hook={pred.hook_strength:.1f}, spec={pred.specificity:.1f}, "
+                        f"emotion={pred.emotional_resonance:.1f}, "
+                        f"novelty={pred.novelty:.1f}, action={pred.actionability:.1f})"
+                    )
+            except Exception as e:
+                logger.warning(f"  Engagement prediction failed: {e}")
+
         return PipelineResult(
             batch_id=batch_id,
             candidates=candidate_texts,
@@ -629,4 +664,6 @@ class SynthesisPipeline:
             source_prompts=prompts,
             source_commits=[c["message"] for c in commits],
             filter_stats=filter_stats,
+            predicted_engagement=predicted_engagement,
+            engagement_prediction_detail=engagement_prediction_detail,
         )
