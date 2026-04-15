@@ -1,5 +1,6 @@
 """Knowledge store for accumulated insights."""
 
+import logging
 import sqlite3
 from typing import Optional
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from .embeddings import (
     deserialize_embedding,
     cosine_similarity
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -48,6 +51,8 @@ class KnowledgeStore:
 
     def add_item(self, item: KnowledgeItem) -> int:
         """Add a knowledge item with embedding."""
+        logger.debug("Adding knowledge item: source_type=%s source_id=%s", item.source_type, item.source_id)
+
         # Generate embedding if not provided
         if item.embedding is None:
             text_to_embed = item.insight or item.content
@@ -77,7 +82,9 @@ class KnowledgeStore:
             )
         )
         self.conn.commit()
-        return cursor.lastrowid
+        row_id = cursor.lastrowid
+        logger.debug("Stored knowledge item id=%d", row_id)
+        return row_id
 
     def search_similar(
         self,
@@ -88,6 +95,8 @@ class KnowledgeStore:
         approved_only: bool = True
     ) -> list[tuple[KnowledgeItem, float]]:
         """Search for similar knowledge items."""
+        logger.debug("Searching similar knowledge: query_len=%d source_types=%s limit=%d", len(query), source_types, limit)
+
         query_embedding = self.embedder.embed(query)
 
         # Build query
@@ -128,10 +137,14 @@ class KnowledgeStore:
 
         # Sort by similarity and limit
         results.sort(key=lambda x: x[1], reverse=True)
-        return results[:limit]
+        final_results = results[:limit]
+        logger.debug("Found %d similar items (min_similarity=%.2f)", len(final_results), min_similarity)
+        return final_results
 
     def get_by_source(self, source_type: str, source_id: str) -> Optional[KnowledgeItem]:
         """Get a knowledge item by source."""
+        logger.debug("Looking up knowledge: source_type=%s source_id=%s", source_type, source_id)
+
         cursor = self.conn.execute(
             "SELECT * FROM knowledge WHERE source_type = ? AND source_id = ?",
             (source_type, source_id)
@@ -235,6 +248,8 @@ class KnowledgeStore:
 
     def link_to_content(self, content_id: int, knowledge_id: int, relevance: float) -> None:
         """Track which knowledge was used in generated content."""
+        logger.debug("Linking knowledge %d to content %d (relevance=%.2f)", knowledge_id, content_id, relevance)
+
         self.conn.execute(
             """INSERT INTO content_knowledge_links (content_id, knowledge_id, relevance_score)
                VALUES (?, ?, ?)""",
