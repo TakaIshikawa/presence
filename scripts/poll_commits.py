@@ -104,6 +104,7 @@ def main():
             semantic_threshold=semantic_threshold,
             knowledge_store=knowledge_store,
             engagement_predictor=engagement_predictor,
+            format_weighting_enabled=config.synthesis.format_weighting_enabled,
         )
         x_client = XClient(
             config.x.api_key,
@@ -319,6 +320,7 @@ def main():
             content=pipeline_result.final_content,
             eval_score=pipeline_result.final_score,
             eval_feedback=pipeline_result.comparison.best_feedback,
+            content_format=pipeline_result.content_format,
         )
 
         # Store knowledge lineage

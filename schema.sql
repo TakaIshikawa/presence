@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS generated_content (
     curation_quality TEXT,  -- 'good', 'too_specific', or NULL (unreviewed)
     auto_quality TEXT,      -- 'resonated', 'low_resonance', or NULL (too young)
     content_embedding BLOB, -- serialized embedding vector for semantic dedup
+    content_format TEXT,    -- format used for generation: 'micro_story', 'question', 'contrarian', 'tip', 'observation', 'mid_action', 'bold_claim', 'question_hook', 'surprising_result', 'contrarian_thread'
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

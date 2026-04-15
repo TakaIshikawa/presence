@@ -393,18 +393,19 @@ class TestSelectFormatDirectives:
     """Test the _select_format_directives method."""
 
     def test_returns_correct_number(self, pipeline):
-        directives = pipeline._select_format_directives(3, "x_post")
+        directives, format_names = pipeline._select_format_directives(3, "x_post")
         assert len(directives) == 3
+        assert len(format_names) == 3
 
     def test_uses_post_formats_for_x_post(self, pipeline):
-        directives = pipeline._select_format_directives(3, "x_post")
+        directives, format_names = pipeline._select_format_directives(3, "x_post")
 
         # All directives should start with "FORMAT:"
         for directive in directives:
             assert directive.startswith("FORMAT:")
 
     def test_uses_thread_formats_for_x_thread(self, pipeline):
-        directives = pipeline._select_format_directives(3, "x_thread")
+        directives, format_names = pipeline._select_format_directives(3, "x_thread")
 
         # All directives should start with "THREAD HOOK:"
         for directive in directives:
@@ -412,21 +413,27 @@ class TestSelectFormatDirectives:
 
     def test_returns_only_directive_strings(self, pipeline):
         """Should return directive strings, not (name, directive) tuples."""
-        directives = pipeline._select_format_directives(2, "x_post")
+        directives, format_names = pipeline._select_format_directives(2, "x_post")
 
-        # All should be strings, not tuples
+        # All directives should be strings
         for directive in directives:
             assert isinstance(directive, str)
             assert not isinstance(directive, tuple)
 
+        # All format names should be strings
+        for name in format_names:
+            assert isinstance(name, str)
+
     def test_limits_to_available_formats(self, pipeline):
         """Requesting more than available should return all available."""
         # POST_FORMATS has 5 formats, THREAD_FORMATS has 5 formats
-        post_directives = pipeline._select_format_directives(10, "x_post")
+        post_directives, post_names = pipeline._select_format_directives(10, "x_post")
         assert len(post_directives) == 5
+        assert len(post_names) == 5
 
-        thread_directives = pipeline._select_format_directives(10, "x_thread")
+        thread_directives, thread_names = pipeline._select_format_directives(10, "x_thread")
         assert len(thread_directives) == 5
+        assert len(thread_names) == 5
 
     def test_randomness_produces_variety(self, pipeline):
         """Multiple calls should produce different selections (probabilistic)."""
@@ -436,7 +443,7 @@ class TestSelectFormatDirectives:
         ]
 
         # At least one selection should differ (very high probability)
-        unique_selections = [tuple(s) for s in selections]
+        unique_selections = [tuple(s[0]) for s in selections]  # Use directives for comparison
         assert len(set(unique_selections)) > 1
 
 
