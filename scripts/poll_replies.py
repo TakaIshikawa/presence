@@ -22,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from runner import script_context, update_monitoring
 from output.x_client import XClient
 from engagement.reply_drafter import ReplyDrafter
+from knowledge.embeddings import VoyageEmbeddings
+from knowledge.store import KnowledgeStore
 
 
 def main():
@@ -44,10 +46,21 @@ def main():
             config.x.access_token_secret
         )
 
+        # Initialize knowledge store for semantic reply enrichment
+        knowledge_store = None
+        if config.embeddings:
+            embedder = VoyageEmbeddings(
+                api_key=config.embeddings.api_key,
+                model=config.embeddings.model,
+            )
+            knowledge_store = KnowledgeStore(db.conn, embedder)
+            logger.info("Knowledge store initialized for reply enrichment")
+
         drafter = ReplyDrafter(
             api_key=config.anthropic.api_key,
             model=config.synthesis.model,
             timeout=config.timeouts.anthropic_seconds,
+            knowledge_store=knowledge_store,
         )
 
         # Cultivate integration (optional — works without it)
@@ -184,16 +197,20 @@ def main():
                     except Exception as e:
                         logger.warning(f"  Warning: failed to forward mention to cultivate: {e}")
 
-                # Draft reply (enriched with relationship context if available)
+                # Draft reply (enriched with relationship context and knowledge if available)
                 logger.info(f"  Drafting reply to @{author_handle}: \"{mention['text'][:60]}...\"")
                 try:
-                    draft = drafter.draft(
+                    draft_result = drafter.draft_with_lineage(
                         our_post=our_content["content"],
                         their_reply=mention["text"],
                         their_handle=author_handle,
                         self_handle=my_handle,
                         person_context=person_context,
                     )
+                    draft = draft_result.reply_text
+                    knowledge_ids = draft_result.knowledge_ids
+                    if knowledge_ids:
+                        logger.info(f"  Used {len(knowledge_ids)} knowledge insights")
                 except Exception as e:
                     logger.error(f"  Error drafting reply: {e}")
                     continue
@@ -220,7 +237,7 @@ def main():
                         logger.info(f"  Quality flag: {eval_result.score:.1f}/10 ({flag_str})")
 
                 # Store in queue
-                db.insert_reply_draft(
+                reply_queue_id = db.insert_reply_draft(
                     inbound_tweet_id=tweet_id,
                     inbound_author_handle=author_handle,
                     inbound_author_id=author_id,
@@ -233,6 +250,13 @@ def main():
                     quality_score=quality_score,
                     quality_flags=quality_flags,
                 )
+
+                # Store knowledge lineage
+                if knowledge_ids:
+                    try:
+                        db.insert_reply_knowledge_links(reply_queue_id, knowledge_ids)
+                    except Exception as e:
+                        logger.warning(f"  Failed to store knowledge links: {e}")
 
                 logger.info(f"  Draft: \"{draft[:80]}...\"" if len(draft) > 80 else f"  Draft: \"{draft}\"")
                 drafted += 1

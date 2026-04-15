@@ -226,6 +226,18 @@ CREATE TABLE IF NOT EXISTS reply_queue (
 CREATE INDEX IF NOT EXISTS idx_reply_queue_status ON reply_queue(status);
 CREATE INDEX IF NOT EXISTS idx_reply_queue_inbound ON reply_queue(inbound_tweet_id);
 
+-- Track which knowledge items were used in reply drafts
+CREATE TABLE IF NOT EXISTS reply_knowledge_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reply_queue_id INTEGER REFERENCES reply_queue(id),
+    knowledge_id INTEGER REFERENCES knowledge(id),
+    relevance_score REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_knowledge_links_reply ON reply_knowledge_links(reply_queue_id);
+CREATE INDEX IF NOT EXISTS idx_reply_knowledge_links_knowledge ON reply_knowledge_links(knowledge_id);
+
 -- Reply poll state tracking (singleton)
 CREATE TABLE IF NOT EXISTS reply_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
