@@ -13,6 +13,7 @@ from runner import script_context, update_monitoring
 from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
+from output.bluesky_client import BlueskyClient
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 from knowledge.store import KnowledgeStore
 
@@ -55,6 +56,14 @@ def main():
             config.x.access_token,
             config.x.access_token_secret
         )
+
+        # Initialize Bluesky client if configured
+        bluesky_client = None
+        if config.bluesky and config.bluesky.enabled:
+            bluesky_client = BlueskyClient(
+                config.bluesky.handle,
+                config.bluesky.app_password
+            )
 
         # Get today's date range (UTC)
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -171,6 +180,18 @@ def main():
                 db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)
                 logger.info(f"Posted: {post_result.url}")
                 outcome = "published"
+
+                # Cross-post to Bluesky if configured
+                if bluesky_client:
+                    from output.cross_poster import CrossPoster
+                    cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                    bsky_tweets = [cross_poster.adapt_for_bluesky(t, "x_thread") for t in tweets]
+                    bsky_result = bluesky_client.post_thread(bsky_tweets)
+                    if bsky_result.success:
+                        db.mark_published_bluesky(content_id, bsky_result.uri)
+                        logger.info(f"Cross-posted to Bluesky: {bsky_result.url}")
+                    else:
+                        logger.warning(f"Bluesky cross-post failed (non-fatal): {bsky_result.error}")
             else:
                 logger.error(f"Post failed: {post_result.error}")
                 outcome = "below_threshold"
