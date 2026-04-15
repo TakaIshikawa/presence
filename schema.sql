@@ -223,3 +223,27 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Content topic tracking
+CREATE TABLE IF NOT EXISTS content_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER REFERENCES generated_content(id),
+    topic TEXT NOT NULL,           -- extracted topic label (e.g., 'testing', 'architecture', 'ai-agents')
+    subtopic TEXT,                 -- more specific subtopic
+    confidence REAL DEFAULT 1.0,   -- extraction confidence
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_content_topics_topic ON content_topics(topic);
+CREATE INDEX IF NOT EXISTS idx_content_topics_content ON content_topics(content_id);
+
+-- Planned topics for forward-looking content calendar
+CREATE TABLE IF NOT EXISTS planned_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic TEXT NOT NULL,
+    angle TEXT,                    -- specific angle to cover
+    source_material TEXT,          -- optional: commit SHAs or session IDs to draw from
+    target_date TEXT,              -- when to aim for publication
+    status TEXT DEFAULT 'planned', -- 'planned', 'generated', 'skipped'
+    content_id INTEGER REFERENCES generated_content(id),  -- link when generated
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
