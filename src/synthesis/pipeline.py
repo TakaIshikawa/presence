@@ -33,6 +33,7 @@ class PipelineResult:
     predicted_engagement: Optional[float] = None
     engagement_prediction_detail: Optional[dict] = None
     knowledge_ids: list[tuple[int, float]] = None  # (knowledge_id, relevance_score) for lineage tracking
+    content_format: Optional[str] = None  # Format used for generation (e.g., 'micro_story', 'bold_claim')
 
 
 class SynthesisPipeline:
@@ -132,6 +133,7 @@ class SynthesisPipeline:
         semantic_threshold: float = 0.82,
         knowledge_store=None,
         engagement_predictor=None,
+        format_weighting_enabled: bool = True,
     ):
         self.api_key = api_key
         self.generator = ContentGenerator(api_key, generator_model, timeout=anthropic_timeout)
@@ -150,6 +152,7 @@ class SynthesisPipeline:
         self.semantic_threshold = semantic_threshold
         self.knowledge_store = knowledge_store
         self.engagement_predictor = engagement_predictor
+        self.format_weighting_enabled = format_weighting_enabled
 
     # Character limits per content type
     CHAR_LIMITS = {
@@ -389,11 +392,40 @@ class SynthesisPipeline:
 
         return filtered
 
-    def _select_format_directives(self, num: int, content_type: str = "x_post") -> list[str]:
-        """Select format directives for candidate generation, favoring variety."""
+    def _select_format_directives(
+        self,
+        num: int,
+        content_type: str = "x_post",
+        weights: Optional[dict[str, float]] = None
+    ) -> tuple[list[str], list[str]]:
+        """Select format directives for candidate generation.
+
+        Uses weighted random selection if weights are provided, otherwise uniform sampling.
+
+        Args:
+            num: Number of formats to select
+            content_type: Type of content ('x_post' or 'x_thread')
+            weights: Optional dict mapping format name to selection weight
+
+        Returns:
+            (directives, format_names): Lists of format directives and their names
+        """
         formats = self.THREAD_FORMATS if content_type == "x_thread" else self.POST_FORMATS
-        selected = random.sample(formats, min(num, len(formats)))
-        return [directive for _, directive in selected]
+
+        if weights:
+            # Weighted selection with replacement (allows duplicates if num > len(formats))
+            format_list = list(formats)
+            format_weights = [
+                weights.get(name, 1.0) for name, _ in format_list
+            ]
+            selected = random.choices(format_list, weights=format_weights, k=num)
+        else:
+            # Uniform sampling without replacement
+            selected = random.sample(formats, min(num, len(formats)))
+
+        directives = [directive for _, directive in selected]
+        format_names = [name for name, _ in selected]
+        return directives, format_names
 
     def _enforce_char_limit(
         self, candidates: list[str], max_chars: int
@@ -498,7 +530,21 @@ class SynthesisPipeline:
             )
             trend_context, trend_knowledge_ids = trend_builder.build_context_with_ids()
 
-        format_directives = self._select_format_directives(self.num_candidates, content_type)
+        # Stage 1.6: Load format weights if enabled
+        format_weights = None
+        if self.format_weighting_enabled:
+            try:
+                from evaluation.format_performance import FormatPerformanceAnalyzer
+                analyzer = FormatPerformanceAnalyzer(self.db)
+                format_weights = analyzer.compute_selection_weights(days=90)
+                if format_weights:
+                    logger.debug(f"  Format weights: {format_weights}")
+            except Exception as e:
+                logger.debug(f"  Format weighting failed (non-fatal): {e}")
+
+        format_directives, format_names = self._select_format_directives(
+            self.num_candidates, content_type, weights=format_weights
+        )
         candidates = self.generator.generate_candidates(
             prompts=prompts,
             commits=commits,
@@ -585,6 +631,9 @@ class SynthesisPipeline:
         final_content = best_content
         final_score = comparison.best_score
         refinement = None
+
+        # Capture the format used for the best candidate
+        best_format = format_names[best_idx] if best_idx < len(format_names) else None
 
         # Stage 4 & 5: Refinement + final gate
         should_refine = (
@@ -684,4 +733,5 @@ class SynthesisPipeline:
             predicted_engagement=predicted_engagement,
             engagement_prediction_detail=engagement_prediction_detail,
             knowledge_ids=knowledge_ids,
+            content_format=best_format,
         )
