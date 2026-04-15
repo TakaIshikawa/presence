@@ -1546,3 +1546,127 @@ class Database:
             result['combined_score'] += bsky_row[4]
 
         return result
+
+    # Knowledge lineage tracking
+    def insert_content_knowledge_links(
+        self, content_id: int, links: list[tuple[int, float]]
+    ) -> None:
+        """Bulk insert knowledge item links for generated content.
+
+        Args:
+            content_id: ID of the generated content
+            links: List of (knowledge_id, relevance_score) tuples
+        """
+        if not links:
+            return
+
+        for knowledge_id, relevance_score in links:
+            self.conn.execute(
+                """INSERT INTO content_knowledge_links (content_id, knowledge_id, relevance_score)
+                   VALUES (?, ?, ?)""",
+                (content_id, knowledge_id, relevance_score)
+            )
+        self.conn.commit()
+
+    def get_knowledge_usage_stats(self, days: int = 30) -> list[dict]:
+        """Get knowledge usage statistics for the period.
+
+        Returns for each knowledge item used: knowledge_id, source_type, author,
+        usage_count, avg_relevance_score, avg_engagement_of_linked_content.
+        """
+        cursor = self.conn.execute(
+            """SELECT k.id, k.source_type, k.author, k.content,
+                      COUNT(DISTINCT ckl.content_id) AS usage_count,
+                      AVG(ckl.relevance_score) AS avg_relevance,
+                      AVG(COALESCE(pe.engagement_score, 0)) AS avg_engagement
+               FROM knowledge k
+               INNER JOIN content_knowledge_links ckl ON ckl.knowledge_id = k.id
+               INNER JOIN generated_content gc ON gc.id = ckl.content_id
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               WHERE ckl.created_at >= datetime('now', ?)
+                 AND gc.published = 1
+               GROUP BY k.id
+               ORDER BY usage_count DESC, avg_engagement DESC""",
+            (f'-{days} days',)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_most_valuable_sources(
+        self, days: int = 90, min_uses: int = 3
+    ) -> list[dict]:
+        """Get curated sources ranked by average engagement of content they contributed to.
+
+        Args:
+            days: Number of days to look back
+            min_uses: Minimum number of uses to be included in results
+
+        Returns:
+            List of dicts with source_type, author, usage_count, avg_engagement,
+            ordered by avg_engagement descending
+        """
+        cursor = self.conn.execute(
+            """SELECT k.source_type, k.author,
+                      COUNT(DISTINCT ckl.content_id) AS usage_count,
+                      AVG(COALESCE(pe.engagement_score, 0)) AS avg_engagement
+               FROM knowledge k
+               INNER JOIN content_knowledge_links ckl ON ckl.knowledge_id = k.id
+               INNER JOIN generated_content gc ON gc.id = ckl.content_id
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               WHERE ckl.created_at >= datetime('now', ?)
+                 AND gc.published = 1
+                 AND k.source_type IN ('curated_x', 'curated_article')
+               GROUP BY k.source_type, k.author
+               HAVING usage_count >= ?
+               ORDER BY avg_engagement DESC""",
+            (f'-{days} days', min_uses)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_content_lineage(self, content_id: int) -> list[dict]:
+        """Get all knowledge items that contributed to a specific post.
+
+        Returns list of dicts with knowledge details and relevance scores.
+        """
+        cursor = self.conn.execute(
+            """SELECT k.id, k.source_type, k.source_id, k.source_url,
+                      k.author, k.content, k.insight, k.attribution_required,
+                      ckl.relevance_score, ckl.created_at AS linked_at
+               FROM content_knowledge_links ckl
+               INNER JOIN knowledge k ON k.id = ckl.knowledge_id
+               WHERE ckl.content_id = ?
+               ORDER BY ckl.relevance_score DESC""",
+            (content_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_unused_knowledge(self, days: int = 30) -> list[dict]:
+        """Get knowledge items ingested but never used in generation.
+
+        Args:
+            days: Look for knowledge items created in the last N days
+
+        Returns:
+            List of knowledge item dicts that have never been linked to content
+        """
+        cursor = self.conn.execute(
+            """SELECT k.id, k.source_type, k.source_id, k.source_url,
+                      k.author, k.content, k.insight, k.created_at
+               FROM knowledge k
+               WHERE k.created_at >= datetime('now', ?)
+                 AND k.approved = 1
+                 AND k.id NOT IN (
+                     SELECT DISTINCT knowledge_id
+                     FROM content_knowledge_links
+                 )
+               ORDER BY k.created_at DESC""",
+            (f'-{days} days',)
+        )
+        return [dict(row) for row in cursor.fetchall()]

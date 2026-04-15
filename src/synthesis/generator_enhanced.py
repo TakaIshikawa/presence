@@ -16,6 +16,7 @@ class GeneratedContent:
     source_commits: list[str]
     knowledge_used: list[tuple[KnowledgeItem, float]]  # (item, relevance)
     attributions: list[str]
+    knowledge_ids: list[tuple[int, float]]  # (knowledge_id, relevance_score) for lineage tracking
 
 
 class EnhancedContentGenerator:
@@ -130,13 +131,21 @@ class EnhancedContentGenerator:
             if item.author
         ]
 
+        # Extract knowledge IDs for lineage tracking
+        knowledge_ids = [
+            (item.id, relevance)
+            for item, relevance in own_insights + external_insights
+            if item.id is not None
+        ]
+
         return GeneratedContent(
             content_type="x_post",
             content=response.content[0].text.strip(),
             source_prompts=[prompt],
             source_commits=[commit_message],
             knowledge_used=own_insights + external_insights,
-            attributions=attributions
+            attributions=attributions,
+            knowledge_ids=knowledge_ids
         )
 
     def generate_x_thread(
@@ -188,11 +197,19 @@ class EnhancedContentGenerator:
             if item.author
         ]
 
+        # Extract knowledge IDs for lineage tracking
+        knowledge_ids = [
+            (item.id, relevance)
+            for item, relevance in own_insights + external_insights
+            if item.id is not None
+        ]
+
         return GeneratedContent(
             content_type="x_thread",
             content=response.content[0].text.strip(),
             source_prompts=prompts,
             source_commits=[c["message"] for c in commits],
             knowledge_used=own_insights + external_insights,
-            attributions=attributions
+            attributions=attributions,
+            knowledge_ids=knowledge_ids
         )

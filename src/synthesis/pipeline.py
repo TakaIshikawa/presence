@@ -32,6 +32,7 @@ class PipelineResult:
     filter_stats: Optional[dict] = None
     predicted_engagement: Optional[float] = None
     engagement_prediction_detail: Optional[dict] = None
+    knowledge_ids: list[tuple[int, float]] = None  # (knowledge_id, relevance_score) for lineage tracking
 
 
 class SynthesisPipeline:
@@ -486,6 +487,7 @@ class SynthesisPipeline:
 
         # Stage 1.5: Trend context from curated sources
         trend_context = ""
+        trend_knowledge_ids = []
         if self.knowledge_store:
             from synthesis.trend_context import TrendContextBuilder
             trend_builder = TrendContextBuilder(
@@ -494,7 +496,7 @@ class SynthesisPipeline:
                 model=self.generator.model,
                 db=self.db,
             )
-            trend_context = trend_builder.build_context()
+            trend_context, trend_knowledge_ids = trend_builder.build_context_with_ids()
 
         format_directives = self._select_format_directives(self.num_candidates, content_type)
         candidates = self.generator.generate_candidates(
@@ -666,6 +668,9 @@ class SynthesisPipeline:
             except Exception as e:
                 logger.warning(f"  Engagement prediction failed: {e}")
 
+        # Compile knowledge IDs: trend items get default relevance of 0.3
+        knowledge_ids = [(kid, 0.3) for kid in trend_knowledge_ids]
+
         return PipelineResult(
             batch_id=batch_id,
             candidates=candidate_texts,
@@ -678,4 +683,5 @@ class SynthesisPipeline:
             filter_stats=filter_stats,
             predicted_engagement=predicted_engagement,
             engagement_prediction_detail=engagement_prediction_detail,
+            knowledge_ids=knowledge_ids,
         )

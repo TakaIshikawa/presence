@@ -129,6 +129,14 @@ def main():
             eval_feedback=result.comparison.best_feedback,
         )
 
+        # Store knowledge lineage
+        if result.knowledge_ids and content_id:
+            try:
+                db.insert_content_knowledge_links(content_id, result.knowledge_ids)
+                logger.info(f"  Linked {len(result.knowledge_ids)} knowledge items")
+            except Exception as e:
+                logger.warning(f"  Failed to store knowledge links: {e}")
+
         # Embed content for future semantic dedup
         if embedder and content_id:
             try:

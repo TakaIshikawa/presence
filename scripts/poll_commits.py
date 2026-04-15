@@ -321,6 +321,14 @@ def main():
             eval_feedback=pipeline_result.comparison.best_feedback,
         )
 
+        # Store knowledge lineage
+        if pipeline_result.knowledge_ids and content_id:
+            try:
+                db.insert_content_knowledge_links(content_id, pipeline_result.knowledge_ids)
+                logger.info(f"  Linked {len(pipeline_result.knowledge_ids)} knowledge items")
+            except Exception as e:
+                logger.warning(f"  Failed to store knowledge links: {e}")
+
         # Store engagement prediction if available
         if pipeline_result.engagement_prediction_detail and content_id:
             try:
