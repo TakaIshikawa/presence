@@ -56,6 +56,8 @@ class Database:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN repurposed_from INTEGER REFERENCES generated_content(id)")
         if "bluesky_uri" not in cols:
             self.conn.execute("ALTER TABLE generated_content ADD COLUMN bluesky_uri TEXT")
+        if "content_format" not in cols:
+            self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_format TEXT")
         # Migrate reply_queue for cultivate enrichment
         rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
         if rq_cols and "relationship_context" not in rq_cols:
@@ -234,19 +236,21 @@ class Database:
         source_messages: list[str],
         content: str,
         eval_score: float,
-        eval_feedback: str
+        eval_feedback: str,
+        content_format: Optional[str] = None
     ) -> int:
         cursor = self.conn.execute(
             """INSERT INTO generated_content
-               (content_type, source_commits, source_messages, content, eval_score, eval_feedback)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (content_type, source_commits, source_messages, content, eval_score, eval_feedback, content_format)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 content_type,
                 json.dumps(source_commits),
                 json.dumps(source_messages),
                 content,
                 eval_score,
-                eval_feedback
+                eval_feedback,
+                content_format
             )
         )
         self.conn.commit()
@@ -638,6 +642,43 @@ class Database:
             )
             result[quality] = [dict(row) for row in cursor.fetchall()]
         return result
+
+    def get_format_engagement_stats(self, days: int = 90) -> list[dict]:
+        """Get engagement stats grouped by content_format.
+
+        Returns list of dicts with:
+            - format: str - format name (e.g., 'micro_story', 'bold_claim')
+            - count: int - number of posts using this format
+            - avg_engagement: float - average engagement score
+            - resonated_count: int - number classified as 'resonated'
+            - total_classified: int - number with auto_quality classification
+
+        Args:
+            days: Lookback window for published content (default 90)
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+        cursor = self.conn.execute(
+            """SELECT
+                   gc.content_format AS format,
+                   COUNT(*) AS count,
+                   AVG(COALESCE(pe.engagement_score, 0)) AS avg_engagement,
+                   SUM(CASE WHEN gc.auto_quality = 'resonated' THEN 1 ELSE 0 END) AS resonated_count,
+                   SUM(CASE WHEN gc.auto_quality IS NOT NULL THEN 1 ELSE 0 END) AS total_classified
+               FROM generated_content gc
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               WHERE gc.content_format IS NOT NULL
+                 AND gc.published = 1
+                 AND gc.published_at >= ?
+               GROUP BY gc.content_format
+               ORDER BY avg_engagement DESC""",
+            (cutoff.isoformat(),)
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     # Meta key-value store
     def get_meta(self, key: str) -> Optional[str]:
