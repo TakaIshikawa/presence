@@ -1,5 +1,6 @@
 """Bluesky (AT Protocol) API client for posting content."""
 
+import time
 from dataclasses import dataclass
 from typing import Optional
 from atproto import Client
@@ -141,3 +142,57 @@ class BlueskyClient:
             )
         except Exception as e:
             return BlueskyPostResult(success=False, error=str(e))
+
+    def get_post_metrics(self, uri: str) -> Optional[dict]:
+        """Fetch engagement metrics for a single post.
+
+        Args:
+            uri: AT Protocol URI (e.g., at://did:plc:.../app.bsky.feed.post/...)
+
+        Returns:
+            Dict with like_count, repost_count, reply_count, quote_count
+            or None if post not found or error occurred
+        """
+        self._ensure_login()
+        try:
+            # Get post thread to access metrics
+            response = self.client.get_post_thread(uri=uri)
+
+            if not response or not hasattr(response, 'thread'):
+                return None
+
+            post = response.thread.post
+
+            # Extract metrics from post record
+            like_count = getattr(post, 'like_count', 0) or 0
+            repost_count = getattr(post, 'repost_count', 0) or 0
+            reply_count = getattr(post, 'reply_count', 0) or 0
+            quote_count = getattr(post, 'quote_count', 0) or 0
+
+            return {
+                'like_count': like_count,
+                'repost_count': repost_count,
+                'reply_count': reply_count,
+                'quote_count': quote_count,
+            }
+        except Exception:
+            # Post not found or other error
+            return None
+
+    def get_post_metrics_batch(self, uris: list[str]) -> list[dict]:
+        """Fetch metrics for multiple posts with rate limiting.
+
+        Args:
+            uris: List of AT Protocol URIs
+
+        Returns:
+            List of dicts with metrics (None for failed fetches)
+        """
+        results = []
+        for uri in uris:
+            metrics = self.get_post_metrics(uri)
+            results.append(metrics)
+            # Rate limit: 1 request per second to be safe
+            if len(results) < len(uris):
+                time.sleep(1.0)
+        return results
