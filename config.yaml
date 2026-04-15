@@ -87,3 +87,8 @@ curated_sources:
     - domain: "simonwillison.net"
       name: "Simon Willison's Blog"
       license: "attribution_required"
+
+# Posting schedule optimization
+scheduling:
+  enabled: false         # Enable time-based posting optimization
+  min_samples: 20        # Minimum posts needed before optimizing schedule

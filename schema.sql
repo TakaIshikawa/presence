@@ -247,3 +247,17 @@ CREATE TABLE IF NOT EXISTS planned_topics (
     content_id INTEGER REFERENCES generated_content(id),  -- link when generated
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Publish queue for scheduled posting at optimal times
+CREATE TABLE IF NOT EXISTS publish_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    scheduled_at TEXT NOT NULL,     -- ISO timestamp for when to publish
+    platform TEXT DEFAULT 'all',    -- 'x', 'bluesky', 'all'
+    status TEXT DEFAULT 'queued',   -- 'queued', 'published', 'failed', 'cancelled'
+    published_at TEXT,
+    error TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_publish_queue_status ON publish_queue(status);
+CREATE INDEX IF NOT EXISTS idx_publish_queue_scheduled ON publish_queue(scheduled_at);

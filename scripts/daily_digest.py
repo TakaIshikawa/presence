@@ -173,29 +173,55 @@ def main():
             logger.debug("Generated content:")
             logger.debug(result.final_content)
         else:
-            logger.info("Posting thread to X...")
-            tweets = parse_thread_content(result.final_content)
-            post_result = x_client.post_thread(tweets)
-            if post_result.success:
-                db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)
-                logger.info(f"Posted: {post_result.url}")
-                outcome = "published"
+            # Check if we should queue for optimal posting time
+            should_queue = False
+            if config.scheduling and config.scheduling.enabled:
+                from evaluation.posting_schedule import PostingScheduleAnalyzer
+                now = datetime.now(timezone.utc)
+                analyzer = PostingScheduleAnalyzer(db, min_samples=config.scheduling.min_samples)
+                current_hour = now.hour
+                current_dow = now.weekday()
+                should_queue = analyzer.should_queue(current_hour, current_dow)
 
-                # Cross-post to Bluesky if configured
-                if bluesky_client:
-                    from output.cross_poster import CrossPoster
-                    cross_poster = CrossPoster(bluesky_client=bluesky_client)
-                    bsky_tweets = [cross_poster.adapt_for_bluesky(t, "x_thread") for t in tweets]
-                    bsky_result = bluesky_client.post_thread(bsky_tweets)
-                    if bsky_result.success:
-                        db.mark_published_bluesky(content_id, bsky_result.uri)
-                        logger.info(f"Cross-posted to Bluesky: {bsky_result.url}")
-                    else:
-                        logger.warning(f"Bluesky cross-post failed (non-fatal): {bsky_result.error}")
-            else:
-                logger.error(f"Post failed: {post_result.error}")
-                outcome = "below_threshold"
-                rejection_reason = f"Post failed: {post_result.error}"
+            if should_queue:
+                # Queue for optimal time instead of posting now
+                from evaluation.posting_schedule import PostingScheduleAnalyzer
+                analyzer = PostingScheduleAnalyzer(db, min_samples=config.scheduling.min_samples)
+                next_slot = analyzer.next_optimal_slot(exclude_hours=2)
+                if next_slot:
+                    db.queue_for_publishing(content_id, next_slot.isoformat(), platform='all')
+                    logger.info(f"Queued for optimal time: {next_slot.isoformat()}")
+                    outcome = "queued"
+                    rejection_reason = None
+                else:
+                    # No optimal slot found, post now as fallback
+                    should_queue = False
+
+            if not should_queue:
+                # Post immediately
+                logger.info("Posting thread to X...")
+                tweets = parse_thread_content(result.final_content)
+                post_result = x_client.post_thread(tweets)
+                if post_result.success:
+                    db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)
+                    logger.info(f"Posted: {post_result.url}")
+                    outcome = "published"
+
+                    # Cross-post to Bluesky if configured
+                    if bluesky_client:
+                        from output.cross_poster import CrossPoster
+                        cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                        bsky_tweets = [cross_poster.adapt_for_bluesky(t, "x_thread") for t in tweets]
+                        bsky_result = bluesky_client.post_thread(bsky_tweets)
+                        if bsky_result.success:
+                            db.mark_published_bluesky(content_id, bsky_result.uri)
+                            logger.info(f"Cross-posted to Bluesky: {bsky_result.url}")
+                        else:
+                            logger.warning(f"Bluesky cross-post failed (non-fatal): {bsky_result.error}")
+                else:
+                    logger.error(f"Post failed: {post_result.error}")
+                    outcome = "below_threshold"
+                    rejection_reason = f"Post failed: {post_result.error}"
 
         # Record pipeline run
         db.insert_pipeline_run(

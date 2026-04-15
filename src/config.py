@@ -121,6 +121,12 @@ class TimeoutsConfig:
 
 
 @dataclass
+class SchedulingConfig:
+    enabled: bool = False
+    min_samples: int = 20
+
+
+@dataclass
 class Config:
     github: GitHubConfig
     x: XConfig
@@ -136,6 +142,7 @@ class Config:
     historical: Optional[HistoricalConfig]
     cultivate: Optional[CultivateIntegrationConfig]
     timeouts: TimeoutsConfig
+    scheduling: Optional[SchedulingConfig]
 
 
 def _resolve_env_var(value: str) -> str:
@@ -295,6 +302,14 @@ def load_config(config_path: Optional[str] = None) -> Config:
             http_seconds=data["timeouts"].get("http_seconds", 30),
         )
 
+    # Parse scheduling config if present
+    scheduling_config = None
+    if "scheduling" in data:
+        scheduling_config = SchedulingConfig(
+            enabled=data["scheduling"].get("enabled", False),
+            min_samples=data["scheduling"].get("min_samples", 20),
+        )
+
     return Config(
         github=GitHubConfig(
             username=_require(data, "github", "username", section="github"),
@@ -336,4 +351,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         historical=historical_config,
         cultivate=cultivate_config,
         timeouts=timeouts_config,
+        scheduling=scheduling_config,
     )
