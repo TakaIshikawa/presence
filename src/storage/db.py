@@ -762,6 +762,26 @@ class Database:
         )
         self.conn.commit()
 
+    def insert_reply_knowledge_links(
+        self, reply_queue_id: int, knowledge_ids: list[tuple[int, float]]
+    ) -> None:
+        """Bulk insert knowledge item links for reply drafts.
+
+        Args:
+            reply_queue_id: ID of the reply in reply_queue
+            knowledge_ids: List of (knowledge_id, relevance_score) tuples
+        """
+        if not knowledge_ids:
+            return
+
+        for knowledge_id, relevance_score in knowledge_ids:
+            self.conn.execute(
+                """INSERT INTO reply_knowledge_links (reply_queue_id, knowledge_id, relevance_score)
+                   VALUES (?, ?, ?)""",
+                (reply_queue_id, knowledge_id, relevance_score)
+            )
+        self.conn.commit()
+
     def get_content_by_tweet_id(self, tweet_id: str) -> Optional[dict]:
         """Look up generated content by its published tweet ID."""
         cursor = self.conn.execute(
