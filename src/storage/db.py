@@ -1225,3 +1225,93 @@ class Database:
                ORDER BY gc.published_at DESC"""
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    # Publish queue for scheduled posting
+    def queue_for_publishing(
+        self,
+        content_id: int,
+        scheduled_at: str,
+        platform: str = 'all'
+    ) -> int:
+        """Queue content for publishing at a scheduled time.
+
+        Args:
+            content_id: ID of generated content to publish
+            scheduled_at: ISO timestamp for when to publish
+            platform: Target platform ('x', 'bluesky', 'all')
+
+        Returns:
+            ID of the queue entry
+        """
+        cursor = self.conn.execute(
+            """INSERT INTO publish_queue (content_id, scheduled_at, platform)
+               VALUES (?, ?, ?)""",
+            (content_id, scheduled_at, platform)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_due_queue_items(self, now: str) -> list[dict]:
+        """Get queued items that are ready to publish.
+
+        Args:
+            now: Current ISO timestamp to compare against
+
+        Returns:
+            List of queue item dicts where scheduled_at <= now and status = 'queued'
+        """
+        cursor = self.conn.execute(
+            """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
+                      gc.content, gc.content_type
+               FROM publish_queue pq
+               INNER JOIN generated_content gc ON gc.id = pq.content_id
+               WHERE pq.status = 'queued'
+                 AND pq.scheduled_at <= ?
+               ORDER BY pq.scheduled_at ASC""",
+            (now,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_queue_published(self, queue_id: int) -> None:
+        """Mark a queue item as successfully published.
+
+        Args:
+            queue_id: ID of the publish_queue entry
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE publish_queue
+               SET status = 'published', published_at = ?
+               WHERE id = ?""",
+            (now, queue_id)
+        )
+        self.conn.commit()
+
+    def mark_queue_failed(self, queue_id: int, error: str) -> None:
+        """Mark a queue item as failed with error message.
+
+        Args:
+            queue_id: ID of the publish_queue entry
+            error: Error message describing the failure
+        """
+        self.conn.execute(
+            """UPDATE publish_queue
+               SET status = 'failed', error = ?
+               WHERE id = ?""",
+            (error, queue_id)
+        )
+        self.conn.commit()
+
+    def cancel_queued(self, content_id: int) -> None:
+        """Cancel all queued items for a content ID.
+
+        Args:
+            content_id: ID of the generated content
+        """
+        self.conn.execute(
+            """UPDATE publish_queue
+               SET status = 'cancelled'
+               WHERE content_id = ? AND status = 'queued'""",
+            (content_id,)
+        )
+        self.conn.commit()
