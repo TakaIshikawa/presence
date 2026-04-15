@@ -1041,3 +1041,177 @@ class Database:
             "avg_actual": round(avg_actual, 2),
             "criteria_breakdown": criteria_breakdown,
         }
+
+    # Content topics and planning
+    def insert_content_topics(
+        self,
+        content_id: int,
+        topics: list[tuple[str, str, float]]
+    ) -> list[int]:
+        """Store topic extractions for a piece of content.
+
+        Args:
+            content_id: ID of the generated content
+            topics: List of (topic, subtopic, confidence) tuples
+
+        Returns:
+            List of inserted topic IDs
+        """
+        topic_ids = []
+        for topic, subtopic, confidence in topics:
+            cursor = self.conn.execute(
+                """INSERT INTO content_topics (content_id, topic, subtopic, confidence)
+                   VALUES (?, ?, ?, ?)""",
+                (content_id, topic, subtopic, confidence)
+            )
+            topic_ids.append(cursor.lastrowid)
+
+        if topic_ids:
+            self.conn.commit()
+        return topic_ids
+
+    def get_topic_frequency(self, days: int = 30) -> list[dict]:
+        """Get topic frequency for published content in the period.
+
+        Args:
+            days: Number of days to look back
+
+        Returns:
+            List of dicts with topic, count, last_published_at, ordered by count desc
+        """
+        cursor = self.conn.execute(
+            """SELECT ct.topic,
+                      COUNT(*) AS count,
+                      MAX(gc.published_at) AS last_published_at
+               FROM content_topics ct
+               INNER JOIN generated_content gc ON gc.id = ct.content_id
+               WHERE gc.published = 1
+                 AND gc.published_at >= datetime('now', ?)
+               GROUP BY ct.topic
+               ORDER BY count DESC, last_published_at DESC""",
+            (f'-{days} days',)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_topic_gaps(self, days: int = 30, min_gap_days: int = 7) -> list[str]:
+        """Return topics not covered in the last N days.
+
+        Args:
+            days: Total period to consider
+            min_gap_days: Minimum days since last coverage to count as a gap
+
+        Returns:
+            List of topic names that haven't been covered recently
+        """
+        # Get all topics covered in the period
+        cursor = self.conn.execute(
+            """SELECT DISTINCT ct.topic,
+                      MAX(gc.published_at) AS last_published_at
+               FROM content_topics ct
+               INNER JOIN generated_content gc ON gc.id = ct.content_id
+               WHERE gc.published = 1
+                 AND gc.published_at >= datetime('now', ?)
+               GROUP BY ct.topic""",
+            (f'-{days} days',)
+        )
+
+        covered_topics = {}
+        for row in cursor.fetchall():
+            topic = row[0]
+            last_date = row[1]
+            covered_topics[topic] = last_date
+
+        # Find topics with gaps
+        gaps = []
+        cutoff = datetime.now(timezone.utc) - timedelta(days=min_gap_days)
+        cutoff_iso = cutoff.isoformat()
+
+        # Import taxonomy to check all possible topics
+        from evaluation.topic_extractor import TOPIC_TAXONOMY
+
+        for topic in TOPIC_TAXONOMY:
+            if topic == "other":
+                continue  # Skip "other" category
+
+            last_date = covered_topics.get(topic)
+            if last_date is None or last_date < cutoff_iso:
+                gaps.append(topic)
+
+        return sorted(gaps)
+
+    def insert_planned_topic(
+        self,
+        topic: str,
+        angle: str = None,
+        target_date: str = None,
+        source_material: str = None
+    ) -> int:
+        """Plan a future topic for content generation.
+
+        Args:
+            topic: Topic label from taxonomy
+            angle: Specific angle or approach to cover
+            target_date: Target publication date (ISO format)
+            source_material: Optional commit SHAs or session IDs to draw from
+
+        Returns:
+            ID of the planned topic
+        """
+        cursor = self.conn.execute(
+            """INSERT INTO planned_topics (topic, angle, target_date, source_material)
+               VALUES (?, ?, ?, ?)""",
+            (topic, angle, target_date, source_material)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_planned_topics(self, status: str = "planned") -> list[dict]:
+        """Get planned topics by status.
+
+        Args:
+            status: Filter by status ('planned', 'generated', 'skipped')
+
+        Returns:
+            List of planned topic dicts
+        """
+        cursor = self.conn.execute(
+            """SELECT * FROM planned_topics
+               WHERE status = ?
+               ORDER BY target_date ASC NULLS LAST, created_at ASC""",
+            (status,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_planned_topic_generated(
+        self,
+        planned_id: int,
+        content_id: int
+    ) -> None:
+        """Link a planned topic to generated content and mark as generated.
+
+        Args:
+            planned_id: ID of the planned topic
+            content_id: ID of the generated content
+        """
+        self.conn.execute(
+            """UPDATE planned_topics
+               SET status = 'generated', content_id = ?
+               WHERE id = ?""",
+            (content_id, planned_id)
+        )
+        self.conn.commit()
+
+    def get_content_without_topics(self) -> list[dict]:
+        """Get published content that doesn't have topic entries yet.
+
+        Returns:
+            List of content dicts that need topic extraction
+        """
+        cursor = self.conn.execute(
+            """SELECT gc.id, gc.content, gc.content_type, gc.published_at
+               FROM generated_content gc
+               WHERE gc.published = 1
+                 AND gc.id NOT IN (SELECT DISTINCT content_id FROM content_topics)
+               ORDER BY gc.published_at DESC"""
+        )
+        return [dict(row) for row in cursor.fetchall()]
