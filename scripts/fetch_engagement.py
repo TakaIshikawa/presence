@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch engagement metrics for published posts from X API."""
+"""Fetch engagement metrics for published posts from X and Bluesky APIs."""
 
 import logging
 import sys
@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context
 from evaluation.engagement_scorer import compute_engagement_score
+from output.bluesky_client import BlueskyClient
 
 # Max tweets to fetch per batch (X API limit for GET /2/tweets)
 BATCH_SIZE = 100
@@ -130,13 +131,59 @@ def main():
                     f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}"
                 )
 
+        # Fetch Bluesky engagement metrics if enabled
+        bluesky_fetched = 0
+        if config.bluesky and config.bluesky.enabled:
+            logger.info("\n--- Fetching Bluesky engagement ---")
+            bluesky_posts = db.get_content_needing_bluesky_engagement(max_age_days=7)
+
+            if bluesky_posts:
+                logger.info(f"Fetching Bluesky metrics for {len(bluesky_posts)} posts")
+
+                bluesky_client = BlueskyClient(
+                    handle=config.bluesky.handle,
+                    app_password=config.bluesky.app_password
+                )
+
+                for post in bluesky_posts:
+                    metrics = bluesky_client.get_post_metrics(post["bluesky_uri"])
+
+                    if metrics is None:
+                        logger.warning(f"  Failed to fetch metrics for {post['bluesky_uri']}")
+                        continue
+
+                    score = compute_engagement_score(
+                        metrics['like_count'],
+                        metrics['repost_count'],
+                        metrics['reply_count'],
+                        metrics['quote_count']
+                    )
+
+                    db.insert_bluesky_engagement(
+                        content_id=post["id"],
+                        bluesky_uri=post["bluesky_uri"],
+                        like_count=metrics['like_count'],
+                        repost_count=metrics['repost_count'],
+                        reply_count=metrics['reply_count'],
+                        quote_count=metrics['quote_count'],
+                        engagement_score=score,
+                    )
+                    bluesky_fetched += 1
+                    logger.info(
+                        f"  {post['bluesky_uri']}: {metrics['like_count']}L "
+                        f"{metrics['repost_count']}RP {metrics['reply_count']}R "
+                        f"{metrics['quote_count']}Q = {score:.1f}"
+                    )
+            else:
+                logger.info("No Bluesky posts need metrics fetching")
+
         # Auto-classify posts that have settled (>= 48h old)
         classified = db.auto_classify_posts(min_age_hours=48)
         if classified["resonated"] or classified["low_resonance"]:
             logger.info(f"\nAuto-classified: {classified['resonated']} resonated, "
                         f"{classified['low_resonance']} low_resonance")
 
-        logger.info(f"\nDone. Fetched metrics for {fetched} posts.")
+        logger.info(f"\nDone. Fetched X metrics for {fetched} posts, Bluesky metrics for {bluesky_fetched} posts.")
 
 
 if __name__ == "__main__":

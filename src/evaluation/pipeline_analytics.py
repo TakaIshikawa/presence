@@ -6,6 +6,7 @@ score-engagement correlation.
 """
 
 import json
+import statistics
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -28,6 +29,20 @@ class PipelineHealthReport:
     score_distribution: dict[str, int]  # {'0-3': N, '3-5': N, '5-7': N, '7-9': N, '9-10': N}
     refinement_stats: dict  # {'total_refined': N, 'picked_refined': N, 'picked_original': N}
     avg_engagement_by_score_band: dict[str, float]  # engagement correlation
+
+
+@dataclass
+class CrossPlatformReport:
+    """Cross-platform engagement comparison report."""
+
+    period_days: int
+    avg_x_score: float
+    avg_bluesky_score: float
+    correlation: Optional[float]  # Pearson correlation between X and Bluesky scores
+    x_only_count: int
+    bluesky_only_count: int
+    both_count: int
+    platform_winner: dict[int, str]  # content_id -> 'x', 'bluesky', or 'tie'
 
 
 class PipelineAnalytics:
@@ -347,3 +362,90 @@ class PipelineAnalytics:
             })
 
         return weeks_data
+
+    def cross_platform_comparison(self, days: int = 30) -> CrossPlatformReport:
+        """Compare engagement across X and Bluesky platforms.
+
+        Args:
+            days: Number of days to look back
+
+        Returns:
+            CrossPlatformReport with comparative metrics
+        """
+        # Get content posted to both platforms with latest engagement scores
+        cursor = self.db.conn.execute(
+            """SELECT gc.id,
+                      pe.engagement_score AS x_score,
+                      be.engagement_score AS bluesky_score
+               FROM generated_content gc
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM bluesky_engagement
+               ) be ON be.content_id = gc.id AND be.rn = 1
+               WHERE gc.published = 1
+                 AND gc.published_at >= datetime('now', ?)
+                 AND (pe.engagement_score IS NOT NULL OR be.engagement_score IS NOT NULL)""",
+            (f'-{days} days',)
+        )
+
+        x_scores = []
+        bluesky_scores = []
+        x_only_count = 0
+        bluesky_only_count = 0
+        both_count = 0
+        platform_winner = {}
+
+        for row in cursor.fetchall():
+            content_id = row[0]
+            x_score = row[1]
+            bluesky_score = row[2]
+
+            if x_score is not None and bluesky_score is not None:
+                both_count += 1
+                x_scores.append(x_score)
+                bluesky_scores.append(bluesky_score)
+
+                # Determine winner
+                if x_score > bluesky_score:
+                    platform_winner[content_id] = 'x'
+                elif bluesky_score > x_score:
+                    platform_winner[content_id] = 'bluesky'
+                else:
+                    platform_winner[content_id] = 'tie'
+            elif x_score is not None:
+                x_only_count += 1
+            elif bluesky_score is not None:
+                bluesky_only_count += 1
+
+        # Calculate averages
+        avg_x_score = sum(x_scores) / len(x_scores) if x_scores else 0.0
+        avg_bluesky_score = sum(bluesky_scores) / len(bluesky_scores) if bluesky_scores else 0.0
+
+        # Calculate correlation if we have enough paired samples
+        correlation = None
+        if len(x_scores) >= 3 and len(bluesky_scores) >= 3:
+            try:
+                correlation = statistics.correlation(x_scores, bluesky_scores)
+            except statistics.StatisticsError:
+                correlation = None
+
+        return CrossPlatformReport(
+            period_days=days,
+            avg_x_score=round(avg_x_score, 2),
+            avg_bluesky_score=round(avg_bluesky_score, 2),
+            correlation=round(correlation, 3) if correlation is not None else None,
+            x_only_count=x_only_count,
+            bluesky_only_count=bluesky_only_count,
+            both_count=both_count,
+            platform_winner=platform_winner,
+        )
