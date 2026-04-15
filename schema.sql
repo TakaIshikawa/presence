@@ -67,6 +67,23 @@ CREATE TABLE IF NOT EXISTS post_engagement (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Track engagement predictions from EngagementPredictor
+CREATE TABLE IF NOT EXISTS engagement_predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER REFERENCES generated_content(id),
+    predicted_score REAL NOT NULL,
+    hook_strength REAL,
+    specificity REAL,
+    emotional_resonance REAL,
+    novelty REAL,
+    actionability REAL,
+    prompt_version TEXT,
+    actual_engagement_score REAL,  -- backfilled from post_engagement
+    prediction_error REAL,         -- actual - predicted, backfilled
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_predictions_content ON engagement_predictions(content_id);
+
 -- Prompt versions for eval tracking
 CREATE TABLE IF NOT EXISTS prompt_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
