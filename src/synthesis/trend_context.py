@@ -67,6 +67,56 @@ class TrendContextBuilder:
 
         return result
 
+    def build_context_with_ids(
+        self,
+        max_items: int = 15,
+        max_age_hours: int = 72,
+        cache_ttl_hours: int = 4,
+    ) -> tuple[str, list[int]]:
+        """Build trend context and return knowledge item IDs used.
+
+        Returns (context_text, knowledge_ids).
+        """
+        # Check cache
+        cached_context = None
+        cached_ids = []
+        if self.db:
+            cached_context = self._get_cached(cache_ttl_hours)
+            if cached_context is not None:
+                # Also get cached IDs
+                raw = self.db.get_meta("trend_themes")
+                if raw:
+                    try:
+                        cached_data = json.loads(raw)
+                        cached_ids = cached_data.get("knowledge_ids", [])
+                        return cached_context, cached_ids
+                    except json.JSONDecodeError:
+                        pass
+
+        items = self.store.get_recent_by_source_type(
+            source_type="curated_x",
+            limit=max_items,
+            max_age_hours=max_age_hours,
+        )
+
+        if len(items) < 3:
+            return "", []
+
+        themes = self._extract_themes(items)
+        if not themes:
+            return "", []
+
+        result = self._format_context(themes, items)
+
+        # Extract knowledge IDs
+        knowledge_ids = [item.id for item in items if item.id is not None]
+
+        # Cache result with IDs
+        if self.db:
+            self._cache_result(themes, items, knowledge_ids)
+
+        return result, knowledge_ids
+
     def _get_cached(self, cache_ttl_hours: int) -> Optional[str]:
         """Return cached trend context if fresh enough."""
         raw = self.db.get_meta("trend_themes")
@@ -109,7 +159,7 @@ class TrendContextBuilder:
         return "\n".join(lines)
 
     def _cache_result(
-        self, themes: list[str], items: list[KnowledgeItem]
+        self, themes: list[str], items: list[KnowledgeItem], knowledge_ids: list[int] = None
     ) -> None:
         """Cache extracted themes and notable takes."""
         notable = []
@@ -121,12 +171,17 @@ class TrendContextBuilder:
             insight = item.insight or item.content[:150]
             notable.append(f"@{item.author}: {insight}")
 
-        self.db.set_meta("trend_themes", json.dumps({
+        cache_data = {
             "themes": themes,
             "notable_takes": notable,
             "cached_at": datetime.now(timezone.utc).isoformat(),
             "item_count": len(items),
-        }))
+        }
+
+        if knowledge_ids is not None:
+            cache_data["knowledge_ids"] = knowledge_ids
+
+        self.db.set_meta("trend_themes", json.dumps(cache_data))
 
     def _extract_themes(self, items: list[KnowledgeItem]) -> list[str]:
         """Use Claude to extract 3-5 trending themes from curated items."""
