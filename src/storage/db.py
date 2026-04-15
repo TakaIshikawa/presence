@@ -1052,6 +1052,77 @@ class Database:
             "criteria_breakdown": criteria_breakdown,
         }
 
+    def get_predictions_with_actuals(self, days: int = 30) -> list[dict]:
+        """Get predictions with actual engagement scores for calibration.
+
+        Args:
+            days: Number of days to look back
+
+        Returns:
+            List of prediction dicts with all fields
+        """
+        cursor = self.conn.execute(
+            """SELECT predicted_score, actual_engagement_score, prediction_error,
+                      hook_strength, specificity, emotional_resonance,
+                      novelty, actionability, content_id, created_at
+               FROM engagement_predictions
+               WHERE actual_engagement_score IS NOT NULL
+                 AND created_at >= datetime('now', ?)
+               ORDER BY created_at DESC""",
+            (f'-{days} days',)
+        )
+        rows = cursor.fetchall()
+
+        return [
+            {
+                "predicted_score": row[0],
+                "actual_engagement_score": row[1],
+                "prediction_error": row[2],
+                "hook_strength": row[3],
+                "specificity": row[4],
+                "emotional_resonance": row[5],
+                "novelty": row[6],
+                "actionability": row[7],
+                "content_id": row[8],
+                "created_at": row[9],
+            }
+            for row in rows
+        ]
+
+    def get_predictions_by_criterion(
+        self, criterion: str, days: int = 30
+    ) -> list[tuple[float, float]]:
+        """Get (criterion_score, actual_engagement) pairs for correlation analysis.
+
+        Args:
+            criterion: One of hook_strength, specificity, emotional_resonance,
+                      novelty, actionability
+            days: Number of days to look back
+
+        Returns:
+            List of (criterion_value, actual_engagement) tuples
+        """
+        valid_criteria = [
+            "hook_strength",
+            "specificity",
+            "emotional_resonance",
+            "novelty",
+            "actionability",
+        ]
+        if criterion not in valid_criteria:
+            raise ValueError(f"Invalid criterion: {criterion}")
+
+        cursor = self.conn.execute(
+            f"""SELECT {criterion}, actual_engagement_score
+                FROM engagement_predictions
+                WHERE actual_engagement_score IS NOT NULL
+                  AND {criterion} IS NOT NULL
+                  AND created_at >= datetime('now', ?)
+                ORDER BY created_at DESC""",
+            (f'-{days} days',)
+        )
+        return cursor.fetchall()
+
     # Content topics and planning
     def insert_content_topics(
         self,

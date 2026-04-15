@@ -629,9 +629,21 @@ class SynthesisPipeline:
         if self.engagement_predictor:
             try:
                 from evaluation.engagement_predictor import EngagementPredictor
+                from evaluation.prediction_calibrator import PredictionCalibrator
+
+                # Generate calibration context from historical accuracy
+                calibration_context = ""
+                try:
+                    calibrator = PredictionCalibrator(self.db)
+                    report = calibrator.compute_calibration_report(days=30)
+                    calibration_context = calibrator.generate_calibration_context(report)
+                except Exception as e:
+                    logger.debug(f"Calibration context generation failed (non-fatal): {e}")
+
                 predictions = self.engagement_predictor.predict_batch(
                     tweets=[{"id": "draft", "text": final_content}],
                     prompt_version="v1",
+                    calibration_context=calibration_context,
                 )
                 if predictions:
                     pred = predictions[0]

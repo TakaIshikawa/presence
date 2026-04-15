@@ -46,6 +46,7 @@ class EngagementPredictor:
         tweets: list[dict],
         account_context: str = "",
         prompt_version: str = "v1",
+        calibration_context: str = "",
     ) -> list[EngagementPrediction]:
         """Score a batch of tweets for predicted engagement.
 
@@ -53,6 +54,7 @@ class EngagementPredictor:
             tweets: List of {"id": str, "text": str} dicts.
             account_context: e.g. "Account: @user, 5K followers. Bio: ..."
             prompt_version: Which prompt template to use (v1, v2, etc.)
+            calibration_context: Optional calibration note based on historical accuracy
 
         Returns:
             List of EngagementPrediction, one per input tweet.
@@ -63,6 +65,10 @@ class EngagementPredictor:
             f"TWEET_{i + 1} (id={t['id']}):\n{t['text']}"
             for i, t in enumerate(tweets)
         )
+
+        # Inject calibration context if provided
+        if calibration_context:
+            template = template + "\n\n" + calibration_context + "\n"
 
         filled = template.format(
             tweets=tweets_text,
