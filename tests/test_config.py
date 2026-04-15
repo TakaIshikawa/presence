@@ -8,6 +8,7 @@ from config import (
     Config,
     GitHubConfig,
     XConfig,
+    BlueskyConfig,
     AnthropicConfig,
     PathsConfig,
     SynthesisConfig,
@@ -289,6 +290,47 @@ class TestDefaults:
     def test_curated_sources_none_when_missing(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert cfg.curated_sources is None
+
+    def test_bluesky_none_when_missing(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert cfg.bluesky is None
+
+    def test_bluesky_config_loaded(self, tmp_path):
+        data = _minimal_config_dict()
+        data["bluesky"] = {
+            "enabled": True,
+            "handle": "test.bsky.social",
+            "app_password": "test-password",
+        }
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.bluesky is not None
+        assert cfg.bluesky.enabled is True
+        assert cfg.bluesky.handle == "test.bsky.social"
+        assert cfg.bluesky.app_password == "test-password"
+
+    def test_bluesky_config_disabled(self, tmp_path):
+        data = _minimal_config_dict()
+        data["bluesky"] = {
+            "enabled": False,
+            "handle": "test.bsky.social",
+            "app_password": "test-password",
+        }
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.bluesky is not None
+        assert cfg.bluesky.enabled is False
+
+    def test_bluesky_resolves_env_vars(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BSKY_HANDLE", "user.bsky.social")
+        monkeypatch.setenv("BSKY_PASSWORD", "secret123")
+        data = _minimal_config_dict()
+        data["bluesky"] = {
+            "enabled": True,
+            "handle": "${BSKY_HANDLE}",
+            "app_password": "${BSKY_PASSWORD}",
+        }
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.bluesky.handle == "user.bsky.social"
+        assert cfg.bluesky.app_password == "secret123"
 
 
 # ---------------------------------------------------------------------------

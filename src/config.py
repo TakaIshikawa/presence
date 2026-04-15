@@ -22,6 +22,13 @@ class XConfig:
 
 
 @dataclass
+class BlueskyConfig:
+    enabled: bool
+    handle: str
+    app_password: str
+
+
+@dataclass
 class AnthropicConfig:
     api_key: str
 
@@ -117,6 +124,7 @@ class TimeoutsConfig:
 class Config:
     github: GitHubConfig
     x: XConfig
+    bluesky: Optional[BlueskyConfig]
     anthropic: AnthropicConfig
     paths: PathsConfig
     synthesis: SynthesisConfig
@@ -261,6 +269,15 @@ def load_config(config_path: Optional[str] = None) -> Config:
             reply_quality_threshold=data["cultivate"].get("reply_quality_threshold", 6.0),
         )
 
+    # Parse Bluesky config if present
+    bluesky_config = None
+    if "bluesky" in data:
+        bluesky_config = BlueskyConfig(
+            enabled=data["bluesky"].get("enabled", True),
+            handle=_resolve_env_var(data["bluesky"].get("handle", "")),
+            app_password=_resolve_env_var(data["bluesky"].get("app_password", "")),
+        )
+
     # Validate required sections exist and are dictionaries
     _require(data, "github", section="github")
     _require(data, "x", section="x")
@@ -289,6 +306,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             access_token=_resolve_env_var(_require(data, "x", "access_token", section="x")),
             access_token_secret=_resolve_env_var(_require(data, "x", "access_token_secret", section="x"))
         ),
+        bluesky=bluesky_config,
         anthropic=AnthropicConfig(
             api_key=_resolve_env_var(_require(data, "anthropic", "api_key", section="anthropic"))
         ),
