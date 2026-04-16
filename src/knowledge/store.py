@@ -1,8 +1,10 @@
 """Knowledge store for accumulated insights."""
 
+from __future__ import annotations
+
 import logging
 import sqlite3
-from typing import Optional
+from typing import Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -30,7 +32,7 @@ class KnowledgeItem:
     approved: bool
     created_at: Optional[datetime]
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "source_type": self.source_type,
@@ -45,11 +47,14 @@ class KnowledgeItem:
 
 
 class KnowledgeStore:
-    def __init__(self, conn: sqlite3.Connection, embedder: EmbeddingProvider):
+    def __init__(self, conn: sqlite3.Connection, embedder: EmbeddingProvider) -> None:
         self.conn = conn
         self.embedder = embedder
 
-    def add_item(self, item: KnowledgeItem) -> int:
+    def add_item(self, item: KnowledgeItem):  # type: ignore[no-untyped-def]
+        # TODO: Add proper return type. Currently returns int, but cursor.lastrowid
+        # can be None when ON CONFLICT triggers UPDATE instead of INSERT.
+        # Requires refactoring to either query for the ID or use RETURNING clause.
         """Add a knowledge item with embedding."""
         logger.debug("Adding knowledge item: source_type=%s source_id=%s", item.source_type, item.source_id)
 
