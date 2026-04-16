@@ -54,10 +54,7 @@ class KnowledgeStore:
         self.conn = conn
         self.embedder = embedder
 
-    def add_item(self, item: KnowledgeItem):  # type: ignore[no-untyped-def]
-        # TODO: Add proper return type. Currently returns int, but cursor.lastrowid
-        # can be None when ON CONFLICT triggers UPDATE instead of INSERT.
-        # Requires refactoring to either query for the ID or use RETURNING clause.
+    def add_item(self, item: KnowledgeItem) -> int:
         """Add a knowledge item with embedding.
 
         Raises:
@@ -96,6 +93,7 @@ class KnowledgeStore:
         )
         self.conn.commit()
         row_id = cursor.lastrowid
+        assert row_id is not None, "Failed to get row ID after insert/update"
         logger.debug("Stored knowledge item id=%d", row_id)
         return row_id
 
