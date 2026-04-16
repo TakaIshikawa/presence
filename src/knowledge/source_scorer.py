@@ -5,7 +5,10 @@ high-engagement content, enabling smarter knowledge retrieval prioritization.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from storage.db import Database
 
 
 @dataclass
@@ -23,14 +26,14 @@ class SourceScore:
 class SourceScorer:
     """Computes quality scores for curated knowledge sources based on engagement."""
 
-    def __init__(self, db):
+    def __init__(self, db: "Database") -> None:
         """Initialize scorer with database connection.
 
         Args:
             db: Database instance with connection
         """
         self.db = db
-        self._tier_cache = {}  # Cache for quick tier lookups
+        self._tier_cache: dict[tuple[str, str], str] = {}  # Cache for quick tier lookups
 
     def compute_scores(self, days: int = 90, min_uses: int = 2) -> list[SourceScore]:
         """Compute quality scores for all curated sources.
