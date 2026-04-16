@@ -152,7 +152,7 @@ def format_json_report(analytics: PipelineAnalytics, args) -> str:
     return json.dumps(data, indent=2)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate pipeline analytics report"
     )
