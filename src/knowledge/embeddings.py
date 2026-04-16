@@ -5,6 +5,21 @@ from typing import Optional
 from abc import ABC, abstractmethod
 
 
+class EmbeddingError(Exception):
+    """Base exception for embedding-related errors."""
+    pass
+
+
+class EmbeddingGenerationError(EmbeddingError):
+    """Raised when embedding generation fails."""
+    pass
+
+
+class EmbeddingProviderUnavailableError(EmbeddingError):
+    """Raised when the embedding provider is unreachable or unavailable."""
+    pass
+
+
 class EmbeddingProvider(ABC):
     @abstractmethod
     def embed(self, text: str) -> list[float]:
@@ -26,12 +41,52 @@ class VoyageEmbeddings(EmbeddingProvider):
         self.model = model
 
     def embed(self, text: str) -> list[float]:
-        result = self.client.embed([text], model=self.model)
-        return result.embeddings[0]
+        try:
+            result = self.client.embed([text], model=self.model)
+            if not result or not result.embeddings:
+                raise EmbeddingGenerationError(
+                    f"Voyage API returned empty embeddings for text (length={len(text)})"
+                )
+            return result.embeddings[0]
+        except EmbeddingError:
+            # Re-raise our own exceptions
+            raise
+        except ConnectionError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Failed to connect to Voyage API: {e}"
+            ) from e
+        except Exception as e:
+            # Catch API errors, auth errors, network errors, etc.
+            error_name = type(e).__name__
+            raise EmbeddingGenerationError(
+                f"Voyage embedding generation failed: {error_name}: {e}"
+            ) from e
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        result = self.client.embed(texts, model=self.model)
-        return result.embeddings
+        try:
+            result = self.client.embed(texts, model=self.model)
+            if not result or not result.embeddings:
+                raise EmbeddingGenerationError(
+                    f"Voyage API returned empty embeddings for batch (size={len(texts)})"
+                )
+            if len(result.embeddings) != len(texts):
+                raise EmbeddingGenerationError(
+                    f"Voyage API returned {len(result.embeddings)} embeddings for {len(texts)} texts"
+                )
+            return result.embeddings
+        except EmbeddingError:
+            # Re-raise our own exceptions
+            raise
+        except ConnectionError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Failed to connect to Voyage API: {e}"
+            ) from e
+        except Exception as e:
+            # Catch API errors, auth errors, network errors, etc.
+            error_name = type(e).__name__
+            raise EmbeddingGenerationError(
+                f"Voyage batch embedding generation failed: {error_name}: {e}"
+            ) from e
 
 
 class OpenAIEmbeddings(EmbeddingProvider):
@@ -43,18 +98,58 @@ class OpenAIEmbeddings(EmbeddingProvider):
         self.model = model
 
     def embed(self, text: str) -> list[float]:
-        response = self.client.embeddings.create(
-            input=text,
-            model=self.model
-        )
-        return response.data[0].embedding
+        try:
+            response = self.client.embeddings.create(
+                input=text,
+                model=self.model
+            )
+            if not response or not response.data:
+                raise EmbeddingGenerationError(
+                    f"OpenAI API returned empty response for text (length={len(text)})"
+                )
+            return response.data[0].embedding
+        except EmbeddingError:
+            # Re-raise our own exceptions
+            raise
+        except ConnectionError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Failed to connect to OpenAI API: {e}"
+            ) from e
+        except Exception as e:
+            # Catch API errors (APIError, RateLimitError, etc.), auth errors, network errors
+            error_name = type(e).__name__
+            raise EmbeddingGenerationError(
+                f"OpenAI embedding generation failed: {error_name}: {e}"
+            ) from e
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        response = self.client.embeddings.create(
-            input=texts,
-            model=self.model
-        )
-        return [item.embedding for item in response.data]
+        try:
+            response = self.client.embeddings.create(
+                input=texts,
+                model=self.model
+            )
+            if not response or not response.data:
+                raise EmbeddingGenerationError(
+                    f"OpenAI API returned empty response for batch (size={len(texts)})"
+                )
+            if len(response.data) != len(texts):
+                raise EmbeddingGenerationError(
+                    f"OpenAI API returned {len(response.data)} embeddings for {len(texts)} texts"
+                )
+            return [item.embedding for item in response.data]
+        except EmbeddingError:
+            # Re-raise our own exceptions
+            raise
+        except ConnectionError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Failed to connect to OpenAI API: {e}"
+            ) from e
+        except Exception as e:
+            # Catch API errors (APIError, RateLimitError, etc.), auth errors, network errors
+            error_name = type(e).__name__
+            raise EmbeddingGenerationError(
+                f"OpenAI batch embedding generation failed: {error_name}: {e}"
+            ) from e
 
 
 class AnthropicEmbeddings(EmbeddingProvider):

@@ -10,6 +10,9 @@ from datetime import datetime
 
 from .embeddings import (
     EmbeddingProvider,
+    EmbeddingError,
+    EmbeddingGenerationError,
+    EmbeddingProviderUnavailableError,
     serialize_embedding,
     deserialize_embedding,
     cosine_similarity
@@ -55,7 +58,12 @@ class KnowledgeStore:
         # TODO: Add proper return type. Currently returns int, but cursor.lastrowid
         # can be None when ON CONFLICT triggers UPDATE instead of INSERT.
         # Requires refactoring to either query for the ID or use RETURNING clause.
-        """Add a knowledge item with embedding."""
+        """Add a knowledge item with embedding.
+
+        Raises:
+            EmbeddingGenerationError: If embedding generation fails
+            EmbeddingProviderUnavailableError: If the embedding provider is unreachable
+        """
         logger.debug("Adding knowledge item: source_type=%s source_id=%s", item.source_type, item.source_id)
 
         # Generate embedding if not provided
@@ -99,7 +107,12 @@ class KnowledgeStore:
         min_similarity: float = 0.5,
         approved_only: bool = True
     ) -> list[tuple[KnowledgeItem, float]]:
-        """Search for similar knowledge items."""
+        """Search for similar knowledge items.
+
+        Raises:
+            EmbeddingGenerationError: If embedding generation fails
+            EmbeddingProviderUnavailableError: If the embedding provider is unreachable
+        """
         logger.debug("Searching similar knowledge: query_len=%d source_types=%s limit=%d", len(query), source_types, limit)
 
         query_embedding = self.embedder.embed(query)
