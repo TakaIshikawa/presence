@@ -9,14 +9,34 @@ from datetime import datetime, timedelta, timezone
 MAX_RETRIES = 3
 
 
+class DatabaseError(Exception):
+    """Base exception for database errors."""
+    pass
+
+
+class ConnectionError(DatabaseError):
+    """Raised when database connection fails."""
+    pass
+
+
+class IntegrityError(DatabaseError):
+    """Raised when database integrity constraint is violated."""
+    pass
+
+
 class Database:
     def __init__(self, db_path: str = "./presence.db"):
         self.db_path = Path(db_path).expanduser()
         self.conn: Optional[sqlite3.Connection] = None
 
     def connect(self) -> None:
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
+        try:
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row
+        except sqlite3.OperationalError as e:
+            raise ConnectionError(
+                f"Failed to connect to database at {self.db_path}: {e}"
+            ) from e
 
     def close(self) -> None:
         if self.conn:
@@ -32,74 +52,79 @@ class Database:
 
     def init_schema(self, schema_path: str = "./schema.sql") -> None:
         """Initialize database with schema."""
-        schema = Path(schema_path).read_text()
-        self.conn.executescript(schema)
-        # Migrate: add columns if missing (existing DBs)
-        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(generated_content)")}
-        if "retry_count" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN retry_count INTEGER DEFAULT 0")
-        if "last_retry_at" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN last_retry_at TEXT")
-        if "tweet_id" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN tweet_id TEXT")
-        if "published_at" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN published_at TEXT")
-        if "curation_quality" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN curation_quality TEXT")
-            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_curation ON generated_content(curation_quality)")
-        if "auto_quality" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN auto_quality TEXT")
-            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_auto_quality ON generated_content(auto_quality)")
-        if "content_embedding" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_embedding BLOB")
-        if "repurposed_from" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN repurposed_from INTEGER REFERENCES generated_content(id)")
-        if "bluesky_uri" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN bluesky_uri TEXT")
-        if "content_format" not in cols:
-            self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_format TEXT")
-        # Migrate reply_queue for cultivate enrichment
-        rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
-        if rq_cols and "relationship_context" not in rq_cols:
-            self.conn.execute("ALTER TABLE reply_queue ADD COLUMN relationship_context TEXT")
-        if rq_cols and "quality_score" not in rq_cols:
-            self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_score REAL")
-        if rq_cols and "quality_flags" not in rq_cols:
-            self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_flags TEXT")
-        # Migrate pipeline_runs for outcome tracking
-        pr_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pipeline_runs)")}
-        if pr_cols and "outcome" not in pr_cols:
-            self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN outcome TEXT")
-        if pr_cols and "rejection_reason" not in pr_cols:
-            self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
-        if pr_cols and "filter_stats" not in pr_cols:
-            self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
-        # Migrate: create meta table if missing
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        # Migrate: create bluesky_engagement table if missing
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS bluesky_engagement (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content_id INTEGER NOT NULL REFERENCES generated_content(id),
-                bluesky_uri TEXT NOT NULL,
-                like_count INTEGER DEFAULT 0,
-                repost_count INTEGER DEFAULT 0,
-                reply_count INTEGER DEFAULT 0,
-                quote_count INTEGER DEFAULT 0,
-                engagement_score REAL,
-                fetched_at TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_uri ON bluesky_engagement(bluesky_uri)")
-        self.conn.commit()
+        try:
+            schema = Path(schema_path).read_text()
+            self.conn.executescript(schema)
+            # Migrate: add columns if missing (existing DBs)
+            cols = {row[1] for row in self.conn.execute("PRAGMA table_info(generated_content)")}
+            if "retry_count" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN retry_count INTEGER DEFAULT 0")
+            if "last_retry_at" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN last_retry_at TEXT")
+            if "tweet_id" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN tweet_id TEXT")
+            if "published_at" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN published_at TEXT")
+            if "curation_quality" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN curation_quality TEXT")
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_curation ON generated_content(curation_quality)")
+            if "auto_quality" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN auto_quality TEXT")
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_auto_quality ON generated_content(auto_quality)")
+            if "content_embedding" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_embedding BLOB")
+            if "repurposed_from" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN repurposed_from INTEGER REFERENCES generated_content(id)")
+            if "bluesky_uri" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN bluesky_uri TEXT")
+            if "content_format" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_format TEXT")
+            # Migrate reply_queue for cultivate enrichment
+            rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
+            if rq_cols and "relationship_context" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN relationship_context TEXT")
+            if rq_cols and "quality_score" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_score REAL")
+            if rq_cols and "quality_flags" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_flags TEXT")
+            # Migrate pipeline_runs for outcome tracking
+            pr_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pipeline_runs)")}
+            if pr_cols and "outcome" not in pr_cols:
+                self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN outcome TEXT")
+            if pr_cols and "rejection_reason" not in pr_cols:
+                self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
+            if pr_cols and "filter_stats" not in pr_cols:
+                self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
+            # Migrate: create meta table if missing
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Migrate: create bluesky_engagement table if missing
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS bluesky_engagement (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                    bluesky_uri TEXT NOT NULL,
+                    like_count INTEGER DEFAULT 0,
+                    repost_count INTEGER DEFAULT 0,
+                    reply_count INTEGER DEFAULT 0,
+                    quote_count INTEGER DEFAULT 0,
+                    engagement_score REAL,
+                    fetched_at TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_uri ON bluesky_engagement(bluesky_uri)")
+            self.conn.commit()
+        except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+            raise DatabaseError(
+                f"Failed to initialize database schema at {self.db_path}: {e}"
+            ) from e
 
     # Claude messages
     def is_message_processed(self, message_uuid: str) -> bool:
