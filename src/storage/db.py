@@ -1691,6 +1691,48 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_source_engagement_details(
+        self, days: int = 90, min_uses: int = 2
+    ) -> list[dict]:
+        """Get detailed engagement stats for curated sources including resonance data.
+
+        Similar to get_most_valuable_sources but also includes:
+        - resonated_count: number of posts using this source classified as 'resonated'
+        - classified_count: total number of classified posts using this source
+        - total_uses: total times knowledge from this source was used
+
+        Args:
+            days: Number of days to look back
+            min_uses: Minimum number of uses to be included in results
+
+        Returns:
+            List of dicts with source_type, author, total_uses, avg_engagement,
+            resonated_count, classified_count, ordered by avg_engagement descending
+        """
+        cursor = self.conn.execute(
+            """SELECT k.source_type, k.author,
+                      COUNT(DISTINCT ckl.content_id) AS total_uses,
+                      AVG(COALESCE(pe.engagement_score, 0)) AS avg_engagement,
+                      SUM(CASE WHEN gc.auto_quality = 'resonated' THEN 1 ELSE 0 END) AS resonated_count,
+                      SUM(CASE WHEN gc.auto_quality IS NOT NULL THEN 1 ELSE 0 END) AS classified_count
+               FROM knowledge k
+               INNER JOIN content_knowledge_links ckl ON ckl.knowledge_id = k.id
+               INNER JOIN generated_content gc ON gc.id = ckl.content_id
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM post_engagement
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               WHERE ckl.created_at >= datetime('now', ?)
+                 AND gc.published = 1
+                 AND k.source_type IN ('curated_x', 'curated_article')
+               GROUP BY k.source_type, k.author
+               HAVING total_uses >= ?
+               ORDER BY avg_engagement DESC""",
+            (f'-{days} days', min_uses)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     def get_content_lineage(self, content_id: int) -> list[dict]:
         """Get all knowledge items that contributed to a specific post.
 
