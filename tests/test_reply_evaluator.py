@@ -1,8 +1,10 @@
 """Tests for ReplyEvaluator — reply quality evaluation."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
+import anthropic
+import httpx
 import pytest
 
 from engagement.reply_evaluator import ReplyEvaluator, ReplyEvalResult
@@ -12,9 +14,9 @@ from engagement.cultivate_bridge import PersonContext
 @pytest.fixture
 def evaluator():
     """ReplyEvaluator with mocked Anthropic client."""
-    with patch("engagement.reply_evaluator.anthropic") as mock_anthropic:
+    with patch("engagement.reply_evaluator.anthropic.Anthropic") as mock_anthropic_class:
         eval_ = ReplyEvaluator(api_key="test-key", model="test-model")
-        eval_._mock_anthropic = mock_anthropic
+        eval_._mock_anthropic = mock_anthropic_class
         yield eval_
 
 
@@ -272,7 +274,12 @@ class TestLLMEvaluation:
         assert result.passes  # 5.5 >= 5.0
 
     def test_api_error_returns_safe_default(self, evaluator):
-        evaluator.client.messages.create.side_effect = Exception("API error")
+        """Generic API errors (using APIConnectionError) should return safe default."""
+        mock_request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        evaluator.client.messages.create.side_effect = anthropic.APIConnectionError(
+            message="API error",
+            request=mock_request,
+        )
         result = evaluator.evaluate(
             draft="Some reply",
             our_post="Our post",
@@ -400,8 +407,11 @@ class TestLLMEvaluationWithPersonContext:
         assert "Relationship context:" not in prompt
 
     def test_exception_fallback_returns_correct_values(self, evaluator):
-        """Verify Exception handler returns score=5.0, passes=False, flags=['eval_error']."""
-        evaluator.client.messages.create.side_effect = RuntimeError("Network timeout")
+        """Verify Anthropic API exception handler returns score=5.0, passes=False, flags=['eval_error']."""
+        mock_request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        evaluator.client.messages.create.side_effect = anthropic.APITimeoutError(
+            request=mock_request
+        )
 
         result = evaluator.evaluate(
             draft="Some draft",
@@ -412,10 +422,10 @@ class TestLLMEvaluationWithPersonContext:
         assert result.score == 5.0
         assert result.passes is False
         assert result.flags == ["eval_error"]
-        assert "Network timeout" in result.feedback
+        assert "Evaluation error:" in result.feedback
 
     def test_exception_with_person_context_still_fails_safely(self, evaluator):
-        """Exception during LLM call with person_context should still fail safely."""
+        """Anthropic API exception during LLM call with person_context should still fail safely."""
         ctx = PersonContext(
             x_handle="user",
             display_name="User",
@@ -429,7 +439,11 @@ class TestLLMEvaluationWithPersonContext:
             is_known=True,
         )
 
-        evaluator.client.messages.create.side_effect = Exception("API down")
+        mock_request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        evaluator.client.messages.create.side_effect = anthropic.APIConnectionError(
+            message="API down",
+            request=mock_request,
+        )
 
         result = evaluator.evaluate(
             draft="Test",
@@ -441,6 +455,114 @@ class TestLLMEvaluationWithPersonContext:
         assert result.score == 5.0
         assert not result.passes
         assert "eval_error" in result.flags
+
+
+# -- Anthropic API specific exception tests -----------------------------------
+
+
+class TestAnthropicAPIExceptions:
+    """Test handling of specific Anthropic API exceptions."""
+
+    def _make_mock_request(self):
+        """Create a mock httpx.Request for exception constructors."""
+        return httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+
+    def test_api_connection_error_caught(self, evaluator):
+        """APIConnectionError should be caught and return eval_error result."""
+        mock_request = self._make_mock_request()
+        error = anthropic.APIConnectionError(
+            message="Connection failed",
+            request=mock_request,
+        )
+        evaluator.client.messages.create.side_effect = error
+
+        with patch("engagement.reply_evaluator.logger") as mock_logger:
+            result = evaluator.evaluate(
+                draft="Some reply",
+                our_post="Our post",
+                their_reply="Their reply",
+            )
+
+            assert result.score == 5.0
+            assert result.passes is False
+            assert "eval_error" in result.flags
+            assert "Connection failed" in result.feedback
+            mock_logger.warning.assert_called_once()
+            assert "Reply evaluation API error" in mock_logger.warning.call_args[0][0]
+
+    def test_api_status_error_caught(self, evaluator):
+        """APIStatusError should be caught and return eval_error result."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 429
+        mock_response.request = self._make_mock_request()
+        mock_response.headers = {}
+
+        error = anthropic.APIStatusError(
+            message="Rate limit exceeded",
+            response=mock_response,
+            body=None,
+        )
+        evaluator.client.messages.create.side_effect = error
+
+        with patch("engagement.reply_evaluator.logger") as mock_logger:
+            result = evaluator.evaluate(
+                draft="Some reply",
+                our_post="Our post",
+                their_reply="Their reply",
+            )
+
+            assert result.score == 5.0
+            assert result.passes is False
+            assert "eval_error" in result.flags
+            mock_logger.warning.assert_called_once()
+
+    def test_api_timeout_error_caught(self, evaluator):
+        """APITimeoutError should be caught and return eval_error result."""
+        mock_request = self._make_mock_request()
+        error = anthropic.APITimeoutError(request=mock_request)
+        evaluator.client.messages.create.side_effect = error
+
+        with patch("engagement.reply_evaluator.logger") as mock_logger:
+            result = evaluator.evaluate(
+                draft="Some reply",
+                our_post="Our post",
+                their_reply="Their reply",
+            )
+
+            assert result.score == 5.0
+            assert result.passes is False
+            assert "eval_error" in result.flags
+            # APITimeoutError has a default message
+            assert "Evaluation error:" in result.feedback
+            mock_logger.warning.assert_called_once()
+
+    def test_multiple_api_errors_all_caught(self, evaluator):
+        """Verify all three Anthropic API exception types are caught."""
+        mock_request = self._make_mock_request()
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 500
+        mock_response.request = mock_request
+        mock_response.headers = {}
+
+        exceptions = [
+            anthropic.APIConnectionError(message="Connection error", request=mock_request),
+            anthropic.APIStatusError(message="Status error", response=mock_response, body=None),
+            anthropic.APITimeoutError(request=mock_request),
+        ]
+
+        for exc in exceptions:
+            evaluator.client.messages.create.side_effect = exc
+
+            with patch("engagement.reply_evaluator.logger"):
+                result = evaluator.evaluate(
+                    draft="Test",
+                    our_post="Post",
+                    their_reply="Reply",
+                )
+
+                assert result.score == 5.0
+                assert not result.passes
+                assert "eval_error" in result.flags
 
 
 # -- Response parsing tests ---------------------------------------------------
