@@ -46,17 +46,9 @@ class CrossPoster:
         if grapheme_count > 300:
             # Simple truncation - could be smarter about sentence boundaries
             # For now, just cut at 297 graphemes and add ellipsis
-            chars = list(adapted)
-            truncated = []
-            current_count = 0
-
-            for char in chars:
-                if current_count >= 297:
-                    break
-                truncated.append(char)
-                current_count = count_graphemes(''.join(truncated))
-
-            adapted = ''.join(truncated) + '...'
+            # Normalize once, then slice (after NFC normalization, len == grapheme count)
+            normalized = unicodedata.normalize('NFC', adapted)
+            adapted = normalized[:297] + '...'
 
         return adapted
 

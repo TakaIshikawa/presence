@@ -55,8 +55,43 @@ class TestAdaptForBluesky:
         cross_poster = CrossPoster()
         text = "A" * 300
         result = cross_poster.adapt_for_bluesky(text)
-        # Should fit exactly
-        assert result == text or result.endswith("...")  # Depends on exact counting
+        # Should fit exactly (300 graphemes is at the limit)
+        assert result == text
+
+    def test_truncation_produces_max_300_graphemes(self):
+        """Verify truncated output is at most 300 graphemes."""
+        cross_poster = CrossPoster()
+        text = "B" * 500  # Well over limit
+        result = cross_poster.adapt_for_bluesky(text)
+
+        # Result should be exactly 300 graphemes (297 + "...")
+        assert count_graphemes(result) == 300
+        assert result.endswith("...")
+        assert result.startswith("BBB")  # Verify content preserved
+
+    def test_truncation_with_unicode_text(self):
+        """Verify truncation works correctly with emoji and accented chars."""
+        cross_poster = CrossPoster()
+        # Build text with emoji and accented characters that exceeds 300 graphemes
+        text = "Hello 👋 café " * 30  # ~13-14 chars per iteration = ~400 chars
+        result = cross_poster.adapt_for_bluesky(text)
+
+        # Should be truncated
+        assert result.endswith("...")
+        grapheme_count = count_graphemes(result)
+        assert grapheme_count <= 300
+        # Verify it was actually truncated
+        assert len(result) < len(text)
+
+    def test_ellipsis_added_on_truncation(self):
+        """Verify '...' suffix is added when text is truncated."""
+        cross_poster = CrossPoster()
+        text = "X" * 350
+        result = cross_poster.adapt_for_bluesky(text)
+
+        assert result.endswith("...")
+        # The truncated part should be 297 chars + "..." = 300 total
+        assert count_graphemes(result) == 300
 
 
 # --- CrossPoster.publish() ---
