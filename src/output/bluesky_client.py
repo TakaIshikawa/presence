@@ -1,9 +1,13 @@
 """Bluesky (AT Protocol) API client for posting content."""
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
 from atproto import Client
+from atproto.exceptions import AtProtocolError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,8 +60,8 @@ class BlueskyClient:
                 cid=response.cid,
                 url=url
             )
-        except Exception as e:
-            return BlueskyPostResult(success=False, error=str(e))
+        except AtProtocolError as e:
+            return BlueskyPostResult(success=False, error=f'{type(e).__name__}: {e}')
 
     def post_thread(self, texts: list[str]) -> BlueskyPostResult:
         """Post a thread as a series of replies to self.
@@ -100,8 +104,8 @@ class BlueskyClient:
                 cid=first_response.cid,
                 url=url
             )
-        except Exception as e:
-            return BlueskyPostResult(success=False, error=str(e))
+        except AtProtocolError as e:
+            return BlueskyPostResult(success=False, error=f'{type(e).__name__}: {e}')
 
     def reply(
         self,
@@ -140,8 +144,8 @@ class BlueskyClient:
                 cid=response.cid,
                 url=url
             )
-        except Exception as e:
-            return BlueskyPostResult(success=False, error=str(e))
+        except AtProtocolError as e:
+            return BlueskyPostResult(success=False, error=f'{type(e).__name__}: {e}')
 
     def get_post_metrics(self, uri: str) -> Optional[dict]:
         """Fetch engagement metrics for a single post.
@@ -175,8 +179,9 @@ class BlueskyClient:
                 'reply_count': reply_count,
                 'quote_count': quote_count,
             }
-        except Exception:
+        except AtProtocolError as e:
             # Post not found or other error
+            logger.warning('Failed to fetch metrics for %s: %s', uri, e)
             return None
 
     def get_post_metrics_batch(self, uris: list[str]) -> list[dict]:

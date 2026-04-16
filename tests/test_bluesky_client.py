@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from atproto.exceptions import AtProtocolError, NetworkError, UnauthorizedError
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -86,7 +87,7 @@ class TestPost:
 
     def test_exception_returns_failure(self):
         client, mock_client = make_bluesky_client()
-        mock_client.send_post.side_effect = Exception("Rate limit exceeded")
+        mock_client.send_post.side_effect = AtProtocolError("Rate limit exceeded")
 
         result = client.post("Hello Bluesky!")
 
@@ -106,6 +107,26 @@ class TestPost:
 
         assert "3kjxabcdefg" in result.url
         assert result.url == "https://bsky.app/profile/test.bsky.social/post/3kjxabcdefg"
+
+    def test_atprotocol_error_includes_exception_type_name(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.send_post.side_effect = NetworkError("Connection timeout")
+
+        result = client.post("Hello Bluesky!")
+
+        assert result.success is False
+        assert "NetworkError" in result.error
+        assert "Connection timeout" in result.error
+
+    def test_unauthorized_error_includes_exception_type_name(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.send_post.side_effect = UnauthorizedError("Invalid credentials")
+
+        result = client.post("Hello Bluesky!")
+
+        assert result.success is False
+        assert "UnauthorizedError" in result.error
+        assert "Invalid credentials" in result.error
 
 
 # --- BlueskyClient.post_thread() ---
@@ -180,13 +201,23 @@ class TestPostThread:
         first_response.cid = "cid1"
         mock_client.send_post.side_effect = [
             first_response,
-            Exception("Rate limit on second post"),
+            AtProtocolError("Rate limit on second post"),
         ]
 
         result = client.post_thread(["First", "Second", "Third"])
 
         assert result.success is False
         assert "Rate limit on second post" in result.error
+
+    def test_atprotocol_error_includes_exception_type_name(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.send_post.side_effect = NetworkError("Network unavailable")
+
+        result = client.post_thread(["First post", "Second post"])
+
+        assert result.success is False
+        assert "NetworkError" in result.error
+        assert "Network unavailable" in result.error
 
 
 # --- BlueskyClient.reply() ---
@@ -234,7 +265,7 @@ class TestReply:
 
     def test_exception_returns_failure(self):
         client, mock_client = make_bluesky_client()
-        mock_client.send_post.side_effect = Exception("Forbidden")
+        mock_client.send_post.side_effect = AtProtocolError("Forbidden")
 
         result = client.reply(
             "Reply text",
@@ -246,3 +277,38 @@ class TestReply:
 
         assert result.success is False
         assert "Forbidden" in result.error
+
+    def test_atprotocol_error_includes_exception_type_name(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.send_post.side_effect = UnauthorizedError("Token expired")
+
+        result = client.reply(
+            "Reply text",
+            parent_uri="at://did:plc:parent/app.bsky.feed.post/p1",
+            parent_cid="pcid1",
+            root_uri="at://did:plc:root/app.bsky.feed.post/r1",
+            root_cid="rcid1"
+        )
+
+        assert result.success is False
+        assert "UnauthorizedError" in result.error
+        assert "Token expired" in result.error
+
+
+# --- BlueskyClient.get_post_metrics() ---
+
+
+class TestGetPostMetrics:
+    def test_atprotocol_error_logs_warning_and_returns_none(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.get_post_thread.side_effect = NetworkError("Post not found")
+
+        with patch("output.bluesky_client.logger") as mock_logger:
+            result = client.get_post_metrics("at://did:plc:xyz/app.bsky.feed.post/123")
+
+            assert result is None
+            mock_logger.warning.assert_called_once()
+            args = mock_logger.warning.call_args[0]
+            assert "Failed to fetch metrics for" in args[0]
+            assert "at://did:plc:xyz/app.bsky.feed.post/123" in args
+            assert "Post not found" in str(args[2])
