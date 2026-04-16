@@ -7,11 +7,14 @@ human review. No auto-rejection.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from engagement.cultivate_bridge import PersonContext
@@ -148,8 +151,9 @@ class ReplyEvaluator:
 
             raw = response.content[0].text.strip()
             return self._parse_response(raw, threshold)
-        except Exception as e:
+        except (anthropic.APIConnectionError, anthropic.APIStatusError, anthropic.APITimeoutError) as e:
             # On error, pass the draft through (don't block review)
+            logger.warning("Reply evaluation API error: %s", e)
             return ReplyEvalResult(
                 score=5.0,
                 passes=False,
