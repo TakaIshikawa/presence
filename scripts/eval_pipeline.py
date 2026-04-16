@@ -13,7 +13,7 @@ from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate pipeline output (dry run)")
     parser.add_argument("--runs", type=int, default=3, help="Number of pipeline runs")
     parser.add_argument("--type", default="x_thread", help="Content type (x_thread, x_post)")

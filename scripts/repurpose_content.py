@@ -16,7 +16,7 @@ from output.x_client import XClient, parse_thread_content
 logger = logging.getLogger(__name__)
 
 
-def main():
+def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     with script_context() as (config, db):
