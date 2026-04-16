@@ -622,49 +622,7 @@ class TestFewShotSelectorFallback:
 
 
 # ===========================================================================
-# FewShotSelector.format_examples output
-# ===========================================================================
-
-
-class TestFormatExamples:
-    """Test format_examples output formatting."""
-
-    def test_empty_list_returns_empty_string(self):
-        selector = FewShotSelector(None)  # db not needed for formatting
-        result = selector.format_examples([])
-        assert result == ""
-
-    def test_single_example_formatting(self):
-        selector = FewShotSelector(None)
-        examples = [FewShotExample(content="Single post", engagement_score=10.0)]
-        result = selector.format_examples(examples)
-        assert result == "1. Single post"
-
-    def test_multiple_examples_formatting(self):
-        selector = FewShotSelector(None)
-        examples = [
-            FewShotExample(content="First post", engagement_score=20.0),
-            FewShotExample(content="Second post", engagement_score=15.0),
-            FewShotExample(content="Third post", engagement_score=10.0),
-        ]
-        result = selector.format_examples(examples)
-        expected = "1. First post\n\n2. Second post\n\n3. Third post"
-        assert result == expected
-
-    def test_formatting_preserves_content_exactly(self):
-        selector = FewShotSelector(None)
-        examples = [
-            FewShotExample(
-                content="Post with\nmultiple lines\nand special chars: @#$%",
-                engagement_score=10.0
-            ),
-        ]
-        result = selector.format_examples(examples)
-        assert result == "1. Post with\nmultiple lines\nand special chars: @#$%"
-
-
-# ===========================================================================
-# Tests from add-unit-tests-for-synthesis-few-shot-py-fewshotse branch
+# Additional comprehensive tests
 # ===========================================================================
 
 # --- Helpers ---
@@ -1013,28 +971,40 @@ class TestEmptyDatabase:
 
 
 class TestFormatExamples:
-    def test_format_numbered_list(self):
-        examples = [
-            FewShotExample(content="First post", engagement_score=5.0),
-            FewShotExample(content="Second post", engagement_score=3.0),
-        ]
-        selector = FewShotSelector(db=None)
-        result = selector.format_examples(examples)
+    """Test format_examples output formatting."""
 
-        assert result == "1. First post\n\n2. Second post"
+    def test_empty_list_returns_empty_string(self):
+        selector = FewShotSelector(None)  # db not needed for formatting
+        result = selector.format_examples([])
+        assert result == ""
 
-    def test_format_single_example(self):
+    def test_single_example_formatting(self):
+        selector = FewShotSelector(None)
         examples = [FewShotExample(content="Only post", engagement_score=1.0)]
-        selector = FewShotSelector(db=None)
         result = selector.format_examples(examples)
-
         assert result == "1. Only post"
 
-    def test_format_empty_list(self):
-        selector = FewShotSelector(db=None)
-        result = selector.format_examples([])
+    def test_multiple_examples_formatting(self):
+        selector = FewShotSelector(None)
+        examples = [
+            FewShotExample(content="First post", engagement_score=20.0),
+            FewShotExample(content="Second post", engagement_score=15.0),
+            FewShotExample(content="Third post", engagement_score=10.0),
+        ]
+        result = selector.format_examples(examples)
+        expected = "1. First post\n\n2. Second post\n\n3. Third post"
+        assert result == expected
 
-        assert result == ""
+    def test_formatting_preserves_content_exactly(self):
+        selector = FewShotSelector(None)
+        examples = [
+            FewShotExample(
+                content="Post with\nmultiple lines\nand special chars: @#$%",
+                engagement_score=10.0
+            ),
+        ]
+        result = selector.format_examples(examples)
+        assert result == "1. Post with\nmultiple lines\nand special chars: @#$%"
 
 
 # --- Edge cases ---
