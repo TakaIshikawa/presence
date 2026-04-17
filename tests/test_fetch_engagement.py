@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
+import tweepy
 
 # Add scripts/ and src/ to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -161,12 +162,49 @@ class TestMain:
         mock_ctx.return_value = _mock_script_context(config, mock_db)()
 
         mock_client = MockTweepy.return_value
-        mock_client.get_tweets.side_effect = Exception("API timeout")
+        mock_client.get_tweets.side_effect = tweepy.TweepyException("API timeout")
 
         from fetch_engagement import main
         main()
 
         mock_db.insert_engagement.assert_not_called()
+
+    @patch("fetch_engagement.compute_engagement_score", return_value=10.0)
+    @patch("fetch_engagement.tweepy.Client")
+    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("fetch_engagement.script_context")
+    def test_tweepy_exception_logs_and_continues(self, mock_ctx, mock_bearer, MockTweepy, mock_scorer, caplog):
+        """Test that TweepyException during batch fetch logs error and continues to next batch."""
+        import logging
+        caplog.set_level(logging.ERROR)
+
+        config = _make_config()
+        mock_db = MagicMock()
+        # Create 150 posts to trigger 2 batches (100 + 50)
+        posts = [{"id": i, "tweet_id": str(1000 + i), "content": f"Post {i}"} for i in range(150)]
+        mock_db.get_posts_needing_metrics.return_value = posts
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
+        mock_client = MockTweepy.return_value
+        # First batch fails with TweepyException, second batch succeeds
+        second_batch_tweets = [_make_tweet_data(str(1100 + i)) for i in range(50)]
+        mock_client.get_tweets.side_effect = [
+            tweepy.TweepyException("Rate limit exceeded"),
+            MagicMock(data=second_batch_tweets)
+        ]
+
+        from fetch_engagement import main
+        main()
+
+        # Verify error was logged
+        assert "API error fetching batch 1" in caplog.text
+        assert "Rate limit exceeded" in caplog.text
+
+        # Verify second batch was still attempted and processed
+        assert mock_client.get_tweets.call_count == 2
+        # Only second batch (50 tweets) should be recorded
+        assert mock_db.insert_engagement.call_count == 50
 
     @patch("fetch_engagement.compute_engagement_score")
     @patch("fetch_engagement.tweepy.Client")
@@ -294,7 +332,7 @@ class TestMain:
         first_batch_tweets = [_make_tweet_data(str(1000 + i)) for i in range(100)]
         mock_client.get_tweets.side_effect = [
             MagicMock(data=first_batch_tweets),
-            Exception("API rate limit exceeded"),
+            tweepy.TweepyException("API rate limit exceeded"),
         ]
 
         from fetch_engagement import main
