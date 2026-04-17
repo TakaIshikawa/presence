@@ -17,10 +17,12 @@ AGENTS=(
     "com.presence.curated"
     "com.presence.ops-sync"
     "com.presence.resolve"
+    "com.presence.discover"
+    "com.presence.discover-accounts"
 )
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|reply|knowledge|curate}"
+    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|reply|knowledge|curate|review-accounts}"
     echo ""
     echo "Commands:"
     echo "  start     - Load and start all automation jobs"
@@ -28,11 +30,12 @@ usage() {
     echo "  restart   - Stop then start all jobs"
     echo "  status    - Show status of all jobs"
     echo "  logs      - Tail all log files"
-    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve)"
+    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve|discover|discover-accounts)"
     echo "  retry     - Retry posting unpublished content"
     echo "  reply     - Review and post pending reply drafts"
     echo "  knowledge - Knowledge base commands (build|fetch|stats)"
     echo "  curate    - Content quality curation (list|flag|clear|stats)"
+    echo "  review-accounts - Review and approve discovered candidate accounts"
     exit 1
 }
 
@@ -144,8 +147,16 @@ run_job() {
             echo "Running resolve_actions.py..."
             cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/resolve_actions.py
             ;;
+        discover)
+            echo "Running discover_replies.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/discover_replies.py
+            ;;
+        discover-accounts)
+            echo "Running discover_accounts.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/discover_accounts.py
+            ;;
         *)
-            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve}"
+            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve|discover|discover-accounts}"
             exit 1
             ;;
     esac
@@ -213,6 +224,10 @@ conn.close()
         ;;
     curate)
         cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/curate.py "${@:2}"
+        ;;
+    review-accounts)
+        echo "Reviewing candidate accounts..."
+        cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/review_accounts.py
         ;;
     *)
         usage

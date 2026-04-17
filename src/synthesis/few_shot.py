@@ -1,8 +1,14 @@
 """Few-shot example selection for content generation."""
 
+import re
 from dataclasses import dataclass
 from storage.db import Database
 from synthesis.stale_patterns import has_stale_pattern
+
+
+# Topic keyword used for quota selection. Matches existing
+# _build_avoidance_context() heuristic to keep diversity logic aligned.
+AGENT_PATTERN = re.compile(r"\bagent", re.IGNORECASE)
 
 
 @dataclass
@@ -22,12 +28,18 @@ class FewShotSelector:
         content_type: str = "x_post",
         limit: int = 3,
         exclude_ids: set[int] = None,
+        max_per_topic: int = 2,
     ) -> list[FewShotExample]:
         """Get top-performing posts as few-shot examples.
 
         Uses engagement data when available, falls back to eval scores.
         Excludes posts flagged as too_specific via exclude_ids.
         Filters out posts matching stale rhetorical patterns.
+
+        Applies topic quota to avoid overfitting generation to a single theme:
+        when non-agent posts are available, at most ``max_per_topic`` of the
+        examples will be agent-themed. Falls back to engagement order when
+        only one topic bucket has content.
         """
         # Fetch more than needed to allow for pattern filtering
         fetch_limit = limit * 4
@@ -36,24 +48,55 @@ class FewShotSelector:
         )
 
         if top_posts:
-            examples = []
+            # Filter excluded + stale, preserving engagement order
+            filtered = []
             for p in top_posts:
                 if exclude_ids and p["id"] in exclude_ids:
                     continue
                 if has_stale_pattern(p["content"]):
                     continue
-                examples.append(FewShotExample(
-                    content=p["content"],
-                    engagement_score=p["engagement_score"],
-                ))
-                if len(examples) >= limit:
-                    break
+                filtered.append(p)
 
-            if examples:
-                return examples
+            selected = self._apply_topic_quota(filtered, limit, max_per_topic)
+            if selected:
+                return [
+                    FewShotExample(
+                        content=p["content"],
+                        engagement_score=p["engagement_score"],
+                    )
+                    for p in selected
+                ]
 
         # Cold start: fall back to highest eval scores among published posts
         return self._fallback_by_eval_score(content_type, limit, exclude_ids)
+
+    @staticmethod
+    def _apply_topic_quota(
+        candidates: list[dict],
+        limit: int,
+        max_per_topic: int,
+    ) -> list[dict]:
+        """Pick up to ``limit`` posts, capping agent-themed at ``max_per_topic``.
+
+        Within each topic bucket the original engagement order is preserved.
+        If the non-agent bucket is empty, backfills from remaining agent posts
+        so callers get ``limit`` examples whenever enough material exists.
+        """
+        agent_pool = [p for p in candidates if AGENT_PATTERN.search(p["content"])]
+        other_pool = [p for p in candidates if not AGENT_PATTERN.search(p["content"])]
+
+        selected: list[dict] = []
+        selected.extend(agent_pool[:max_per_topic])
+        remaining = limit - len(selected)
+        if remaining > 0:
+            selected.extend(other_pool[:remaining])
+
+        # Backfill from leftover agent posts if non-agent pool was too small
+        if len(selected) < limit:
+            needed = limit - len(selected)
+            selected.extend(agent_pool[max_per_topic : max_per_topic + needed])
+
+        return selected[:limit]
 
     def _fallback_by_eval_score(
         self, content_type: str, limit: int, exclude_ids: set[int] = None

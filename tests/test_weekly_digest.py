@@ -72,7 +72,7 @@ def _make_comparison(best_score=8.0, reject_reason=None):
     )
 
 
-def _make_pipeline_result(final_score=8.0, reject_reason=None):
+def _make_pipeline_result(final_score=8.0, reject_reason=None, content_format=None):
     comparison = _make_comparison(best_score=final_score, reject_reason=reject_reason)
     return PipelineResult(
         batch_id="abcd1234",
@@ -83,6 +83,7 @@ def _make_pipeline_result(final_score=8.0, reject_reason=None):
         final_score=final_score,
         source_prompts=["prompt1"],
         source_commits=["commit msg"],
+        content_format=content_format,
     )
 
 
@@ -345,3 +346,35 @@ class TestHistoricalContextInjection:
             historical = [c for c in commits_passed if c.get("historical")]
             assert len(historical) == 1
             assert historical[0]["sha"] == "old123"
+
+
+class TestContentFormatPersistence:
+    @_weekly_patches
+    def test_content_format_forwarded_to_db(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockBlogWriter, mock_monitoring,
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
+
+        result = _make_pipeline_result(final_score=8.0, content_format="surprising_result")
+        MockPipeline.return_value.run.return_value = result
+
+        MockBlogWriter.return_value.write_post.return_value = MagicMock(
+            success=True,
+            file_path="/tmp/fake_site/posts/weekly.md",
+            url="https://blog.example.com/weekly",
+        )
+        MockBlogWriter.return_value.commit_and_push.return_value = True
+
+        import weekly_digest
+        weekly_digest.main()
+
+        db.insert_generated_content.assert_called_once()
+        kwargs = db.insert_generated_content.call_args.kwargs
+        assert kwargs["content_format"] == "surprising_result"

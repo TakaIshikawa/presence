@@ -632,3 +632,242 @@ class TestPipelineResult:
         assert result.final_score == 0
         assert result.filter_stats is not None
         assert result.filter_stats["stale_pattern_rejected"] == 3
+
+
+# ===========================================================================
+# Stage 3.5: Engagement predictor as conservative tie-breaker
+# ===========================================================================
+
+
+def _make_prediction(tweet_id, predicted_score, text="post"):
+    from evaluation.engagement_predictor import EngagementPrediction
+    return EngagementPrediction(
+        tweet_id=tweet_id,
+        tweet_text=text,
+        predicted_score=predicted_score,
+        hook_strength=predicted_score,
+        specificity=predicted_score,
+        emotional_resonance=predicted_score,
+        novelty=predicted_score,
+        actionability=predicted_score,
+        raw_response="",
+    )
+
+
+def _setup_tiebreaker_pipeline(
+    db,
+    candidates,
+    ranking,
+    predictions,
+    best_score=8.0,
+):
+    """Build a pipeline with a mocked engagement predictor.
+
+    Returns the configured SynthesisPipeline.
+    """
+    predictor = MagicMock()
+    predictor.predict_batch.return_value = predictions
+
+    pipeline = SynthesisPipeline(
+        "key", "gen-model", "eval-model", db,
+        engagement_predictor=predictor,
+    )
+    pipeline.generator.generate_candidates.return_value = _make_candidates(candidates)
+    pipeline.evaluator.evaluate.return_value = _make_comparison(
+        best_score=best_score, ranking=ranking, improvement=None
+    )
+    pipeline.few_shot_selector.get_examples.return_value = []
+    pipeline.few_shot_selector.format_examples.return_value = ""
+    return pipeline, predictor
+
+
+class TestPredictorTieBreaker:
+    """Engagement predictor runs pre-refinement as a conservative tie-breaker."""
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_no_override_when_predictor_agrees(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        candidates = ["Post A", "Post B", "Post C"]
+        predictions = [
+            _make_prediction("0", 8.5),  # Predictor agrees with evaluator top (idx 0)
+            _make_prediction("1", 6.0),
+            _make_prediction("2", 5.0),
+        ]
+        pipeline, _ = _setup_tiebreaker_pipeline(
+            db, candidates, ranking=[0, 1, 2], predictions=predictions,
+            best_score=9.5,  # high score to skip refinement
+        )
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.predictor_override is False
+        assert result.predictor_override_detail is None
+        assert result.final_content == "Post A"
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_no_override_when_margin_too_small(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        # Evaluator picks idx 0; predictor prefers idx 1 but margin < 1.5
+        candidates = ["Post A", "Post B", "Post C"]
+        predictions = [
+            _make_prediction("0", 7.0),   # evaluator top
+            _make_prediction("1", 8.0),   # predictor top, margin only 1.0
+            _make_prediction("2", 5.0),
+        ]
+        pipeline, _ = _setup_tiebreaker_pipeline(
+            db, candidates, ranking=[0, 1, 2], predictions=predictions,
+            best_score=9.5,
+        )
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.predictor_override is False
+        assert result.final_content == "Post A"
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_no_override_when_alternative_too_low(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        # Predictor top exceeds evaluator top by 2.0 margin but is only 5.5 absolute
+        candidates = ["Post A", "Post B", "Post C"]
+        predictions = [
+            _make_prediction("0", 3.5),   # evaluator top (low)
+            _make_prediction("1", 5.5),   # predictor top, margin 2.0 but below 6.0 floor
+            _make_prediction("2", 3.0),
+        ]
+        pipeline, _ = _setup_tiebreaker_pipeline(
+            db, candidates, ranking=[0, 1, 2], predictions=predictions,
+            best_score=9.5,
+        )
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.predictor_override is False
+        assert result.final_content == "Post A"
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_override_when_clear_disagreement(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        candidates = ["Post A", "Post B", "Post C"]
+        predictions = [
+            _make_prediction("0", 6.0),   # evaluator top
+            _make_prediction("1", 8.0),   # predictor top, margin=2.0, alt>=6.0
+            _make_prediction("2", 5.0),
+        ]
+        pipeline, _ = _setup_tiebreaker_pipeline(
+            db, candidates, ranking=[0, 1, 2], predictions=predictions,
+            best_score=9.5,
+        )
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.predictor_override is True
+        assert result.final_content == "Post B"
+        detail = result.predictor_override_detail
+        assert detail["evaluator_top"] == 0
+        assert detail["predictor_top"] == 1
+        assert detail["margin"] == pytest.approx(2.0)
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_no_override_with_single_candidate(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        # Only one survivor — Stage 3.5 should be skipped entirely
+        predictor = MagicMock()
+        # Stage 6 fallback for single predict
+        predictor.predict_batch.return_value = [_make_prediction("draft", 7.0)]
+
+        pipeline = SynthesisPipeline(
+            "key", "gen-model", "eval-model", db,
+            engagement_predictor=predictor,
+        )
+        pipeline.generator.generate_candidates.return_value = _make_candidates(["Only one"])
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5, ranking=[0], improvement=None
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.predictor_override is False
+        assert result.final_content == "Only one"
+        # Stage 3.5 skipped; Stage 6 still produced a prediction
+        assert result.predicted_engagement == pytest.approx(7.0)
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_predictor_failure_falls_back_to_evaluator(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        predictor = MagicMock()
+        predictor.predict_batch.side_effect = RuntimeError("API down")
+
+        pipeline = SynthesisPipeline(
+            "key", "gen-model", "eval-model", db,
+            engagement_predictor=predictor,
+        )
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Post A", "Post B", "Post C"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5, ranking=[0, 1, 2], improvement=None
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.predictor_override is False
+        assert result.final_content == "Post A"
+        assert result.predicted_engagement is None

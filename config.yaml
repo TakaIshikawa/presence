@@ -92,3 +92,17 @@ curated_sources:
 scheduling:
   enabled: false         # Enable time-based posting optimization
   min_samples: 20        # Minimum posts needed before optimizing schedule
+
+# Proactive engagement (reply to others' tweets for reach)
+proactive:
+  enabled: true
+  max_daily_replies: 5          # Cap proactive replies per day
+  min_relevance: 0.50           # Minimum semantic relevance to our knowledge base
+  max_tweet_age_hours: 24       # Only reply to tweets newer than this
+  reply_cap_per_account: 2      # Max replies per account per week
+  search_enabled: false         # Enable X search (costs API credits)
+  search_keywords: []           # Keywords to search for (when search_enabled)
+  account_discovery_enabled: true   # Auto-discover candidate accounts
+  max_candidates_per_run: 5         # Max accounts to evaluate per discovery run
+  min_discovery_relevance: 0.45     # Min avg relevance to surface as candidate
+  min_discovery_samples: 3          # Min relevant tweets to surface as candidate

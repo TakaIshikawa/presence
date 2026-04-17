@@ -128,6 +128,21 @@ class SchedulingConfig:
 
 
 @dataclass
+class ProactiveConfig:
+    enabled: bool = False
+    max_daily_replies: int = 5
+    min_relevance: float = 0.50
+    max_tweet_age_hours: int = 24
+    reply_cap_per_account: int = 2
+    search_enabled: bool = False
+    search_keywords: list[str] | None = None
+    account_discovery_enabled: bool = True
+    max_candidates_per_run: int = 5
+    min_discovery_relevance: float = 0.45
+    min_discovery_samples: int = 3
+
+
+@dataclass
 class Config:
     github: GitHubConfig
     x: XConfig
@@ -144,6 +159,7 @@ class Config:
     cultivate: Optional[CultivateIntegrationConfig]
     timeouts: TimeoutsConfig
     scheduling: Optional[SchedulingConfig]
+    proactive: Optional[ProactiveConfig]
 
 
 def _resolve_env_var(value: str) -> str:
@@ -311,6 +327,23 @@ def load_config(config_path: Optional[str] = None) -> Config:
             min_samples=data["scheduling"].get("min_samples", 20),
         )
 
+    # Parse proactive engagement config if present
+    proactive_config = None
+    if "proactive" in data:
+        proactive_config = ProactiveConfig(
+            enabled=data["proactive"].get("enabled", False),
+            max_daily_replies=data["proactive"].get("max_daily_replies", 5),
+            min_relevance=data["proactive"].get("min_relevance", 0.50),
+            max_tweet_age_hours=data["proactive"].get("max_tweet_age_hours", 24),
+            reply_cap_per_account=data["proactive"].get("reply_cap_per_account", 2),
+            search_enabled=data["proactive"].get("search_enabled", False),
+            search_keywords=data["proactive"].get("search_keywords"),
+            account_discovery_enabled=data["proactive"].get("account_discovery_enabled", True),
+            max_candidates_per_run=data["proactive"].get("max_candidates_per_run", 5),
+            min_discovery_relevance=data["proactive"].get("min_discovery_relevance", 0.45),
+            min_discovery_samples=data["proactive"].get("min_discovery_samples", 3),
+        )
+
     return Config(
         github=GitHubConfig(
             username=_require(data, "github", "username", section="github"),
@@ -354,4 +387,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         cultivate=cultivate_config,
         timeouts=timeouts_config,
         scheduling=scheduling_config,
+        proactive=proactive_config,
     )

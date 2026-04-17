@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS knowledge (
     UNIQUE(source_type, source_id)
 );
 
--- Curated sources (approved accounts/blogs)
+-- Curated sources (approved accounts/blogs + discovered candidates)
 CREATE TABLE IF NOT EXISTS curated_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_type TEXT NOT NULL,  -- 'x_account', 'blog', 'newsletter'
@@ -143,9 +143,16 @@ CREATE TABLE IF NOT EXISTS curated_sources (
     license TEXT DEFAULT 'attribution_required',  -- 'open', 'attribution_required', 'restricted'
     notes TEXT,
     active INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',         -- 'candidate', 'active', 'rejected', 'paused'
+    discovery_source TEXT,                -- 'config', 'proactive_mining', 'search'
+    relevance_score REAL,                 -- avg semantic similarity at discovery
+    sample_count INTEGER DEFAULT 0,       -- tweets sampled for relevance scoring
+    reviewed_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source_type, identifier)
 );
+-- idx_curated_sources_status is created in db.py migration block
+-- (must run after ALTER TABLE adds the status column on existing DBs)
 
 -- Track which knowledge items were used in generated content
 CREATE TABLE IF NOT EXISTS content_knowledge_links (
@@ -290,3 +297,40 @@ CREATE TABLE IF NOT EXISTS publish_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_publish_queue_status ON publish_queue(status);
 CREATE INDEX IF NOT EXISTS idx_publish_queue_scheduled ON publish_queue(scheduled_at);
+
+-- Profile metrics time-series (follower growth tracking)
+CREATE TABLE IF NOT EXISTS profile_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL DEFAULT 'x',
+    follower_count INTEGER NOT NULL,
+    following_count INTEGER NOT NULL,
+    tweet_count INTEGER NOT NULL,
+    listed_count INTEGER,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_profile_metrics_fetched ON profile_metrics(fetched_at);
+CREATE INDEX IF NOT EXISTS idx_profile_metrics_platform ON profile_metrics(platform);
+
+-- Proactive engagement actions (discovered reply/like/quote opportunities)
+CREATE TABLE IF NOT EXISTS proactive_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_type TEXT NOT NULL,            -- 'reply', 'quote_tweet', 'like', 'retweet'
+    target_tweet_id TEXT,
+    target_tweet_text TEXT,
+    target_author_handle TEXT,
+    target_author_id TEXT,
+    discovery_source TEXT,                -- 'curated_timeline', 'search', 'cultivate'
+    relevance_score REAL,
+    draft_text TEXT,
+    status TEXT DEFAULT 'pending',        -- 'pending', 'approved', 'posted', 'dismissed'
+    relationship_context TEXT,            -- JSON PersonContext
+    knowledge_ids TEXT,                   -- JSON list of (knowledge_id, relevance) tuples
+    posted_tweet_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    reviewed_at TEXT,
+    posted_at TEXT,
+    UNIQUE(target_tweet_id, action_type)
+);
+CREATE INDEX IF NOT EXISTS idx_proactive_status ON proactive_actions(status);
+CREATE INDEX IF NOT EXISTS idx_proactive_author ON proactive_actions(target_author_handle);
+CREATE INDEX IF NOT EXISTS idx_proactive_created ON proactive_actions(created_at);

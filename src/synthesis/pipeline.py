@@ -34,6 +34,8 @@ class PipelineResult:
     engagement_prediction_detail: Optional[dict] = None
     knowledge_ids: list[tuple[int, float]] = None  # (knowledge_id, relevance_score) for lineage tracking
     content_format: Optional[str] = None  # Format used for generation (e.g., 'micro_story', 'bold_claim')
+    predictor_override: bool = False  # True when predictor tie-breaker changed best_idx
+    predictor_override_detail: Optional[dict] = None  # {evaluator_top, predictor_top, margin, ...}
 
 
 class SynthesisPipeline:
@@ -470,6 +472,21 @@ class SynthesisPipeline:
 
         return valid, rejected
 
+    def _build_calibration_context(self) -> str:
+        """Build calibration context for the engagement predictor.
+
+        Wraps PredictionCalibrator to tolerate missing/limited history.
+        Returns an empty string when calibration is unavailable.
+        """
+        try:
+            from evaluation.prediction_calibrator import PredictionCalibrator
+            calibrator = PredictionCalibrator(self.db)
+            report = calibrator.compute_calibration_report(days=30)
+            return calibrator.generate_calibration_context(report)
+        except Exception as e:
+            logger.debug(f"Calibration context generation failed (non-fatal): {e}")
+            return ""
+
     def run(
         self,
         prompts: list[str],
@@ -627,6 +644,54 @@ class SynthesisPipeline:
         )
 
         best_idx = comparison.ranking[0] if comparison.ranking else 0
+
+        # Stage 3.5: Engagement prediction as conservative tie-breaker.
+        # Run the predictor on ALL surviving candidates before refinement. If the
+        # predictor's top differs from the evaluator's top by a clear margin AND
+        # the alternative is a decent post on its own, override best_idx.
+        all_predictions: list = []
+        predictor_override = False
+        predictor_override_detail: Optional[dict] = None
+        if self.engagement_predictor and len(candidate_texts) >= 2:
+            try:
+                calibration_context = self._build_calibration_context()
+                all_predictions = self.engagement_predictor.predict_batch(
+                    tweets=[
+                        {"id": str(i), "text": t}
+                        for i, t in enumerate(candidate_texts)
+                    ],
+                    prompt_version="v1",
+                    calibration_context=calibration_context,
+                )
+                if len(all_predictions) == len(candidate_texts):
+                    evaluator_top_idx = best_idx
+                    predictor_top_idx = max(
+                        range(len(all_predictions)),
+                        key=lambda i: all_predictions[i].predicted_score,
+                    )
+                    if predictor_top_idx != evaluator_top_idx:
+                        eval_pred = all_predictions[evaluator_top_idx].predicted_score
+                        pred_pred = all_predictions[predictor_top_idx].predicted_score
+                        margin = pred_pred - eval_pred
+                        if pred_pred >= 6.0 and margin >= 1.5:
+                            logger.info(
+                                f"  Predictor override: candidate {predictor_top_idx} "
+                                f"(pred={pred_pred:.1f}) over candidate {evaluator_top_idx} "
+                                f"(pred={eval_pred:.1f}, margin={margin:.1f})"
+                            )
+                            best_idx = predictor_top_idx
+                            predictor_override = True
+                            predictor_override_detail = {
+                                "evaluator_top": evaluator_top_idx,
+                                "predictor_top": predictor_top_idx,
+                                "evaluator_pred_score": eval_pred,
+                                "predictor_pred_score": pred_pred,
+                                "margin": margin,
+                            }
+            except Exception as e:
+                logger.warning(f"  Engagement prediction (tie-breaker) failed: {e}")
+                all_predictions = []
+
         best_content = candidate_texts[best_idx]
         final_content = best_content
         final_score = comparison.best_score
@@ -674,23 +739,18 @@ class SynthesisPipeline:
                 final_content = truncated or final_content[:char_limit]
                 logger.warning(f"  Hard truncated to {len(final_content)} chars")
 
-        # Stage 6: Engagement prediction (informational only)
+        # Stage 6: Engagement prediction logging.
+        # Reuse the prediction computed in Stage 3.5 for the chosen candidate
+        # when available. Fall back to a single predict call for the lone-
+        # candidate path where Stage 3.5 is skipped.
         predicted_engagement = None
         engagement_prediction_detail = None
-        if self.engagement_predictor:
+        pred = None
+        if all_predictions and best_idx < len(all_predictions):
+            pred = all_predictions[best_idx]
+        elif self.engagement_predictor:
             try:
-                from evaluation.engagement_predictor import EngagementPredictor
-                from evaluation.prediction_calibrator import PredictionCalibrator
-
-                # Generate calibration context from historical accuracy
-                calibration_context = ""
-                try:
-                    calibrator = PredictionCalibrator(self.db)
-                    report = calibrator.compute_calibration_report(days=30)
-                    calibration_context = calibrator.generate_calibration_context(report)
-                except Exception as e:
-                    logger.debug(f"Calibration context generation failed (non-fatal): {e}")
-
+                calibration_context = self._build_calibration_context()
                 predictions = self.engagement_predictor.predict_batch(
                     tweets=[{"id": "draft", "text": final_content}],
                     prompt_version="v1",
@@ -698,24 +758,26 @@ class SynthesisPipeline:
                 )
                 if predictions:
                     pred = predictions[0]
-                    predicted_engagement = pred.predicted_score
-                    engagement_prediction_detail = {
-                        "predicted_score": pred.predicted_score,
-                        "hook_strength": pred.hook_strength,
-                        "specificity": pred.specificity,
-                        "emotional_resonance": pred.emotional_resonance,
-                        "novelty": pred.novelty,
-                        "actionability": pred.actionability,
-                        "prompt_version": "v1",
-                    }
-                    logger.info(
-                        f"  Predicted engagement: {predicted_engagement:.1f} "
-                        f"(hook={pred.hook_strength:.1f}, spec={pred.specificity:.1f}, "
-                        f"emotion={pred.emotional_resonance:.1f}, "
-                        f"novelty={pred.novelty:.1f}, action={pred.actionability:.1f})"
-                    )
             except Exception as e:
                 logger.warning(f"  Engagement prediction failed: {e}")
+
+        if pred is not None:
+            predicted_engagement = pred.predicted_score
+            engagement_prediction_detail = {
+                "predicted_score": pred.predicted_score,
+                "hook_strength": pred.hook_strength,
+                "specificity": pred.specificity,
+                "emotional_resonance": pred.emotional_resonance,
+                "novelty": pred.novelty,
+                "actionability": pred.actionability,
+                "prompt_version": "v1",
+            }
+            logger.info(
+                f"  Predicted engagement: {predicted_engagement:.1f} "
+                f"(hook={pred.hook_strength:.1f}, spec={pred.specificity:.1f}, "
+                f"emotion={pred.emotional_resonance:.1f}, "
+                f"novelty={pred.novelty:.1f}, action={pred.actionability:.1f})"
+            )
 
         # Compile knowledge IDs: trend items get default relevance of 0.3
         knowledge_ids = [(kid, 0.3) for kid in trend_knowledge_ids]
@@ -734,4 +796,6 @@ class SynthesisPipeline:
             engagement_prediction_detail=engagement_prediction_detail,
             knowledge_ids=knowledge_ids,
             content_format=best_format,
+            predictor_override=predictor_override,
+            predictor_override_detail=predictor_override_detail,
         )

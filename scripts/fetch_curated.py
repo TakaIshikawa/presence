@@ -13,6 +13,7 @@ from runner import script_context
 from knowledge.embeddings import get_embedding_provider
 from knowledge.store import KnowledgeStore
 from knowledge.ingest import InsightExtractor, ingest_curated_post
+from knowledge.curated_accounts import get_active_x_accounts
 from output.x_client import XClient
 
 
@@ -73,9 +74,10 @@ def main():
             config.x.access_token_secret
         )
 
-        # Fetch from curated X accounts
+        # Fetch from curated X accounts (config + DB-approved)
+        accounts = get_active_x_accounts(config, db)
         logger.info("=== Fetching from curated X accounts ===")
-        for account in config.curated_sources.x_accounts:
+        for account in accounts:
             logger.info(f"Fetching @{account.identifier}...")
             tweets = fetch_user_tweets(x_client, account.identifier, limit=5)
 
