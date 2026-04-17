@@ -1,9 +1,10 @@
 """Tests for the standalone engagement predictor and validation DB."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 import pytest
+from anthropic import APIError, APIConnectionError, RateLimitError, AuthenticationError
 
-from evaluation.engagement_predictor import EngagementPredictor
+from evaluation.engagement_predictor import EngagementPredictor, EngagementPredictionError
 from evaluation.validation_db import ValidationDatabase
 
 
@@ -659,3 +660,95 @@ class TestValidationDatabase:
         accounts = db.get_all_accounts()
         assert len(accounts) == 2
         assert accounts[0]["username"] == "alice"
+
+
+class TestEngagementPredictorErrorHandling:
+    """Test that API errors are wrapped in EngagementPredictionError."""
+
+    @pytest.fixture
+    def predictor(self):
+        with patch("evaluation.engagement_predictor.anthropic.Anthropic") as mock_anthropic:
+            client_mock = MagicMock()
+            mock_anthropic.return_value = client_mock
+            predictor = EngagementPredictor(api_key="test-key", model="test-model")
+            predictor.client = client_mock
+            return predictor
+
+    def test_api_connection_error_wrapped(self, predictor):
+        """APIConnectionError should be wrapped in EngagementPredictionError."""
+        mock_request = Mock()
+        error = APIConnectionError(message="Connection failed", request=mock_request)
+        predictor.client.messages.create.side_effect = error
+
+        template = "{tweets}"
+        tweets = [{"id": "1", "text": "test"}]
+
+        with patch("pathlib.Path.read_text", return_value=template):
+            with pytest.raises(EngagementPredictionError) as exc_info:
+                predictor.predict_batch(tweets=tweets)
+
+        assert "Failed to connect to Anthropic API" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, APIConnectionError)
+
+    def test_rate_limit_error_wrapped(self, predictor):
+        """RateLimitError should be wrapped in EngagementPredictionError."""
+        mock_response = Mock()
+        error = RateLimitError(message="Rate limit exceeded", response=mock_response, body={})
+        predictor.client.messages.create.side_effect = error
+
+        template = "{tweets}"
+        tweets = [{"id": "1", "text": "test"}]
+
+        with patch("pathlib.Path.read_text", return_value=template):
+            with pytest.raises(EngagementPredictionError) as exc_info:
+                predictor.predict_batch(tweets=tweets)
+
+        assert "Rate limit exceeded" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, RateLimitError)
+
+    def test_authentication_error_wrapped(self, predictor):
+        """AuthenticationError should be wrapped in EngagementPredictionError."""
+        mock_response = Mock()
+        error = AuthenticationError(message="Invalid API key", response=mock_response, body={})
+        predictor.client.messages.create.side_effect = error
+
+        template = "{tweets}"
+        tweets = [{"id": "1", "text": "test"}]
+
+        with patch("pathlib.Path.read_text", return_value=template):
+            with pytest.raises(EngagementPredictionError) as exc_info:
+                predictor.predict_batch(tweets=tweets)
+
+        assert "Authentication failed" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, AuthenticationError)
+
+    def test_generic_api_error_wrapped(self, predictor):
+        """APIError should be wrapped in EngagementPredictionError."""
+        mock_request = Mock()
+        error = APIError(body=None, message="Generic API error", request=mock_request)
+        predictor.client.messages.create.side_effect = error
+
+        template = "{tweets}"
+        tweets = [{"id": "1", "text": "test"}]
+
+        with patch("pathlib.Path.read_text", return_value=template):
+            with pytest.raises(EngagementPredictionError) as exc_info:
+                predictor.predict_batch(tweets=tweets)
+
+        assert "Anthropic API error" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, APIError)
+
+    def test_successful_call_no_error(self, predictor):
+        """Verify successful calls still work normally."""
+        api_response = MagicMock()
+        api_response.content = [MagicMock(text="TWEET_1 (id=1):\nPREDICTED_ENGAGEMENT: 7")]
+        predictor.client.messages.create.return_value = api_response
+
+        template = "{tweets}"
+        tweets = [{"id": "1", "text": "test"}]
+
+        with patch("pathlib.Path.read_text", return_value=template):
+            results = predictor.predict_batch(tweets=tweets)
+
+        assert len(results) == 1
+        assert results[0].predicted_score == 7.0
