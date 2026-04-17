@@ -78,7 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_evaluations_version ON evaluations(evaluator_vers
 class ValidationDatabase:
     """SQLite storage for evaluator backtesting data."""
 
-    def __init__(self, db_path: str = "./validation.db"):
+    def __init__(self, db_path: str = "./validation.db") -> None:
         self.db_path = Path(db_path).expanduser()
         self.conn: Optional[sqlite3.Connection] = None
 
@@ -91,11 +91,11 @@ class ValidationDatabase:
             self.conn.close()
             self.conn = None
 
-    def __enter__(self):
+    def __enter__(self) -> "ValidationDatabase":
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
     def init_schema(self) -> None:
