@@ -144,3 +144,147 @@ class TestMain:
 
         build_mocks.ingest_post.assert_not_called()
         build_mocks.ingest_conv.assert_not_called()
+
+    def test_skips_existing_conversations(self, build_mocks):
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = []
+        build_mocks.parser.get_messages_since.return_value = [
+            _make_message(uuid="uuid-exists", prompt_text="A" * 150),
+            _make_message(uuid="uuid-new", prompt_text="B" * 150),
+        ]
+        # First exists, second doesn't
+        build_mocks.store.exists.side_effect = [True, False]
+        build_mocks.ingest_conv.return_value = True
+
+        from build_knowledge import main
+        main()
+
+        # Only second conversation ingested
+        assert build_mocks.ingest_conv.call_count == 1
+        build_mocks.ingest_conv.assert_called_once_with(
+            store=build_mocks.store,
+            extractor=build_mocks.extractor,
+            message_uuid="uuid-new",
+            prompt="B" * 150,
+            project_path="/project"
+        )
+
+    def test_conversation_ingest_error_continues(self, build_mocks):
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = []
+        build_mocks.parser.get_messages_since.return_value = [
+            _make_message(uuid="uuid-1", prompt_text="A" * 150),
+            _make_message(uuid="uuid-2", prompt_text="B" * 150),
+        ]
+        build_mocks.store.exists.return_value = False
+        # First fails, second succeeds
+        build_mocks.ingest_conv.side_effect = [Exception("Extraction failed"), True]
+
+        from build_knowledge import main
+        main()
+
+        # Both conversations attempted despite first failing
+        assert build_mocks.ingest_conv.call_count == 2
+
+    def test_conversation_ingest_returns_false(self, build_mocks):
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = []
+        build_mocks.parser.get_messages_since.return_value = [
+            _make_message(uuid="uuid-1", prompt_text="A" * 150),
+            _make_message(uuid="uuid-2", prompt_text="B" * 150),
+        ]
+        build_mocks.store.exists.return_value = False
+        # First returns False (not ingested), second returns True
+        build_mocks.ingest_conv.side_effect = [False, True]
+
+        from build_knowledge import main
+        main()
+
+        # Both attempted
+        assert build_mocks.ingest_conv.call_count == 2
+
+    def test_rate_limiting_called_after_post_ingest(self, build_mocks):
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = [
+            {"id": 1, "content": "Post 1", "published_url": "https://x.com/status/1"},
+        ]
+        build_mocks.store.exists.return_value = False
+        build_mocks.parser.get_messages_since.return_value = []
+
+        with patch("build_knowledge.time.sleep") as mock_sleep:
+            from build_knowledge import main
+            main()
+
+            # Should call sleep once after ingesting the post
+            mock_sleep.assert_called_once_with(25)  # API_DELAY_SECONDS
+
+    def test_rate_limiting_called_after_conversation_ingest(self, build_mocks):
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = []
+        build_mocks.parser.get_messages_since.return_value = [
+            _make_message(uuid="uuid-1", prompt_text="A" * 150),
+        ]
+        build_mocks.store.exists.return_value = False
+        build_mocks.ingest_conv.return_value = True
+
+        with patch("build_knowledge.time.sleep") as mock_sleep:
+            from build_knowledge import main
+            main()
+
+            # Should call sleep once after ingesting the conversation
+            mock_sleep.assert_called_once_with(25)  # API_DELAY_SECONDS
+
+    def test_rate_limiting_called_on_error(self, build_mocks):
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = [
+            {"id": 1, "content": "Post 1", "published_url": "https://x.com/status/1"},
+        ]
+        build_mocks.store.exists.return_value = False
+        build_mocks.ingest_post.side_effect = Exception("API error")
+        build_mocks.parser.get_messages_since.return_value = []
+
+        with patch("build_knowledge.time.sleep") as mock_sleep:
+            from build_knowledge import main
+            main()
+
+            # Should still call sleep even on error
+            mock_sleep.assert_called_once_with(25)  # API_DELAY_SECONDS
+
+    def test_database_schema_initialized(self, build_mocks):
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = []
+        build_mocks.parser.get_messages_since.return_value = []
+
+        from build_knowledge import main
+        main()
+
+        # Verify Database was initialized and connected
+        build_mocks.db.connect.assert_called_once()
+        # Verify schema initialization was called
+        assert build_mocks.db.init_schema.call_count == 1
+        # Verify the schema path ends with schema.sql
+        schema_path = build_mocks.db.init_schema.call_args[0][0]
+        assert schema_path.endswith("schema.sql")
+
+    def test_successful_conversation_ingestion_increments_counter(self, build_mocks):
+        import logging
+        build_mocks.config.return_value = _make_config()
+        build_mocks.db.conn.execute.return_value.fetchall.return_value = []
+        build_mocks.parser.get_messages_since.return_value = [
+            _make_message(uuid="uuid-1", prompt_text="A" * 150),
+            _make_message(uuid="uuid-2", prompt_text="B" * 150),
+            _make_message(uuid="uuid-3", prompt_text="C" * 150),
+        ]
+        build_mocks.store.exists.return_value = False
+        # First returns False, second and third return True
+        build_mocks.ingest_conv.side_effect = [False, True, True]
+
+        # Capture logs by patching logging.getLogger
+        mock_logger = MagicMock()
+        with patch("logging.getLogger", return_value=mock_logger):
+            from build_knowledge import main
+            main()
+
+            # Verify logger.info was called with the ingested count
+            info_calls = [str(call[0][0]) for call in mock_logger.info.call_args_list]
+            assert any("Ingested 2 new conversations" in call for call in info_calls)
