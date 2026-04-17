@@ -11,6 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from evaluation.engagement_predictor import EngagementPredictionError
+
 
 def _make_config():
     config = MagicMock()
@@ -107,7 +109,7 @@ class TestMain:
             _make_tweet(tweet_id="1", username="alice"),
         ]
         predictor = MockPredictor.return_value
-        predictor.predict_batch.side_effect = Exception("API error")
+        predictor.predict_batch.side_effect = EngagementPredictionError("API error")
 
         with patch("sys.argv", ["backtest_evaluator.py", "--version", "v1"]):
             from backtest_evaluator import main
