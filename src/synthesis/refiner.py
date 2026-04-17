@@ -1,10 +1,13 @@
 """Content refinement based on evaluation feedback."""
 
+import logging
 import re
 import anthropic
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,22 +68,36 @@ class ContentRefiner:
             format_constraints=constraints,
         )
 
-        response = self.refine_client.messages.create(
-            model=self.refine_model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": filled}],
-        )
-        return response.content[0].text.strip()
+        try:
+            response = self.refine_client.messages.create(
+                model=self.refine_model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": filled}],
+            )
+            return response.content[0].text.strip()
+        except anthropic.APIConnectionError as e:
+            logger.error(f"Failed to connect to Anthropic API: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            logger.error(f"Anthropic API status error: {e}")
+            raise
 
     def _final_gate(self, original: str, refined: str, content_type: str = "x_post") -> RefinementResult:
         template = (self.PROMPTS_DIR / "final_gate.txt").read_text()
         filled = template.format(original=original, refined=refined)
 
-        response = self.gate_client.messages.create(
-            model=self.gate_model,
-            max_tokens=200,
-            messages=[{"role": "user", "content": filled}],
-        )
+        try:
+            response = self.gate_client.messages.create(
+                model=self.gate_model,
+                max_tokens=200,
+                messages=[{"role": "user", "content": filled}],
+            )
+        except anthropic.APIConnectionError as e:
+            logger.error(f"Failed to connect to Anthropic API: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            logger.error(f"Anthropic API status error: {e}")
+            raise
 
         text = response.content[0].text
         pick_match = re.search(r"PICK:\s*(REFINED|ORIGINAL)", text, re.IGNORECASE)
