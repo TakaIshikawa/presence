@@ -8,6 +8,8 @@ Write surface: record_mention_event() forwards mentions to cultivate's events
 and interactions tables so cultivate's analysis pipeline stays up to date.
 """
 
+from __future__ import annotations
+
 import json
 import sqlite3
 from dataclasses import dataclass, field
@@ -77,7 +79,7 @@ class PersonContext:
         })
 
     @classmethod
-    def from_json(cls, data: str) -> "PersonContext":
+    def from_json(cls, data: str) -> PersonContext:
         """Deserialize from reply_queue storage."""
         d = json.loads(data)
         # Remove computed properties that aren't constructor args
@@ -108,14 +110,14 @@ class CultivateBridge:
     # Required tables to validate schema
     _REQUIRED_TABLES = {"people", "interactions", "events", "actions", "meta"}
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self._self_person_id: Optional[str] = None
 
     @classmethod
     def try_connect(
         cls, db_path: str = "~/.cultivate/cultivate.db"
-    ) -> Optional["CultivateBridge"]:
+    ) -> Optional[CultivateBridge]:
         """Attempt to connect to cultivate's DB. Returns None if unavailable."""
         path = Path(db_path).expanduser()
         if not path.exists():
