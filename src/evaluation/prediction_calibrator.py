@@ -8,6 +8,8 @@ import statistics
 from dataclasses import dataclass
 from typing import Optional
 
+from storage.db import Database
+
 
 @dataclass
 class CalibrationReport:
@@ -42,7 +44,7 @@ class PredictionCalibrator:
         "actionability",
     ]
 
-    def __init__(self, db):
+    def __init__(self, db: Database) -> None:
         """Initialize calibrator with database connection.
 
         Args:
