@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context
-from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
+from knowledge.embeddings import VoyageEmbeddings, serialize_embedding, EmbeddingRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +51,10 @@ def main():
 
             try:
                 embeddings = embedder.embed_batch(texts)
-            except Exception as e:
-                if "RateLimit" in type(e).__name__ or "429" in str(e):
-                    logger.warning(f"Rate limited at {total}/{len(rows)}, waiting 25s...")
-                    time.sleep(25)
-                    embeddings = embedder.embed_batch(texts)
-                else:
-                    raise
+            except EmbeddingRateLimitError as e:
+                logger.warning(f"Rate limited at {total}/{len(rows)}, waiting 25s...")
+                time.sleep(25)
+                embeddings = embedder.embed_batch(texts)
 
             for content_id, embedding in zip(ids, embeddings):
                 db.set_content_embedding(content_id, serialize_embedding(embedding))
