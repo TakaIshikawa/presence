@@ -9,12 +9,16 @@ payloads back to cultivate's actions table.
 import logging
 import re
 import signal
+import sqlite3
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+import anthropic
+import tweepy
 
 from runner import script_context, update_monitoring
 from output.x_client import XClient
@@ -182,7 +186,7 @@ def resolve_actions(
         if needs_tweets:
             try:
                 tweets = x_client.get_user_tweets(x_user_id, count=10)
-            except Exception as e:
+            except tweepy.TweepyException as e:
                 logger.warning(
                     f"Failed to fetch tweets for @{sample.target_handle}: {e}"
                 )
@@ -229,7 +233,7 @@ def resolve_actions(
                     )
                     stats["errors"] += 1
 
-            except Exception as e:
+            except (tweepy.TweepyException, anthropic.APIError, sqlite3.Error) as e:
                 logger.error(
                     f"  Error resolving "
                     f"{exec_type} -> @{action.target_handle}: {e}"
