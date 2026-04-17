@@ -20,6 +20,11 @@ class EmbeddingProviderUnavailableError(EmbeddingError):
     pass
 
 
+class EmbeddingRateLimitError(EmbeddingError):
+    """Raised when the embedding provider rate limit is exceeded."""
+    pass
+
+
 class EmbeddingProvider(ABC):
     @abstractmethod
     def embed(self, text: str) -> list[float]:
@@ -41,6 +46,15 @@ class VoyageEmbeddings(EmbeddingProvider):
         self.model = model
 
     def embed(self, text: str) -> list[float]:
+        from voyageai.error import (
+            RateLimitError,
+            AuthenticationError,
+            APIConnectionError,
+            Timeout,
+            ServiceUnavailableError,
+            APIError,
+        )
+
         try:
             result = self.client.embed([text], model=self.model)
             if not result or not result.embeddings:
@@ -51,18 +65,33 @@ class VoyageEmbeddings(EmbeddingProvider):
         except EmbeddingError:
             # Re-raise our own exceptions
             raise
-        except ConnectionError as e:
-            raise EmbeddingProviderUnavailableError(
-                f"Failed to connect to Voyage API: {e}"
+        except RateLimitError as e:
+            raise EmbeddingRateLimitError(
+                f"Voyage API rate limit exceeded: {e}"
             ) from e
-        except Exception as e:
-            # Catch API errors, auth errors, network errors, etc.
-            error_name = type(e).__name__
+        except AuthenticationError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Voyage API authentication failed: {e}"
+            ) from e
+        except (APIConnectionError, Timeout, ServiceUnavailableError) as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Voyage API unavailable: {e}"
+            ) from e
+        except APIError as e:
             raise EmbeddingGenerationError(
-                f"Voyage embedding generation failed: {error_name}: {e}"
+                f"Voyage API error: {e}"
             ) from e
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        from voyageai.error import (
+            RateLimitError,
+            AuthenticationError,
+            APIConnectionError,
+            Timeout,
+            ServiceUnavailableError,
+            APIError,
+        )
+
         try:
             result = self.client.embed(texts, model=self.model)
             if not result or not result.embeddings:
@@ -77,15 +106,21 @@ class VoyageEmbeddings(EmbeddingProvider):
         except EmbeddingError:
             # Re-raise our own exceptions
             raise
-        except ConnectionError as e:
-            raise EmbeddingProviderUnavailableError(
-                f"Failed to connect to Voyage API: {e}"
+        except RateLimitError as e:
+            raise EmbeddingRateLimitError(
+                f"Voyage API rate limit exceeded: {e}"
             ) from e
-        except Exception as e:
-            # Catch API errors, auth errors, network errors, etc.
-            error_name = type(e).__name__
+        except AuthenticationError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Voyage API authentication failed: {e}"
+            ) from e
+        except (APIConnectionError, Timeout, ServiceUnavailableError) as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Voyage API unavailable: {e}"
+            ) from e
+        except APIError as e:
             raise EmbeddingGenerationError(
-                f"Voyage batch embedding generation failed: {error_name}: {e}"
+                f"Voyage API error: {e}"
             ) from e
 
 
@@ -98,6 +133,14 @@ class OpenAIEmbeddings(EmbeddingProvider):
         self.model = model
 
     def embed(self, text: str) -> list[float]:
+        from openai import (
+            APIError,
+            RateLimitError,
+            AuthenticationError,
+            APITimeoutError,
+            APIConnectionError,
+        )
+
         try:
             response = self.client.embeddings.create(
                 input=text,
@@ -111,18 +154,32 @@ class OpenAIEmbeddings(EmbeddingProvider):
         except EmbeddingError:
             # Re-raise our own exceptions
             raise
-        except ConnectionError as e:
-            raise EmbeddingProviderUnavailableError(
-                f"Failed to connect to OpenAI API: {e}"
+        except RateLimitError as e:
+            raise EmbeddingRateLimitError(
+                f"OpenAI API rate limit exceeded: {e}"
             ) from e
-        except Exception as e:
-            # Catch API errors (APIError, RateLimitError, etc.), auth errors, network errors
-            error_name = type(e).__name__
+        except AuthenticationError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"OpenAI API authentication failed: {e}"
+            ) from e
+        except (APIConnectionError, APITimeoutError) as e:
+            raise EmbeddingProviderUnavailableError(
+                f"OpenAI API unavailable: {e}"
+            ) from e
+        except APIError as e:
             raise EmbeddingGenerationError(
-                f"OpenAI embedding generation failed: {error_name}: {e}"
+                f"OpenAI API error: {e}"
             ) from e
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        from openai import (
+            APIError,
+            RateLimitError,
+            AuthenticationError,
+            APITimeoutError,
+            APIConnectionError,
+        )
+
         try:
             response = self.client.embeddings.create(
                 input=texts,
@@ -140,15 +197,21 @@ class OpenAIEmbeddings(EmbeddingProvider):
         except EmbeddingError:
             # Re-raise our own exceptions
             raise
-        except ConnectionError as e:
-            raise EmbeddingProviderUnavailableError(
-                f"Failed to connect to OpenAI API: {e}"
+        except RateLimitError as e:
+            raise EmbeddingRateLimitError(
+                f"OpenAI API rate limit exceeded: {e}"
             ) from e
-        except Exception as e:
-            # Catch API errors (APIError, RateLimitError, etc.), auth errors, network errors
-            error_name = type(e).__name__
+        except AuthenticationError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"OpenAI API authentication failed: {e}"
+            ) from e
+        except (APIConnectionError, APITimeoutError) as e:
+            raise EmbeddingProviderUnavailableError(
+                f"OpenAI API unavailable: {e}"
+            ) from e
+        except APIError as e:
             raise EmbeddingGenerationError(
-                f"OpenAI batch embedding generation failed: {error_name}: {e}"
+                f"OpenAI API error: {e}"
             ) from e
 
 
