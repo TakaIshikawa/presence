@@ -2,6 +2,7 @@
 """Build knowledge base from existing content."""
 
 import logging
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -16,9 +17,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config import load_config
 from storage.db import Database
 from ingestion.claude_logs import ClaudeLogParser
-from knowledge.embeddings import get_embedding_provider
+from knowledge.embeddings import get_embedding_provider, EmbeddingError
 from knowledge.store import KnowledgeStore
-from knowledge.ingest import InsightExtractor, ingest_own_post, ingest_own_conversation
+from knowledge.ingest import InsightExtractor, InsightExtractionError, ingest_own_post, ingest_own_conversation
 
 
 def main():
@@ -78,7 +79,7 @@ def main():
             )
             logger.info(f"Ingested post {post_id}")
             time.sleep(API_DELAY_SECONDS)  # Rate limiting
-        except Exception as e:
+        except (InsightExtractionError, EmbeddingError, sqlite3.Error) as e:
             logger.error(f"Failed to ingest post {post_id}: {e}")
             time.sleep(API_DELAY_SECONDS)  # Still wait on error
 
@@ -113,7 +114,7 @@ def main():
                 logger.info(f"Ingested conversation {msg.message_uuid[:8]}")
                 ingested += 1
             time.sleep(API_DELAY_SECONDS)  # Rate limiting
-        except Exception as e:
+        except (InsightExtractionError, EmbeddingError, sqlite3.Error) as e:
             logger.error(f"Failed to ingest conversation {msg.message_uuid[:8]}: {e}")
             time.sleep(API_DELAY_SECONDS)  # Still wait on error
 

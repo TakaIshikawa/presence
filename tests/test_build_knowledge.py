@@ -11,6 +11,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from knowledge.ingest import InsightExtractionError
+from knowledge.embeddings import EmbeddingError
+
 
 def _make_config(embeddings_enabled=True):
     config = MagicMock()
@@ -125,7 +128,7 @@ class TestMain:
             {"id": 2, "content": "Post 2", "published_url": "https://x.com/status/2"},
         ]
         build_mocks.store.exists.return_value = False
-        build_mocks.ingest_post.side_effect = [Exception("API error"), None]
+        build_mocks.ingest_post.side_effect = [InsightExtractionError("API error"), None]
         build_mocks.parser.get_messages_since.return_value = []
 
         from build_knowledge import main
@@ -178,7 +181,7 @@ class TestMain:
         ]
         build_mocks.store.exists.return_value = False
         # First fails, second succeeds
-        build_mocks.ingest_conv.side_effect = [Exception("Extraction failed"), True]
+        build_mocks.ingest_conv.side_effect = [InsightExtractionError("Extraction failed"), True]
 
         from build_knowledge import main
         main()
@@ -240,7 +243,7 @@ class TestMain:
             {"id": 1, "content": "Post 1", "published_url": "https://x.com/status/1"},
         ]
         build_mocks.store.exists.return_value = False
-        build_mocks.ingest_post.side_effect = Exception("API error")
+        build_mocks.ingest_post.side_effect = EmbeddingError("API error")
         build_mocks.parser.get_messages_since.return_value = []
 
         with patch("build_knowledge.time.sleep") as mock_sleep:
