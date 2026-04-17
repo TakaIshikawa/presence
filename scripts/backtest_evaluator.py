@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config import load_config
-from evaluation.engagement_predictor import EngagementPredictor
+from evaluation.engagement_predictor import EngagementPredictor, EngagementPredictionError
 from evaluation.validation_db import ValidationDatabase
 
 BATCH_SIZE = 5
@@ -20,7 +20,7 @@ TWEET_FETCH_BATCH = 100
 logger = logging.getLogger(__name__)
 
 
-def main():
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(message)s'
@@ -129,7 +129,7 @@ def main():
                     account_context=context,
                     prompt_version=args.prompt_version,
                 )
-            except Exception as e:
+            except EngagementPredictionError as e:
                 logger.error("Error on batch %d: %s", i // BATCH_SIZE + 1, e)
                 continue
 
