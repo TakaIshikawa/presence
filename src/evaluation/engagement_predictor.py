@@ -2,8 +2,14 @@
 
 import re
 import anthropic
+from anthropic import APIError, APIConnectionError, RateLimitError, AuthenticationError
 from pathlib import Path
 from dataclasses import dataclass
+
+
+class EngagementPredictionError(Exception):
+    """Raised when engagement prediction fails."""
+    pass
 
 
 @dataclass
@@ -77,11 +83,28 @@ class EngagementPredictor:
             first_tweet_id=tweets[0]["id"] if tweets else "...",
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=200 * len(tweets),
-            messages=[{"role": "user", "content": filled}],
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=200 * len(tweets),
+                messages=[{"role": "user", "content": filled}],
+            )
+        except APIConnectionError as e:
+            raise EngagementPredictionError(
+                f"Failed to connect to Anthropic API: {e}"
+            ) from e
+        except RateLimitError as e:
+            raise EngagementPredictionError(
+                f"Rate limit exceeded: {e}"
+            ) from e
+        except AuthenticationError as e:
+            raise EngagementPredictionError(
+                f"Authentication failed: {e}"
+            ) from e
+        except APIError as e:
+            raise EngagementPredictionError(
+                f"Anthropic API error: {e}"
+            ) from e
 
         return self._parse_batch_response(response.content[0].text, tweets)
 
