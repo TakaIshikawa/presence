@@ -1,13 +1,16 @@
 """Unit tests for scripts/poll_replies.py mention processing logic."""
 
 import json
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import anthropic
 import pytest
+import tweepy
 
 # Add scripts/ and src/ to path so we can import the module under test
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -544,7 +547,7 @@ class TestQualityEvaluation:
 class TestErrorHandling:
     def test_get_mentions_error_causes_early_return(self, _patches):
         """An exception from get_mentions() causes clean early return."""
-        _patches.x_client.get_mentions.side_effect = Exception("API rate limit")
+        _patches.x_client.get_mentions.side_effect = tweepy.TweepyException("API rate limit")
 
         main()
 
@@ -561,7 +564,7 @@ class TestErrorHandling:
 
         # First call raises, second and third succeed
         _patches.drafter.draft_with_lineage.side_effect = [
-            Exception("LLM timeout"),
+            anthropic.APITimeoutError(request=MagicMock()),
             SimpleNamespace(reply_text="Reply to mention 200", knowledge_ids=[]),
             SimpleNamespace(reply_text="Reply to mention 300", knowledge_ids=[]),
         ]
@@ -723,7 +726,7 @@ class TestKnowledgeStoreIntegration:
         # First insert succeeds, second fails
         _patches.db.insert_reply_knowledge_links.side_effect = [
             None,
-            Exception("DB constraint violation"),
+            sqlite3.Error("DB constraint violation"),
         ]
 
         main()
@@ -807,7 +810,7 @@ class TestEarlyExitConditions:
             forward_mentions=False, enrich_replies=False,
             proactive_review=False, reply_quality_threshold=6.0
         )
-        _patches.x_client.get_mentions.side_effect = Exception("API error")
+        _patches.x_client.get_mentions.side_effect = tweepy.TweepyException("API error")
 
         mock_bridge = MagicMock()
 
