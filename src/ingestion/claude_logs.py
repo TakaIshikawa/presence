@@ -56,7 +56,8 @@ class ClaudeLogParser:
                                 timestamp=datetime.fromtimestamp(entry["timestamp"] / 1000, tz=timezone.utc),
                                 prompt_text=entry["display"]
                             )
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"Skipping malformed line in global history: {e}")
                         continue
         except OSError as e:
             logger.warning(f"Could not read history file {self.history_file}: {e}")
@@ -88,7 +89,8 @@ class ClaudeLogParser:
                                     ),
                                     prompt_text=content
                                 )
-                    except (json.JSONDecodeError, KeyError, ValueError):
+                    except (json.JSONDecodeError, KeyError, ValueError) as e:
+                        logger.debug(f"Skipping malformed entry in session {session_path.name}: {e}")
                         continue
         except OSError as e:
             logger.warning(f"Could not read session file {session_path}: {e}")

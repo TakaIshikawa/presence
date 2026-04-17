@@ -508,6 +508,26 @@ class TestEdgeCases:
         assert messages[0].prompt_text == "valid"
         assert messages[1].prompt_text == "also valid"
 
+    def test_malformed_json_lines_logged(self, tmp_path, caplog):
+        """Verify that malformed JSON lines are logged at debug level."""
+        import logging
+        caplog.set_level(logging.DEBUG)
+
+        history = tmp_path / "history.jsonl"
+        history.parent.mkdir(parents=True, exist_ok=True)
+        with open(history, "w") as f:
+            f.write("not valid json\n")
+            f.write(json.dumps(_make_global_entry("valid")) + "\n")
+            f.write("{truncated\n")
+
+        parser = ClaudeLogParser(str(tmp_path))
+        messages = list(parser.parse_global_history())
+
+        # Should have 2 debug log entries for malformed lines
+        debug_logs = [r for r in caplog.records if r.levelname == "DEBUG"]
+        assert len(debug_logs) == 2
+        assert all("Skipping malformed line in global history" in r.message for r in debug_logs)
+
     def test_malformed_json_in_session_file_skipped(self, tmp_path):
         session_file = tmp_path / "session.jsonl"
         with open(session_file, "w") as f:
@@ -517,6 +537,25 @@ class TestEdgeCases:
         parser = ClaudeLogParser(str(tmp_path))
         messages = list(parser.parse_session_file(session_file))
         assert len(messages) == 1
+
+    def test_malformed_json_in_session_file_logged(self, tmp_path, caplog):
+        """Verify that malformed JSON lines in session files are logged at debug level."""
+        import logging
+        caplog.set_level(logging.DEBUG)
+
+        session_file = tmp_path / "session.jsonl"
+        with open(session_file, "w") as f:
+            f.write("broken line\n")
+            f.write(json.dumps(_make_session_entry("ok")) + "\n")
+            f.write("{incomplete\n")
+
+        parser = ClaudeLogParser(str(tmp_path))
+        messages = list(parser.parse_session_file(session_file))
+
+        # Should have 2 debug log entries for malformed entries
+        debug_logs = [r for r in caplog.records if r.levelname == "DEBUG"]
+        assert len(debug_logs) == 2
+        assert all(f"Skipping malformed entry in session {session_file.name}" in r.message for r in debug_logs)
 
     def test_blank_lines_skipped(self, tmp_path):
         history = tmp_path / "history.jsonl"
