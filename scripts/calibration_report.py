@@ -11,12 +11,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
-from evaluation.prediction_calibrator import PredictionCalibrator
+from evaluation.prediction_calibrator import (
+    PredictionCalibrator,
+    CalibrationReport,
+    ErrorPattern,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def format_report(report, patterns):
+def format_report(report: CalibrationReport, patterns: list[ErrorPattern]) -> str:
     """Format calibration report as human-readable text."""
     lines = []
     lines.append("=" * 70)
@@ -101,19 +105,13 @@ def format_report(report, patterns):
     # Calibration context
     lines.append("CALIBRATION CONTEXT FOR PREDICTOR:")
     lines.append("-" * 70)
-    calibrator = None
-    try:
-        # We need to pass db, but we don't have it here - will be generated in main
-        context = "  (Generated in main)"
-        lines.append(context if context else "  (Not enough data - need 10+ predictions)")
-    except:
-        lines.append("  (Error generating context)")
+    lines.append("  (See calibration context below)")
     lines.append("-" * 70)
 
     return "\n".join(lines)
 
 
-def format_json(report, patterns):
+def format_json(report: CalibrationReport, patterns: list[ErrorPattern]) -> str:
     """Format calibration report as JSON."""
     return json.dumps(
         {
@@ -139,7 +137,7 @@ def format_json(report, patterns):
     )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate calibration report for engagement predictions"
     )
