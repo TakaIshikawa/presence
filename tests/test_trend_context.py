@@ -190,6 +190,64 @@ class TestExtractThemes:
         themes = builder._extract_themes([_make_item("a", "text")])
         assert len(themes) == 5
 
+    @patch("synthesis.trend_context.anthropic.Anthropic")
+    def test_handles_api_connection_error(self, MockAnthropic):
+        """Test that APIConnectionError is caught and returns empty list."""
+        import anthropic
+
+        mock_client = MagicMock()
+        MockAnthropic.return_value = mock_client
+
+        # APIConnectionError requires a request parameter
+        mock_request = MagicMock()
+        mock_client.messages.create.side_effect = anthropic.APIConnectionError(
+            message="Connection failed",
+            request=mock_request
+        )
+
+        builder = TrendContextBuilder(
+            knowledge_store=MagicMock(),
+            api_key="test-key",
+        )
+        themes = builder._extract_themes([_make_item("a", "text")])
+        assert themes == []
+
+    @patch("synthesis.trend_context.anthropic.Anthropic")
+    def test_handles_api_status_error(self, MockAnthropic):
+        """Test that APIStatusError is caught and returns empty list."""
+        import anthropic
+
+        mock_client = MagicMock()
+        MockAnthropic.return_value = mock_client
+
+        # APIStatusError requires specific parameters
+        mock_client.messages.create.side_effect = anthropic.APIStatusError(
+            "Rate limit exceeded",
+            response=MagicMock(status_code=429),
+            body=None
+        )
+
+        builder = TrendContextBuilder(
+            knowledge_store=MagicMock(),
+            api_key="test-key",
+        )
+        themes = builder._extract_themes([_make_item("a", "text")])
+        assert themes == []
+
+    @patch("synthesis.trend_context.anthropic.Anthropic")
+    def test_handles_generic_exception(self, MockAnthropic):
+        """Test that unexpected exceptions are caught and return empty list."""
+        mock_client = MagicMock()
+        MockAnthropic.return_value = mock_client
+        mock_client.messages.create.side_effect = RuntimeError("Unexpected error")
+
+        builder = TrendContextBuilder(
+            knowledge_store=MagicMock(),
+            api_key="test-key",
+        )
+        themes = builder._extract_themes([_make_item("a", "text")])
+        assert themes == []
+
 
 class TestCaching:
     """Tests for trend context caching via meta table."""

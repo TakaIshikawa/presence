@@ -200,11 +200,26 @@ Posts:
 
 JSON array:"""
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            return []
+        except anthropic.APIStatusError as e:
+            # Includes rate limits, auth errors, and other HTTP status errors
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            return []
+        except Exception as e:
+            # Catch-all for unexpected errors
+            error_name = type(e).__name__
+            logger.error(f"Trend theme extraction failed: {error_name}: {e}")
+            return []
 
         text = response.content[0].text.strip()
         # Handle potential markdown wrapping
