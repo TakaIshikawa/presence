@@ -4,6 +4,7 @@
 import signal
 import sys
 import logging
+import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -114,7 +115,7 @@ def main():
                 db.mark_queue_published(queue_id)
                 logger.info(f"  Queue item {queue_id} completed")
 
-            except Exception as e:
+            except (sqlite3.Error, KeyError, IndexError, AttributeError, TypeError, ValueError) as e:
                 logger.error(f"  Unexpected error publishing content {content_id}: {e}")
                 db.mark_queue_failed(queue_id, str(e))
 
