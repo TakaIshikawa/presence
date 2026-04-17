@@ -14,7 +14,7 @@ from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 logger = logging.getLogger(__name__)
 
 
-def main():
+def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     with script_context() as (config, db):
         if not config.embeddings:

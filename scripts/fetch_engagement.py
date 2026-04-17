@@ -57,7 +57,7 @@ def backfill_tweet_ids(db) -> int:
     return count
 
 
-def main():
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',

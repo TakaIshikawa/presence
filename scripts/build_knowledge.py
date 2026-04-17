@@ -21,7 +21,7 @@ from knowledge.store import KnowledgeStore
 from knowledge.ingest import InsightExtractor, ingest_own_post, ingest_own_conversation
 
 
-def main():
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
