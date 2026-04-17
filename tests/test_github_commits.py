@@ -6,7 +6,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from ingestion.github_commits import Commit, GitHubClient, poll_new_commits
+from ingestion.github_commits import (
+    Commit,
+    GitHubClient,
+    GitHubAuthError,
+    GitHubClientError,
+    GitHubNotFoundError,
+    GitHubRateLimitError,
+    poll_new_commits,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +152,38 @@ class TestGetUserRepos:
         assert len(repos) == 2
         assert {r["name"] for r in repos} == {"own-repo", "forked-repo"}
 
+    @patch("requests.get")
+    def test_401_raises_auth_error(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=401)
+
+        client = GitHubClient(token="bad-token", username="taka")
+        with pytest.raises(GitHubAuthError):
+            client.get_user_repos()
+
+    @patch("requests.get")
+    def test_403_raises_rate_limit_error(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=403)
+
+        client = GitHubClient(token="tok", username="taka")
+        with pytest.raises(GitHubRateLimitError):
+            client.get_user_repos()
+
+    @patch("requests.get")
+    def test_404_raises_not_found_error(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=404)
+
+        client = GitHubClient(token="tok", username="taka")
+        with pytest.raises(GitHubNotFoundError):
+            client.get_user_repos()
+
+    @patch("requests.get")
+    def test_connection_error_raises_client_error(self, mock_get):
+        mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
+
+        client = GitHubClient(token="tok", username="taka")
+        with pytest.raises(GitHubClientError, match="Connection error"):
+            client.get_user_repos()
+
 
 # ---------------------------------------------------------------------------
 # GitHubClient.get_repo_commits
@@ -194,8 +234,40 @@ class TestGetRepoCommits:
         mock_get.return_value = _mock_response(status_code=500)
 
         client = GitHubClient(token="tok", username="taka")
-        with pytest.raises(requests.exceptions.HTTPError):
+        with pytest.raises(GitHubClientError):
             list(client.get_repo_commits("bad-repo"))
+
+    @patch("requests.get")
+    def test_401_raises_auth_error(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=401)
+
+        client = GitHubClient(token="bad-token", username="taka")
+        with pytest.raises(GitHubAuthError):
+            list(client.get_repo_commits("repo-a"))
+
+    @patch("requests.get")
+    def test_403_raises_rate_limit_error(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=403)
+
+        client = GitHubClient(token="tok", username="taka")
+        with pytest.raises(GitHubRateLimitError):
+            list(client.get_repo_commits("repo-a"))
+
+    @patch("requests.get")
+    def test_404_raises_not_found_error(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=404)
+
+        client = GitHubClient(token="tok", username="taka")
+        with pytest.raises(GitHubNotFoundError):
+            list(client.get_repo_commits("nonexistent"))
+
+    @patch("requests.get")
+    def test_connection_error_raises_client_error(self, mock_get):
+        mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
+
+        client = GitHubClient(token="tok", username="taka")
+        with pytest.raises(GitHubClientError, match="Connection error"):
+            list(client.get_repo_commits("repo-a"))
 
 
 # ---------------------------------------------------------------------------
@@ -228,19 +300,13 @@ class TestGetAllRecentCommits:
             _make_repo("ok-repo"),
         ]
 
-        resp_403 = MagicMock(spec=requests.Response)
-        resp_403.status_code = 403
-        http_403 = requests.exceptions.HTTPError(response=resp_403)
-
         commit_ok = Commit("ok-repo", "sha-ok", "m", TIMESTAMP, "taka", "u")
-
-        mock_commits.side_effect = [http_403, iter([commit_ok])]
 
         # The side_effect for "private" is an exception, so we need to
         # make get_repo_commits raise on first call and yield on second.
         def side_effect(repo_name, **kwargs):
             if repo_name == "private":
-                raise http_403
+                raise GitHubRateLimitError("Rate limit exceeded")
             return iter([commit_ok])
 
         mock_commits.side_effect = side_effect
@@ -256,15 +322,11 @@ class TestGetAllRecentCommits:
     def test_skips_404_repos(self, mock_repos, mock_commits):
         mock_repos.return_value = [_make_repo("gone"), _make_repo("ok")]
 
-        resp_404 = MagicMock(spec=requests.Response)
-        resp_404.status_code = 404
-        http_404 = requests.exceptions.HTTPError(response=resp_404)
-
         commit_ok = Commit("ok", "sha1", "m", TIMESTAMP, "taka", "u")
 
         def side_effect(repo_name, **kwargs):
             if repo_name == "gone":
-                raise http_404
+                raise GitHubNotFoundError("Not found")
             return iter([commit_ok])
 
         mock_commits.side_effect = side_effect
@@ -280,14 +342,10 @@ class TestGetAllRecentCommits:
     def test_500_error_propagates(self, mock_repos, mock_commits):
         mock_repos.return_value = [_make_repo("broken")]
 
-        resp_500 = MagicMock(spec=requests.Response)
-        resp_500.status_code = 500
-        http_500 = requests.exceptions.HTTPError(response=resp_500)
-
-        mock_commits.side_effect = http_500
+        mock_commits.side_effect = GitHubClientError("HTTP error: 500")
 
         client = GitHubClient(token="tok", username="taka")
-        with pytest.raises(requests.exceptions.HTTPError):
+        with pytest.raises(GitHubClientError):
             list(client.get_all_recent_commits())
 
 

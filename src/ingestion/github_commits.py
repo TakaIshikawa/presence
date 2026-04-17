@@ -6,6 +6,27 @@ from dataclasses import dataclass
 from datetime import datetime
 
 
+# Custom exception classes for GitHub API errors
+class GitHubClientError(Exception):
+    """Base exception for GitHub API client errors."""
+    pass
+
+
+class GitHubRateLimitError(GitHubClientError):
+    """Raised when GitHub API rate limit is exceeded (403)."""
+    pass
+
+
+class GitHubAuthError(GitHubClientError):
+    """Raised when GitHub API authentication fails (401)."""
+    pass
+
+
+class GitHubNotFoundError(GitHubClientError):
+    """Raised when GitHub API resource is not found (404)."""
+    pass
+
+
 @dataclass
 class Commit:
     repo_name: str
@@ -45,18 +66,31 @@ class GitHubClient:
 
         while True:
             # Use /user/repos endpoint to include private repos
-            response = requests.get(
-                f"{self.BASE_URL}/user/repos",
-                headers=self.headers,
-                params={
-                    "affiliation": "owner",
-                    "sort": "pushed",
-                    "per_page": 100,
-                    "page": page
-                },
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
+            try:
+                response = requests.get(
+                    f"{self.BASE_URL}/user/repos",
+                    headers=self.headers,
+                    params={
+                        "affiliation": "owner",
+                        "sort": "pushed",
+                        "per_page": 100,
+                        "page": page
+                    },
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+            except requests.exceptions.ConnectionError as e:
+                raise GitHubClientError(f"Connection error: {e}") from e
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 401:
+                    raise GitHubAuthError(f"Authentication failed: {e}") from e
+                elif e.response.status_code == 403:
+                    raise GitHubRateLimitError(f"Rate limit exceeded: {e}") from e
+                elif e.response.status_code == 404:
+                    raise GitHubNotFoundError(f"Resource not found: {e}") from e
+                else:
+                    raise GitHubClientError(f"HTTP error: {e}") from e
+
             data = response.json()
 
             if not data:
@@ -85,17 +119,29 @@ class GitHubClient:
         if since:
             params["since"] = since.isoformat()
 
-        response = requests.get(
-            f"{self.BASE_URL}/repos/{self.username}/{repo_name}/commits",
-            headers=self.headers,
-            params=params,
-            timeout=self.timeout,
-        )
+        try:
+            response = requests.get(
+                f"{self.BASE_URL}/repos/{self.username}/{repo_name}/commits",
+                headers=self.headers,
+                params=params,
+                timeout=self.timeout,
+            )
 
-        if response.status_code == 409:  # Empty repository
-            return
+            if response.status_code == 409:  # Empty repository
+                return
 
-        response.raise_for_status()
+            response.raise_for_status()
+        except requests.exceptions.ConnectionError as e:
+            raise GitHubClientError(f"Connection error: {e}") from e
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise GitHubAuthError(f"Authentication failed: {e}") from e
+            elif e.response.status_code == 403:
+                raise GitHubRateLimitError(f"Rate limit exceeded: {e}") from e
+            elif e.response.status_code == 404:
+                raise GitHubNotFoundError(f"Resource not found: {e}") from e
+            else:
+                raise GitHubClientError(f"HTTP error: {e}") from e
 
         for commit_data in response.json():
             commit = commit_data["commit"]
@@ -122,10 +168,9 @@ class GitHubClient:
             try:
                 for commit in self.get_repo_commits(repo["name"], since=since):
                     yield commit
-            except requests.exceptions.HTTPError as e:
-                # Skip repos we can't access
-                if e.response.status_code not in (403, 404):
-                    raise
+            except (GitHubRateLimitError, GitHubNotFoundError):
+                # Skip repos we can't access due to rate limits or not found
+                pass
 
 
 def poll_new_commits(
