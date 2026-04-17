@@ -5,6 +5,8 @@ import sys
 import time
 import logging
 import argparse
+import base64
+import requests
 import tweepy
 from pathlib import Path
 
@@ -21,20 +23,47 @@ logger = logging.getLogger(__name__)
 
 def get_bearer_token(api_key: str, api_secret: str) -> str:
     """Get OAuth 2.0 bearer token from consumer credentials."""
-    import base64
-    import requests
-
     credentials = base64.b64encode(f"{api_key}:{api_secret}".encode()).decode()
-    resp = requests.post(
-        "https://api.twitter.com/oauth2/token",
-        headers={
-            "Authorization": f"Basic {credentials}",
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        },
-        data="grant_type=client_credentials",
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+
+    try:
+        resp = requests.post(
+            "https://api.twitter.com/oauth2/token",
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            },
+            data="grant_type=client_credentials",
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["access_token"]
+    except requests.ConnectionError as e:
+        logger.error("Failed to connect to api.twitter.com: %s", e)
+        raise RuntimeError(
+            "Failed to connect to Twitter OAuth endpoint. "
+            "Check your network connectivity and verify api.twitter.com is reachable."
+        ) from e
+    except requests.Timeout as e:
+        logger.error("Request to Twitter OAuth endpoint timed out: %s", e)
+        raise RuntimeError(
+            "Request to Twitter OAuth endpoint timed out after 30 seconds. "
+            "Check your network connection or try again later."
+        ) from e
+    except requests.HTTPError as e:
+        status_code = e.response.status_code if e.response else "unknown"
+        logger.error("HTTP error %s from Twitter OAuth endpoint: %s", status_code, e)
+
+        if status_code in (401, 403):
+            raise RuntimeError(
+                f"Authentication failed (HTTP {status_code}). "
+                "Verify your X API key and secret are correct and that your app has "
+                "the necessary permissions for OAuth 2.0 client credentials flow."
+            ) from e
+        else:
+            raise RuntimeError(
+                f"HTTP error {status_code} from Twitter OAuth endpoint. "
+                "The OAuth service may be temporarily unavailable."
+            ) from e
 
 
 def fetch_following(client: tweepy.Client, user_id: str) -> list[dict]:

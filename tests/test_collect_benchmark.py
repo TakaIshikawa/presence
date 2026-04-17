@@ -3,19 +3,31 @@
 import sys
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch, PropertyMock, Mock
 
 import pytest
 import tweepy
+import requests
 
 # Add scripts/ and src/ to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from collect_benchmark import fetch_following, fetch_account_tweets
+from collect_benchmark import fetch_following, fetch_account_tweets, get_bearer_token
 
 
 # --- helpers ---
+
+
+def _make_mock_response(status_code, json_data=None):
+    """Create a mock requests.Response object."""
+    mock_resp = Mock()
+    mock_resp.status_code = status_code
+    mock_resp.json.return_value = json_data or {}
+    mock_resp.raise_for_status = Mock()
+    if status_code >= 400:
+        mock_resp.raise_for_status.side_effect = requests.HTTPError(response=mock_resp)
+    return mock_resp
 
 
 def _make_user(user_id="123", username="testuser", name="Test User",
@@ -105,6 +117,80 @@ class TestFetchFollowing:
         result = fetch_following(client, "my_id")
 
         assert result == []
+
+
+# --- TestGetBearerToken ---
+
+
+class TestGetBearerToken:
+    @patch("collect_benchmark.requests.post")
+    def test_success(self, mock_post):
+        """Successful bearer token retrieval."""
+        mock_post.return_value = _make_mock_response(
+            200, {"access_token": "test_bearer_token"}
+        )
+
+        token = get_bearer_token("api_key", "api_secret")
+
+        assert token == "test_bearer_token"
+        mock_post.assert_called_once()
+        # Verify timeout was set
+        call_kwargs = mock_post.call_args[1]
+        assert call_kwargs["timeout"] == 30
+
+    @patch("collect_benchmark.requests.post")
+    def test_connection_error(self, mock_post):
+        """Network connectivity failure."""
+        mock_post.side_effect = requests.ConnectionError("Network unreachable")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            get_bearer_token("api_key", "api_secret")
+
+        assert "Failed to connect to Twitter OAuth endpoint" in str(exc_info.value)
+        assert "network connectivity" in str(exc_info.value)
+
+    @patch("collect_benchmark.requests.post")
+    def test_timeout_error(self, mock_post):
+        """Request timeout."""
+        mock_post.side_effect = requests.Timeout("Request timed out")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            get_bearer_token("api_key", "api_secret")
+
+        assert "timed out after 30 seconds" in str(exc_info.value)
+
+    @patch("collect_benchmark.requests.post")
+    def test_http_401_error(self, mock_post):
+        """Unauthorized - bad credentials."""
+        mock_post.return_value = _make_mock_response(401)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            get_bearer_token("api_key", "api_secret")
+
+        assert "Authentication failed (HTTP 401)" in str(exc_info.value)
+        assert "API key and secret are correct" in str(exc_info.value)
+
+    @patch("collect_benchmark.requests.post")
+    def test_http_403_error(self, mock_post):
+        """Forbidden - permission issue."""
+        mock_post.return_value = _make_mock_response(403)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            get_bearer_token("api_key", "api_secret")
+
+        assert "Authentication failed (HTTP 403)" in str(exc_info.value)
+        assert "permissions" in str(exc_info.value)
+
+    @patch("collect_benchmark.requests.post")
+    def test_http_500_error(self, mock_post):
+        """Server error."""
+        mock_post.return_value = _make_mock_response(500)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            get_bearer_token("api_key", "api_secret")
+
+        assert "HTTP error 500" in str(exc_info.value)
+        assert "temporarily unavailable" in str(exc_info.value)
 
 
 # --- TestFetchAccountTweets ---
