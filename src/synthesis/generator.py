@@ -1,9 +1,13 @@
 """Content generation using Claude API."""
 
+import logging
+
 import anthropic
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,11 +43,20 @@ class ContentGenerator:
             repo_name=repo_name
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=500,
-            messages=[{"role": "user", "content": filled}]
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                messages=[{"role": "user", "content": filled}]
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            raise
 
         return GeneratedContent(
             content_type="x_post",
@@ -72,11 +85,20 @@ class ContentGenerator:
             commit_count=len(commits)
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=500,
-            messages=[{"role": "user", "content": filled}]
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                messages=[{"role": "user", "content": filled}]
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            raise
 
         return GeneratedContent(
             content_type="x_post",
@@ -168,12 +190,22 @@ class ContentGenerator:
                 trend_context=trend_context,
             )
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                temperature=temp,
-                messages=[{"role": "user", "content": filled}],
-            )
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temp,
+                    messages=[{"role": "user", "content": filled}],
+                )
+            except anthropic.APIConnectionError as e:
+                error_name = type(e).__name__
+                logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+                raise
+            except anthropic.APIStatusError as e:
+                error_name = type(e).__name__
+                logger.error(f"Anthropic API status error: {error_name}: {e}")
+                raise
+
             candidates.append(
                 GeneratedContent(
                     content_type=content_type,
@@ -189,11 +221,22 @@ class ContentGenerator:
         """Condense content to fit character limit."""
         template = self._load_prompt("condense")
         filled = template.format(content=content, char_count=len(content))
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=200,
-            messages=[{"role": "user", "content": filled}],
-        )
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=200,
+                messages=[{"role": "user", "content": filled}],
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            raise
+
         return response.content[0].text.strip()
 
     def generate_x_thread(
@@ -215,11 +258,20 @@ class ContentGenerator:
             commits=commits_text
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            messages=[{"role": "user", "content": filled}]
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": filled}]
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            raise
 
         return GeneratedContent(
             content_type="x_thread",
@@ -247,11 +299,20 @@ class ContentGenerator:
             commits=commits_text
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": filled}]
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4000,
+                messages=[{"role": "user", "content": filled}]
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            raise
 
         return GeneratedContent(
             content_type="blog_post",
