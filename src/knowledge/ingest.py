@@ -1,10 +1,16 @@
 """Ingest content into knowledge base."""
 
 import anthropic
+from anthropic import APIError, APIConnectionError, RateLimitError, AuthenticationError
 from typing import Optional
 from dataclasses import dataclass
 
 from .store import KnowledgeStore, KnowledgeItem
+
+
+class InsightExtractionError(Exception):
+    """Raised when insight extraction from content fails."""
+    pass
 
 
 @dataclass
@@ -31,12 +37,29 @@ Content:
         if context:
             prompt += f"\nContext: {context}"
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=200,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.content[0].text.strip()
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text.strip()
+        except APIConnectionError as e:
+            raise InsightExtractionError(
+                f"Failed to connect to Anthropic API: {e}"
+            ) from e
+        except RateLimitError as e:
+            raise InsightExtractionError(
+                f"Anthropic API rate limit exceeded: {e}"
+            ) from e
+        except AuthenticationError as e:
+            raise InsightExtractionError(
+                f"Anthropic API authentication failed: {e}"
+            ) from e
+        except APIError as e:
+            raise InsightExtractionError(
+                f"Anthropic API error: {e}"
+            ) from e
 
 
 def ingest_own_post(

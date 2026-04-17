@@ -5,9 +5,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import anthropic
 
 from knowledge.ingest import (
     InsightExtractor,
+    InsightExtractionError,
     ingest_own_post,
     ingest_own_conversation,
     ingest_curated_post,
@@ -118,6 +120,58 @@ class TestInsightExtractor:
         with patch("knowledge.ingest.anthropic.Anthropic"):
             ext = InsightExtractor(api_key="test")
             assert ext.model == "claude-sonnet-4-20250514"
+
+    def test_api_connection_error_raises_insight_extraction_error(self, extractor_with_client):
+        ext, client = extractor_with_client
+        client.messages.create.side_effect = anthropic.APIConnectionError(request=MagicMock())
+
+        with pytest.raises(InsightExtractionError) as exc_info:
+            ext.extract_insight("some content")
+
+        assert "Failed to connect to Anthropic API" in str(exc_info.value)
+        assert exc_info.value.__cause__ is not None
+
+    def test_rate_limit_error_raises_insight_extraction_error(self, extractor_with_client):
+        ext, client = extractor_with_client
+        client.messages.create.side_effect = anthropic.RateLimitError(
+            message="Rate limit exceeded",
+            response=MagicMock(),
+            body={}
+        )
+
+        with pytest.raises(InsightExtractionError) as exc_info:
+            ext.extract_insight("some content")
+
+        assert "rate limit exceeded" in str(exc_info.value).lower()
+        assert exc_info.value.__cause__ is not None
+
+    def test_authentication_error_raises_insight_extraction_error(self, extractor_with_client):
+        ext, client = extractor_with_client
+        client.messages.create.side_effect = anthropic.AuthenticationError(
+            message="Invalid API key",
+            response=MagicMock(),
+            body={}
+        )
+
+        with pytest.raises(InsightExtractionError) as exc_info:
+            ext.extract_insight("some content")
+
+        assert "authentication failed" in str(exc_info.value).lower()
+        assert exc_info.value.__cause__ is not None
+
+    def test_api_error_raises_insight_extraction_error(self, extractor_with_client):
+        ext, client = extractor_with_client
+        client.messages.create.side_effect = anthropic.APIError(
+            message="Internal server error",
+            request=MagicMock(),
+            body={}
+        )
+
+        with pytest.raises(InsightExtractionError) as exc_info:
+            ext.extract_insight("some content")
+
+        assert "Anthropic API error" in str(exc_info.value)
+        assert exc_info.value.__cause__ is not None
 
 
 # ---------------------------------------------------------------------------
