@@ -27,6 +27,7 @@ def _make_config(
     forward_mentions=False,
     enrich_replies=False,
     reply_quality_threshold=6.0,
+    embeddings_enabled=False,
 ):
     """Build a minimal Config-like namespace matching load_config() shape."""
     x = SimpleNamespace(
@@ -50,6 +51,13 @@ def _make_config(
             reply_quality_threshold=reply_quality_threshold,
         )
 
+    embeddings = None
+    if embeddings_enabled:
+        embeddings = SimpleNamespace(
+            api_key="voyage-key",
+            model="voyage-3-large",
+        )
+
     timeouts = SimpleNamespace(
         anthropic_seconds=300,
         github_seconds=30,
@@ -63,6 +71,7 @@ def _make_config(
         paths=paths,
         replies=replies,
         cultivate=cultivate,
+        embeddings=embeddings,
         timeouts=timeouts,
     )
 
@@ -137,7 +146,11 @@ def _patches():
         x_client.get_mentions.return_value = ([], USERS_BY_ID)
 
         drafter = MockDrafter.return_value
-        drafter.draft.return_value = "Great point, thanks for sharing!"
+        draft_result = SimpleNamespace(
+            reply_text="Great point, thanks for sharing!",
+            knowledge_ids=[],
+        )
+        drafter.draft_with_lineage_with_lineage.return_value = draft_result
 
         yield SimpleNamespace(
             script_context=mock_script_context,
@@ -196,7 +209,7 @@ class TestDailyReplyCap:
 
         main()
 
-        assert _patches.drafter.draft.call_count == 2
+        assert _patches.drafter.draft_with_lineage.call_count == 2
         assert _patches.db.insert_reply_draft.call_count == 2
 
 
@@ -213,7 +226,7 @@ class TestMentionFiltering:
 
         main()
 
-        _patches.drafter.draft.assert_not_called()
+        _patches.drafter.draft_with_lineage.assert_not_called()
 
     def test_skips_non_reply_mentions(self, _patches):
         """Mentions not replying to us (in_reply_to_user_id != my_id) are skipped."""
@@ -222,7 +235,7 @@ class TestMentionFiltering:
 
         main()
 
-        _patches.drafter.draft.assert_not_called()
+        _patches.drafter.draft_with_lineage.assert_not_called()
 
     def test_skips_already_processed_mentions(self, _patches):
         """Mentions already in DB (is_reply_processed=True) are skipped."""
@@ -232,7 +245,7 @@ class TestMentionFiltering:
 
         main()
 
-        _patches.drafter.draft.assert_not_called()
+        _patches.drafter.draft_with_lineage.assert_not_called()
 
     def test_skips_mention_without_tracked_conversation(self, _patches):
         """Mentions replying to a tweet we don't track are skipped."""
@@ -242,7 +255,7 @@ class TestMentionFiltering:
 
         main()
 
-        _patches.drafter.draft.assert_not_called()
+        _patches.drafter.draft_with_lineage.assert_not_called()
 
     def test_processes_valid_mention(self, _patches):
         """A mention that passes all filters gets drafted and stored."""
@@ -251,7 +264,7 @@ class TestMentionFiltering:
 
         main()
 
-        _patches.drafter.draft.assert_called_once()
+        _patches.drafter.draft_with_lineage.assert_called_once()
         _patches.db.insert_reply_draft.assert_called_once()
 
     def test_mixed_mentions_filters_correctly(self, _patches):
@@ -269,7 +282,7 @@ class TestMentionFiltering:
 
         main()
 
-        assert _patches.drafter.draft.call_count == 2
+        assert _patches.drafter.draft_with_lineage.call_count == 2
         assert _patches.db.insert_reply_draft.call_count == 2
 
 
@@ -351,10 +364,15 @@ class TestCultivateIntegration:
         mention = _make_mention(author_id="user_A")
         _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
 
-        with patch(
-            "engagement.cultivate_bridge.CultivateBridge"
-        ) as MockBridge:
+        with (
+            patch("engagement.cultivate_bridge.CultivateBridge") as MockBridge,
+            patch("engagement.reply_evaluator.ReplyEvaluator") as MockEval,
+        ):
             MockBridge.try_connect.return_value = mock_bridge
+            mock_evaluator = MockEval.return_value
+            mock_evaluator.evaluate.return_value = SimpleNamespace(
+                score=8.0, passes=True, feedback="good", flags=[]
+            )
             main()
 
         mock_bridge.get_person_context.assert_called_once_with("alice")
@@ -371,10 +389,15 @@ class TestCultivateIntegration:
         )
         _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
 
-        with patch(
-            "engagement.cultivate_bridge.CultivateBridge"
-        ) as MockBridge:
+        with (
+            patch("engagement.cultivate_bridge.CultivateBridge") as MockBridge,
+            patch("engagement.reply_evaluator.ReplyEvaluator") as MockEval,
+        ):
             MockBridge.try_connect.return_value = mock_bridge
+            mock_evaluator = MockEval.return_value
+            mock_evaluator.evaluate.return_value = SimpleNamespace(
+                score=8.0, passes=True, feedback="good", flags=[]
+            )
             main()
 
         mock_bridge.record_mention_event.assert_called_once_with(
@@ -392,14 +415,19 @@ class TestCultivateIntegration:
         mention = _make_mention(author_id="user_A")
         _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
 
-        with patch(
-            "engagement.cultivate_bridge.CultivateBridge"
-        ) as MockBridge:
+        with (
+            patch("engagement.cultivate_bridge.CultivateBridge") as MockBridge,
+            patch("engagement.reply_evaluator.ReplyEvaluator") as MockEval,
+        ):
             MockBridge.try_connect.return_value = None
+            mock_evaluator = MockEval.return_value
+            mock_evaluator.evaluate.return_value = SimpleNamespace(
+                score=8.0, passes=True, feedback="good", flags=[]
+            )
             main()
 
         # Draft still called — bridge absence doesn't block processing
-        _patches.drafter.draft.assert_called_once()
+        _patches.drafter.draft_with_lineage.assert_called_once()
 
     def test_bridge_closed_at_end(self, _patches):
         """When bridge is connected, it is closed at the end of main()."""
@@ -413,10 +441,15 @@ class TestCultivateIntegration:
         mention = _make_mention(author_id="user_A")
         _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
 
-        with patch(
-            "engagement.cultivate_bridge.CultivateBridge"
-        ) as MockBridge:
+        with (
+            patch("engagement.cultivate_bridge.CultivateBridge") as MockBridge,
+            patch("engagement.reply_evaluator.ReplyEvaluator") as MockEval,
+        ):
             MockBridge.try_connect.return_value = mock_bridge
+            mock_evaluator = MockEval.return_value
+            mock_evaluator.evaluate.return_value = SimpleNamespace(
+                score=8.0, passes=True, feedback="good", flags=[]
+            )
             main()
 
         mock_bridge.close.assert_called_once()
@@ -515,10 +548,10 @@ class TestErrorHandling:
 
         main()
 
-        _patches.drafter.draft.assert_not_called()
+        _patches.drafter.draft_with_lineage.assert_not_called()
 
     def test_draft_error_skips_mention_continues_processing(self, _patches):
-        """An error in drafter.draft() skips that mention but continues."""
+        """An error in drafter.draft_with_lineage() skips that mention but continues."""
         mentions = [
             _make_mention(tweet_id="100", author_id="user_A"),
             _make_mention(tweet_id="200", author_id="user_B"),
@@ -527,15 +560,15 @@ class TestErrorHandling:
         _patches.x_client.get_mentions.return_value = (mentions, USERS_BY_ID)
 
         # First call raises, second and third succeed
-        _patches.drafter.draft.side_effect = [
+        _patches.drafter.draft_with_lineage.side_effect = [
             Exception("LLM timeout"),
-            "Reply to mention 200",
-            "Reply to mention 300",
+            SimpleNamespace(reply_text="Reply to mention 200", knowledge_ids=[]),
+            SimpleNamespace(reply_text="Reply to mention 300", knowledge_ids=[]),
         ]
 
         main()
 
-        assert _patches.drafter.draft.call_count == 3
+        assert _patches.drafter.draft_with_lineage.call_count == 3
         # Only 2 successful drafts get inserted
         assert _patches.db.insert_reply_draft.call_count == 2
 
@@ -585,7 +618,10 @@ class TestInsertReplyDraft:
             conversation_id="conv_1",
         )
         _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
-        _patches.drafter.draft.return_value = "Thanks for the feedback!"
+        _patches.drafter.draft_with_lineage.return_value = SimpleNamespace(
+            reply_text="Thanks for the feedback!",
+            knowledge_ids=[],
+        )
 
         main()
 
@@ -604,7 +640,7 @@ class TestInsertReplyDraft:
         )
 
     def test_drafter_receives_correct_arguments(self, _patches):
-        """Verify drafter.draft() is called with the right context."""
+        """Verify drafter.draft_with_lineage() is called with the right context."""
         mention = _make_mention(
             text="What about edge cases?", author_id="user_A"
         )
@@ -612,10 +648,171 @@ class TestInsertReplyDraft:
 
         main()
 
-        _patches.drafter.draft.assert_called_once_with(
+        _patches.drafter.draft_with_lineage.assert_called_once_with(
             our_post="Here is our original post text.",
             their_reply="What about edge cases?",
             their_handle="alice",
             self_handle="my_handle",
             person_context=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# 9. Knowledge store integration
+# ---------------------------------------------------------------------------
+
+
+class TestKnowledgeStoreIntegration:
+    def test_knowledge_store_initialized_when_embeddings_configured(self, _patches):
+        """When config.embeddings is set, knowledge store is initialized."""
+        _patches.config.embeddings = SimpleNamespace(
+            api_key="voyage-key",
+            model="voyage-3-large",
+        )
+
+        mention = _make_mention(author_id="user_A")
+        _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
+
+        with (
+            patch("poll_replies.VoyageEmbeddings") as MockEmbeddings,
+            patch("poll_replies.KnowledgeStore") as MockStore,
+        ):
+            mock_embedder = MockEmbeddings.return_value
+            mock_store = MockStore.return_value
+            main()
+
+            MockEmbeddings.assert_called_once_with(
+                api_key="voyage-key",
+                model="voyage-3-large",
+            )
+            MockStore.assert_called_once_with(_patches.db.conn, mock_embedder)
+
+    def test_knowledge_ids_stored_when_returned(self, _patches):
+        """When draft_with_lineage returns knowledge_ids, they are stored."""
+        mention = _make_mention(author_id="user_A")
+        _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
+        _patches.db.insert_reply_draft.return_value = 42
+
+        draft_result = SimpleNamespace(
+            reply_text="Reply with knowledge",
+            knowledge_ids=["k1", "k2", "k3"],
+        )
+        _patches.drafter.draft_with_lineage.return_value = draft_result
+
+        main()
+
+        _patches.db.insert_reply_knowledge_links.assert_called_once_with(
+            42, ["k1", "k2", "k3"]
+        )
+
+    def test_knowledge_link_storage_failure_is_non_fatal(self, _patches):
+        """When insert_reply_knowledge_links fails, processing continues."""
+        mentions = [
+            _make_mention(tweet_id="100", author_id="user_A"),
+            _make_mention(tweet_id="200", author_id="user_B"),
+        ]
+        _patches.x_client.get_mentions.return_value = (mentions, USERS_BY_ID)
+        _patches.db.insert_reply_draft.side_effect = [42, 43]
+
+        draft_result = SimpleNamespace(
+            reply_text="Reply with knowledge",
+            knowledge_ids=["k1"],
+        )
+        _patches.drafter.draft_with_lineage.return_value = draft_result
+
+        # First insert succeeds, second fails
+        _patches.db.insert_reply_knowledge_links.side_effect = [
+            None,
+            Exception("DB constraint violation"),
+        ]
+
+        main()
+
+        # Both mentions still get drafted and inserted
+        assert _patches.drafter.draft_with_lineage.call_count == 2
+        assert _patches.db.insert_reply_draft.call_count == 2
+        assert _patches.db.insert_reply_knowledge_links.call_count == 2
+
+    def test_no_knowledge_links_stored_when_empty(self, _patches):
+        """When knowledge_ids is empty, insert_reply_knowledge_links not called."""
+        mention = _make_mention(author_id="user_A")
+        _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
+
+        draft_result = SimpleNamespace(
+            reply_text="Reply without knowledge",
+            knowledge_ids=[],
+        )
+        _patches.drafter.draft_with_lineage.return_value = draft_result
+
+        main()
+
+        _patches.db.insert_reply_knowledge_links.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 10. Early exit conditions
+# ---------------------------------------------------------------------------
+
+
+class TestEarlyExitConditions:
+    def test_exits_early_when_no_mentions_returned(self, _patches):
+        """When get_mentions returns empty list, processing stops early."""
+        _patches.x_client.get_mentions.return_value = ([], USERS_BY_ID)
+
+        main()
+
+        _patches.drafter.draft_with_lineage.assert_not_called()
+        _patches.db.set_last_mention_id.assert_not_called()
+        _patches.update_monitoring.assert_called_with("poll-replies")
+
+    def test_bridge_closed_on_early_exit_no_mentions(self, _patches):
+        """When exiting early due to no mentions, bridge is still closed."""
+        _patches.config.cultivate = SimpleNamespace(
+            enabled=True, db_path="~/.cultivate/cultivate.db",
+            forward_mentions=False, enrich_replies=False,
+            proactive_review=False, reply_quality_threshold=6.0
+        )
+
+        mock_bridge = MagicMock()
+        _patches.x_client.get_mentions.return_value = ([], USERS_BY_ID)
+
+        with patch("engagement.cultivate_bridge.CultivateBridge") as MockBridge:
+            MockBridge.try_connect.return_value = mock_bridge
+            main()
+
+        mock_bridge.close.assert_called_once()
+
+    def test_bridge_closed_on_early_exit_cap_reached(self, _patches):
+        """When exiting early due to cap, bridge is closed."""
+        _patches.config.cultivate = SimpleNamespace(
+            enabled=True, db_path="~/.cultivate/cultivate.db",
+            forward_mentions=False, enrich_replies=False,
+            proactive_review=False, reply_quality_threshold=6.0
+        )
+        _patches.db.count_replies_today.return_value = 10
+        _patches.config.replies.max_daily_replies = 10
+
+        mock_bridge = MagicMock()
+
+        with patch("engagement.cultivate_bridge.CultivateBridge") as MockBridge:
+            MockBridge.try_connect.return_value = mock_bridge
+            main()
+
+        mock_bridge.close.assert_called_once()
+
+    def test_bridge_closed_on_mention_fetch_error(self, _patches):
+        """When get_mentions raises, bridge is still closed."""
+        _patches.config.cultivate = SimpleNamespace(
+            enabled=True, db_path="~/.cultivate/cultivate.db",
+            forward_mentions=False, enrich_replies=False,
+            proactive_review=False, reply_quality_threshold=6.0
+        )
+        _patches.x_client.get_mentions.side_effect = Exception("API error")
+
+        mock_bridge = MagicMock()
+
+        with patch("engagement.cultivate_bridge.CultivateBridge") as MockBridge:
+            MockBridge.try_connect.return_value = mock_bridge
+            main()
+
+        mock_bridge.close.assert_called_once()
