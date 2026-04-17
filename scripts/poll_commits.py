@@ -2,6 +2,7 @@
 """Poll for new commits and generate X threads when enough material accumulates."""
 
 import signal
+import sqlite3
 import sys
 import types
 import logging
@@ -27,7 +28,11 @@ from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 from output.bluesky_client import BlueskyClient
-from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
+from knowledge.embeddings import (
+    VoyageEmbeddings,
+    serialize_embedding,
+    EmbeddingError,
+)
 from knowledge.store import KnowledgeStore
 from evaluation.engagement_predictor import EngagementPredictor
 
@@ -330,7 +335,7 @@ def main() -> None:
             try:
                 db.insert_content_knowledge_links(content_id, pipeline_result.knowledge_ids)
                 logger.info(f"  Linked {len(pipeline_result.knowledge_ids)} knowledge items")
-            except Exception as e:
+            except sqlite3.Error as e:
                 logger.warning(f"  Failed to store knowledge links: {e}")
 
         # Store engagement prediction if available
@@ -348,7 +353,7 @@ def main() -> None:
                     prompt_version=detail.get("prompt_version", "v1"),
                 )
                 logger.info(f"  Stored engagement prediction: {detail['predicted_score']:.1f}")
-            except Exception as e:
+            except sqlite3.Error as e:
                 logger.warning(f"Failed to store prediction (non-fatal): {e}")
 
         # Determine outcome and post if passes threshold
@@ -437,7 +442,7 @@ def main() -> None:
                 vectors = embedder.embed_batch([pipeline_result.final_content])
                 if vectors:
                     db.set_content_embedding(content_id, serialize_embedding(vectors[0]))
-            except Exception as e:
+            except (EmbeddingError, sqlite3.Error) as e:
                 logger.warning(f"Embedding failed (non-fatal): {e}")
 
         # Record pipeline run
