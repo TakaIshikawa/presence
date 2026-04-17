@@ -3,6 +3,7 @@
 
 import signal
 import sys
+import types
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,7 @@ WATCHDOG_TIMEOUT = 600  # 10 minutes
 logger = logging.getLogger(__name__)
 
 
-def _timeout_handler(signum, frame):
+def _timeout_handler(signum: int, frame: types.FrameType | None) -> None:
     logger.error("WATCHDOG: Poll process exceeded 10-minute timeout, exiting")
     sys.exit(1)
 
@@ -20,6 +21,7 @@ def _timeout_handler(signum, frame):
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
+from storage.db import Database
 from ingestion.github_commits import GitHubClient
 from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
@@ -57,12 +59,12 @@ def is_daily_cap_reached(posts_today: int, max_daily: int) -> bool:
     return posts_today >= max_daily
 
 
-def get_retryable_content(db, min_score: float, content_type: str = "x_thread") -> list[dict]:
+def get_retryable_content(db: Database, min_score: float, content_type: str = "x_thread") -> list[dict]:
     """Return unpublished content eligible for retry (retry_count < MAX_RETRIES)."""
     return db.get_unpublished_content(content_type, min_score)
 
 
-def main():
+def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     signal.signal(signal.SIGALRM, _timeout_handler)
