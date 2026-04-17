@@ -1,10 +1,13 @@
 """Parse Claude Code conversation logs."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,52 +39,60 @@ class ClaudeLogParser:
         if not self.history_file.exists():
             return
 
-        with open(self.history_file, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                    # Global history has: display, timestamp, project, sessionId
-                    if "display" in entry and entry.get("display"):
-                        yield ClaudeMessage(
-                            session_id=entry.get("sessionId", "unknown"),
-                            message_uuid=f"{entry.get('sessionId', 'unknown')}_{entry.get('timestamp', 0)}",
-                            project_path=entry.get("project", ""),
-                            timestamp=datetime.fromtimestamp(entry["timestamp"] / 1000, tz=timezone.utc),
-                            prompt_text=entry["display"]
-                        )
-                except json.JSONDecodeError:
-                    continue
+        try:
+            with open(self.history_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        # Global history has: display, timestamp, project, sessionId
+                        if "display" in entry and entry.get("display"):
+                            yield ClaudeMessage(
+                                session_id=entry.get("sessionId", "unknown"),
+                                message_uuid=f"{entry.get('sessionId', 'unknown')}_{entry.get('timestamp', 0)}",
+                                project_path=entry.get("project", ""),
+                                timestamp=datetime.fromtimestamp(entry["timestamp"] / 1000, tz=timezone.utc),
+                                prompt_text=entry["display"]
+                            )
+                    except json.JSONDecodeError:
+                        continue
+        except OSError as e:
+            logger.warning(f"Could not read history file {self.history_file}: {e}")
+            return
 
     def parse_session_file(self, session_path: Path) -> Iterator[ClaudeMessage]:
         """Parse a specific session JSONL file for full conversation details."""
         if not session_path.exists():
             return
 
-        with open(session_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                    # Session files have: type, message, uuid, timestamp, sessionId, cwd
-                    if entry.get("type") == "user" and "message" in entry:
-                        content = entry["message"].get("content", "")
-                        if isinstance(content, str) and content:
-                            yield ClaudeMessage(
-                                session_id=entry.get("sessionId", "unknown"),
-                                message_uuid=entry.get("uuid", "unknown"),
-                                project_path=entry.get("cwd", ""),
-                                timestamp=datetime.fromisoformat(
-                                    entry["timestamp"].replace("Z", "+00:00")
-                                ),
-                                prompt_text=content
-                            )
-                except (json.JSONDecodeError, KeyError, ValueError):
-                    continue
+        try:
+            with open(session_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        # Session files have: type, message, uuid, timestamp, sessionId, cwd
+                        if entry.get("type") == "user" and "message" in entry:
+                            content = entry["message"].get("content", "")
+                            if isinstance(content, str) and content:
+                                yield ClaudeMessage(
+                                    session_id=entry.get("sessionId", "unknown"),
+                                    message_uuid=entry.get("uuid", "unknown"),
+                                    project_path=entry.get("cwd", ""),
+                                    timestamp=datetime.fromisoformat(
+                                        entry["timestamp"].replace("Z", "+00:00")
+                                    ),
+                                    prompt_text=content
+                                )
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        continue
+        except OSError as e:
+            logger.warning(f"Could not read session file {session_path}: {e}")
+            return
 
     def get_messages_since(self, since: datetime) -> Iterator[ClaudeMessage]:
         """Get all user messages since a given timestamp."""
