@@ -1,9 +1,12 @@
 """X (Twitter) API client for posting content."""
 
+import logging
 import re
 import tweepy
 from typing import Optional
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,13 +40,123 @@ class XClient:
             self._username = me.data.username
         return self._username
 
+    def get_profile_metrics(self) -> dict | None:
+        """Fetch authenticated user's public metrics (follower/following counts)."""
+        try:
+            me = self.client.get_me(user_fields=["public_metrics"])
+            if me and me.data:
+                pm = me.data.public_metrics
+                return {
+                    "follower_count": pm["followers_count"],
+                    "following_count": pm["following_count"],
+                    "tweet_count": pm["tweet_count"],
+                    "listed_count": pm["listed_count"],
+                }
+        except Exception as e:
+            logger.warning(f"Failed to fetch profile metrics: {e}")
+        return None
+
+    def search_tweets(self, query: str, max_results: int = 10) -> list[dict]:
+        """Search recent tweets via X API v2.
+
+        Returns list of dicts with keys: id, text, created_at,
+        public_metrics, reply_settings, author_id, author_username.
+        Empty list on error.
+        """
+        try:
+            max_results = max(10, min(max_results, 100))
+            response = self.client.search_recent_tweets(
+                query=query,
+                max_results=max_results,
+                tweet_fields=[
+                    "created_at", "public_metrics", "reply_settings",
+                    "author_id", "conversation_id",
+                ],
+                expansions=["author_id"],
+                user_auth=True,
+            )
+            if not response.data:
+                return []
+
+            # Build author lookup from expansions
+            users_by_id = {}
+            if response.includes and "users" in response.includes:
+                for user in response.includes["users"]:
+                    users_by_id[str(user.id)] = user.username
+
+            return [
+                {
+                    "id": str(t.id),
+                    "text": t.text or "",
+                    "created_at": (
+                        t.created_at.isoformat() if t.created_at else ""
+                    ),
+                    "public_metrics": getattr(t, "public_metrics", {}) or {},
+                    "reply_settings": getattr(t, "reply_settings", "everyone"),
+                    "author_id": str(t.author_id) if t.author_id else "",
+                    "author_username": users_by_id.get(
+                        str(t.author_id), ""
+                    ),
+                }
+                for t in response.data
+            ]
+        except tweepy.TweepyException as e:
+            logger.warning(f"Search failed: {e}")
+            return []
+
+    def get_following(self, max_results: int = 200) -> list[dict]:
+        """Fetch the list of accounts the authenticated user follows.
+
+        Returns list of dicts with keys: id, username, name.
+        """
+        try:
+            me = self.client.get_me(user_auth=True)
+            if not me or not me.data:
+                return []
+            my_id = me.data.id
+
+            results = []
+            pagination_token = None
+
+            while len(results) < max_results:
+                kwargs = {
+                    "id": my_id,
+                    "max_results": min(max_results - len(results), 1000),
+                    "user_auth": True,
+                }
+                if pagination_token:
+                    kwargs["pagination_token"] = pagination_token
+
+                response = self.client.get_users_following(**kwargs)
+                if not response.data:
+                    break
+
+                for user in response.data:
+                    results.append({
+                        "id": str(user.id),
+                        "username": user.username,
+                        "name": user.name or user.username,
+                    })
+
+                pagination_token = (
+                    response.meta.get("next_token")
+                    if response.meta else None
+                )
+                if not pagination_token:
+                    break
+
+            return results[:max_results]
+        except tweepy.TweepyException as e:
+            logger.warning(f"Failed to fetch following list: {e}")
+            return []
+
     def get_user_id(self, username: str) -> Optional[str]:
         """Resolve a username to a user ID.
 
         Returns None if user not found or API error.
         """
         try:
-            user = self.client.get_user(username=username)
+            user = self.client.get_user(username=username, user_auth=True)
             if user.data:
                 return str(user.data.id)
             return None

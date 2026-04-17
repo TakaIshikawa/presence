@@ -20,10 +20,29 @@ def script_context() -> Generator[tuple[Config, Database], None, None]:
     db = Database(config.paths.database)
     db.connect()
     db.init_schema(SCHEMA_PATH)
+    _sync_curated_sources(config, db)
     try:
         yield config, db
     finally:
         db.close()
+
+
+def _sync_curated_sources(config: Config, db: Database) -> None:
+    """Sync config-driven curated sources into the DB (idempotent)."""
+    if not config.curated_sources:
+        return
+    if config.curated_sources.x_accounts:
+        db.sync_config_sources(
+            [{"identifier": a.identifier, "name": a.name, "license": a.license}
+             for a in config.curated_sources.x_accounts],
+            "x_account",
+        )
+    if config.curated_sources.blogs:
+        db.sync_config_sources(
+            [{"identifier": b.identifier, "name": b.name, "license": b.license}
+             for b in config.curated_sources.blogs],
+            "blog",
+        )
 
 
 def update_monitoring(operation: str) -> None:

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from engagement.reply_drafter import ReplyDrafter, SYSTEM_PROMPT
+from engagement.reply_drafter import ReplyDrafter, SYSTEM_PROMPT, PROACTIVE_SYSTEM_PROMPT
 
 
 # --- SYSTEM_PROMPT content ---
@@ -264,3 +264,96 @@ class TestContextSection:
 
             prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
             assert "Relationship Context" not in prompt
+
+
+# --- Proactive system prompt ---
+
+
+class TestProactiveSystemPrompt:
+    def test_emphasizes_value(self):
+        assert "genuine value" in PROACTIVE_SYSTEM_PROMPT.lower()
+
+    def test_prohibits_self_promotion(self):
+        assert "plug" in PROACTIVE_SYSTEM_PROMPT.lower()
+
+    def test_prohibits_sycophancy(self):
+        assert "sycophantic" in PROACTIVE_SYSTEM_PROMPT.lower()
+
+    def test_character_limit(self):
+        assert "280 characters" in PROACTIVE_SYSTEM_PROMPT
+
+
+# --- draft_proactive() ---
+
+
+class TestDraftProactive:
+    @pytest.fixture
+    def drafter(self):
+        with patch("engagement.reply_drafter.anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            d = ReplyDrafter(api_key="sk-test", model="claude-sonnet-4-5-20250929")
+            d._mock_client = mock_client
+            yield d
+
+    def _set_reply(self, drafter, text):
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=text)]
+        drafter._mock_client.messages.create.return_value = mock_response
+
+    def test_returns_reply_draft(self, drafter):
+        self._set_reply(drafter, "That's a good observation")
+        result = drafter.draft_proactive(
+            their_tweet="AI agents are changing dev workflows",
+            their_handle="karpathy",
+            self_handle="taka_dev",
+        )
+        assert result.reply_text == "That's a good observation"
+        assert isinstance(result.knowledge_ids, list)
+
+    def test_uses_proactive_system_prompt(self, drafter):
+        self._set_reply(drafter, "Interesting")
+        drafter.draft_proactive("tweet", "them", "me")
+
+        call_kwargs = drafter._mock_client.messages.create.call_args[1]
+        assert call_kwargs["system"] == PROACTIVE_SYSTEM_PROMPT
+
+    def test_prompt_includes_their_tweet(self, drafter):
+        self._set_reply(drafter, "Interesting")
+        drafter.draft_proactive(
+            "Building agents with tool use is underrated",
+            "karpathy",
+            "me",
+        )
+        prompt = drafter._mock_client.messages.create.call_args[1]["messages"][0]["content"]
+        assert "Building agents with tool use is underrated" in prompt
+
+    def test_prompt_no_our_post_reference(self, drafter):
+        self._set_reply(drafter, "Interesting")
+        drafter.draft_proactive("their tweet", "them", "me")
+        prompt = drafter._mock_client.messages.create.call_args[1]["messages"][0]["content"]
+        assert "My original post" not in prompt
+
+    def test_uses_knowledge_store(self, drafter):
+        mock_ks = MagicMock()
+        mock_item = MagicMock()
+        mock_item.id = 42
+        mock_item.insight = "Testing is undervalued"
+        mock_ks.search_similar.return_value = [(mock_item, 0.8)]
+        drafter.knowledge_store = mock_ks
+
+        self._set_reply(drafter, "Good point")
+        result = drafter.draft_proactive("tweet about testing", "them", "me")
+
+        mock_ks.search_similar.assert_called_once()
+        call_kwargs = mock_ks.search_similar.call_args
+        assert call_kwargs[0][0] == "tweet about testing"
+        assert result.knowledge_ids == [(42, 0.8)]
+
+    def test_includes_person_context(self, drafter):
+        self._set_reply(drafter, "Good insight")
+        ctx = _make_person_context()
+        drafter.draft_proactive("their tweet", "dev_jane", "me", person_context=ctx)
+
+        prompt = drafter._mock_client.messages.create.call_args[1]["messages"][0]["content"]
+        assert "Relationship Context for @dev_jane" in prompt

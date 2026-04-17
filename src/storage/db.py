@@ -103,6 +103,20 @@ class Database:
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # Migrate curated_sources for account discovery
+            cs_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(curated_sources)")}
+            if cs_cols:
+                if "status" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN status TEXT DEFAULT 'active'")
+                if "discovery_source" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN discovery_source TEXT")
+                if "relevance_score" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN relevance_score REAL")
+                if "sample_count" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN sample_count INTEGER DEFAULT 0")
+                if "reviewed_at" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN reviewed_at TEXT")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_curated_sources_status ON curated_sources(status)")
             # Migrate: create bluesky_engagement table if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS bluesky_engagement (
@@ -418,6 +432,274 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def insert_profile_metrics(
+        self,
+        platform: str,
+        follower_count: int,
+        following_count: int,
+        tweet_count: int,
+        listed_count: int = None,
+    ) -> int:
+        """Insert a profile metrics snapshot."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO profile_metrics
+               (platform, follower_count, following_count, tweet_count,
+                listed_count, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (platform, follower_count, following_count, tweet_count,
+             listed_count, now),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_latest_profile_metrics(self, platform: str = "x") -> dict | None:
+        """Get the most recent profile metrics snapshot."""
+        cursor = self.conn.execute(
+            """SELECT follower_count, following_count, tweet_count,
+                      listed_count, fetched_at
+               FROM profile_metrics
+               WHERE platform = ?
+               ORDER BY fetched_at DESC
+               LIMIT 1""",
+            (platform,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "follower_count": row[0],
+            "following_count": row[1],
+            "tweet_count": row[2],
+            "listed_count": row[3],
+            "fetched_at": row[4],
+        }
+
+    # Proactive actions
+    def insert_proactive_action(
+        self,
+        action_type: str,
+        target_tweet_id: str,
+        target_tweet_text: str,
+        target_author_handle: str,
+        target_author_id: Optional[str] = None,
+        discovery_source: Optional[str] = None,
+        relevance_score: Optional[float] = None,
+        draft_text: Optional[str] = None,
+        relationship_context: Optional[str] = None,
+        knowledge_ids: Optional[str] = None,
+    ) -> int:
+        """Insert a proactive engagement action (reply/like/quote opportunity)."""
+        try:
+            cursor = self.conn.execute(
+                """INSERT INTO proactive_actions
+                   (action_type, target_tweet_id, target_tweet_text,
+                    target_author_handle, target_author_id, discovery_source,
+                    relevance_score, draft_text, relationship_context, knowledge_ids)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (action_type, target_tweet_id, target_tweet_text,
+                 target_author_handle, target_author_id, discovery_source,
+                 relevance_score, draft_text, relationship_context, knowledge_ids),
+            )
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError as e:
+            raise IntegrityError(str(e)) from e
+
+    def get_pending_proactive_actions(self, limit: int = 20) -> list[dict]:
+        """Get pending proactive actions awaiting review."""
+        cursor = self.conn.execute(
+            """SELECT * FROM proactive_actions
+               WHERE status = 'pending'
+               ORDER BY relevance_score DESC, created_at ASC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_proactive_posted(self, action_id: int, posted_tweet_id: str) -> None:
+        """Mark a proactive action as posted."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE proactive_actions
+               SET status = 'posted', posted_tweet_id = ?, posted_at = ?, reviewed_at = ?
+               WHERE id = ?""",
+            (posted_tweet_id, now, now, action_id),
+        )
+        self.conn.commit()
+
+    def dismiss_proactive_action(self, action_id: int) -> None:
+        """Dismiss a proactive action."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE proactive_actions
+               SET status = 'dismissed', reviewed_at = ?
+               WHERE id = ?""",
+            (now, action_id),
+        )
+        self.conn.commit()
+
+    def count_daily_proactive_posts(self, action_type: str = "reply") -> int:
+        """Count proactive actions posted today (UTC)."""
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) FROM proactive_actions
+               WHERE action_type = ? AND status = 'posted'
+                 AND posted_at >= datetime('now', 'start of day')""",
+            (action_type,),
+        )
+        return cursor.fetchone()[0]
+
+    def count_weekly_replies_to_author(self, handle: str) -> int:
+        """Count proactive replies posted to a specific author this week."""
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) FROM proactive_actions
+               WHERE target_author_handle = ? AND action_type = 'reply'
+                 AND status = 'posted'
+                 AND posted_at >= datetime('now', '-7 days')""",
+            (handle,),
+        )
+        return cursor.fetchone()[0]
+
+    def proactive_action_exists(self, tweet_id: str, action_type: str) -> bool:
+        """Check if a proactive action already exists for this tweet+type."""
+        cursor = self.conn.execute(
+            """SELECT 1 FROM proactive_actions
+               WHERE target_tweet_id = ? AND action_type = ?""",
+            (tweet_id, action_type),
+        )
+        return cursor.fetchone() is not None
+
+    # Curated sources (account discovery)
+    def sync_config_sources(
+        self, sources: list[dict], source_type: str
+    ) -> int:
+        """Upsert config-driven sources into curated_sources table.
+
+        Args:
+            sources: List of dicts with 'identifier', 'name', 'license' keys
+            source_type: e.g. 'x_account', 'blog'
+
+        Returns:
+            Number of sources synced
+        """
+        for src in sources:
+            self.conn.execute(
+                """INSERT INTO curated_sources
+                   (source_type, identifier, name, license, status, discovery_source)
+                   VALUES (?, ?, ?, ?, 'active', 'config')
+                   ON CONFLICT(source_type, identifier) DO UPDATE SET
+                   name = excluded.name,
+                   license = excluded.license""",
+                (source_type, src["identifier"], src.get("name", ""),
+                 src.get("license", "attribution_required")),
+            )
+        self.conn.commit()
+        return len(sources)
+
+    def get_active_curated_sources(self, source_type: str) -> list[dict]:
+        """Get curated sources with status='active'."""
+        cursor = self.conn.execute(
+            """SELECT * FROM curated_sources
+               WHERE source_type = ? AND status = 'active'
+               ORDER BY created_at ASC""",
+            (source_type,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def insert_candidate_source(
+        self,
+        source_type: str,
+        identifier: str,
+        name: str = "",
+        discovery_source: str = "proactive_mining",
+        relevance_score: float = None,
+        sample_count: int = 0,
+    ) -> int | None:
+        """Insert a discovered candidate source. Returns id or None if duplicate."""
+        try:
+            cursor = self.conn.execute(
+                """INSERT INTO curated_sources
+                   (source_type, identifier, name, status, discovery_source,
+                    relevance_score, sample_count)
+                   VALUES (?, ?, ?, 'candidate', ?, ?, ?)""",
+                (source_type, identifier, name, discovery_source,
+                 relevance_score, sample_count),
+            )
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+    def get_candidate_sources(
+        self, source_type: str, limit: int = 20
+    ) -> list[dict]:
+        """Get candidate sources pending review."""
+        cursor = self.conn.execute(
+            """SELECT * FROM curated_sources
+               WHERE source_type = ? AND status = 'candidate'
+               ORDER BY relevance_score DESC, created_at ASC
+               LIMIT ?""",
+            (source_type, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def approve_candidate(self, source_id: int) -> None:
+        """Approve a candidate source (sets status='active')."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE curated_sources
+               SET status = 'active', reviewed_at = ?
+               WHERE id = ?""",
+            (now, source_id),
+        )
+        self.conn.commit()
+
+    def reject_candidate(self, source_id: int) -> None:
+        """Reject a candidate source."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE curated_sources
+               SET status = 'rejected', reviewed_at = ?
+               WHERE id = ?""",
+            (now, source_id),
+        )
+        self.conn.commit()
+
+    def sync_following_sources(
+        self, accounts: list[dict], source_type: str = "x_account"
+    ) -> int:
+        """Insert followed accounts as active sources, skipping existing entries.
+
+        Unlike sync_config_sources, this does NOT overwrite existing rows —
+        if an account already exists (from config, mining, or prior follow sync),
+        it is left untouched.
+
+        Returns count of newly inserted accounts.
+        """
+        inserted = 0
+        for acc in accounts:
+            try:
+                self.conn.execute(
+                    """INSERT INTO curated_sources
+                       (source_type, identifier, name, status, discovery_source)
+                       VALUES (?, ?, ?, 'active', 'following')""",
+                    (source_type, acc["username"], acc.get("name", acc["username"])),
+                )
+                inserted += 1
+            except sqlite3.IntegrityError:
+                pass  # Already exists — skip
+        self.conn.commit()
+        return inserted
+
+    def candidate_exists(self, source_type: str, identifier: str) -> bool:
+        """Check if a source already exists (any status)."""
+        cursor = self.conn.execute(
+            """SELECT 1 FROM curated_sources
+               WHERE source_type = ? AND identifier = ?""",
+            (source_type, identifier),
+        )
+        return cursor.fetchone() is not None
 
     def get_top_performing_posts(
         self,

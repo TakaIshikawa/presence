@@ -12,6 +12,38 @@ if TYPE_CHECKING:
     from knowledge.store import KnowledgeStore, KnowledgeItem
 
 
+PROACTIVE_SYSTEM_PROMPT = """\
+You are helping a developer engage authentically on X (Twitter). \
+You draft proactive replies to interesting tweets by others — \
+joining their conversation with genuine value.
+
+Your replies should:
+- Add genuine value: share a relevant experience, insight, or ask a thoughtful question
+- Be conversational and natural, like a real person typing quickly
+- Match the tone of their tweet (casual if casual, technical if technical)
+- Stay under 280 characters
+- Be calibrated to the relationship stage (see context if provided)
+
+Your replies must NOT:
+- Use hashtags
+- Be sycophantic ("Great point!", "Love this!", "So true!")
+- Sound like a corporate account
+- Use em-dashes for dramatic pivots
+- Start with "I" too often
+- Plug or reference your own posts/projects
+- Simply agree — add something new
+
+Relationship stage guidelines (when context is provided):
+- Observation/Ambient (stage 0-1): Keep it very light. Brief observation or question. \
+No familiarity assumed.
+- Light/Active (stage 2-3): Can reference shared interests. More substance.
+- Relationship/Alliance (stage 4-5): Conversational, can reference shared history.
+
+When past insights are provided, naturally weave your perspective if relevant. \
+Do NOT force-fit insights — only use them if they genuinely connect.
+"""
+
+
 SYSTEM_PROMPT = """\
 You are helping a developer engage authentically on X (Twitter). \
 You draft replies to people who replied to the developer's posts.
@@ -128,6 +160,73 @@ class ReplyDrafter:
         reply_text = response.content[0].text.strip().strip('"')
 
         # Extract knowledge IDs for lineage
+        knowledge_ids = [
+            (item.id, relevance)
+            for item, relevance in knowledge_items
+            if item.id is not None
+        ]
+
+        return ReplyDraft(reply_text=reply_text, knowledge_ids=knowledge_ids)
+
+    def draft_proactive(
+        self,
+        their_tweet: str,
+        their_handle: str,
+        self_handle: str,
+        person_context: Optional["PersonContext"] = None,
+        knowledge_items: Optional[list] = None,
+    ) -> ReplyDraft:
+        """Draft a proactive reply to someone else's tweet.
+
+        Unlike draft_with_lineage(), there is no "our post" — we're jumping
+        into their conversation with relevant knowledge from our own experience.
+
+        Args:
+            knowledge_items: Pre-fetched list of (KnowledgeItem, similarity)
+                tuples. If provided, skips the knowledge_store.search_similar()
+                call (avoids extra embedding API calls).
+        """
+        context_section = ""
+        if person_context and person_context.is_known:
+            context_section = self._build_context_section(person_context)
+
+        # Use pre-fetched knowledge or retrieve from store
+        if knowledge_items is None:
+            knowledge_items = []
+            if self.knowledge_store is not None:
+                knowledge_items = self.knowledge_store.search_similar(
+                    their_tweet,
+                    source_types=["own_post", "own_conversation", "curated_x"],
+                    limit=3,
+                    min_similarity=0.40,
+                )
+
+        knowledge_section = ""
+        if knowledge_items:
+            knowledge_section = self._build_knowledge_section(knowledge_items)
+
+        prompt = (
+            f"I am @{self_handle}. I want to reply to this tweet.\n\n"
+            f"@{their_handle}'s tweet: \"{their_tweet}\"\n\n"
+        )
+        if context_section:
+            prompt += f"{context_section}\n\n"
+        if knowledge_section:
+            prompt += f"{knowledge_section}\n\n"
+        prompt += (
+            "Draft a reply that adds genuine value to their conversation. "
+            "Respond with ONLY the reply text, nothing else."
+        )
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=150,
+            system=PROACTIVE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        reply_text = response.content[0].text.strip().strip('"')
+
         knowledge_ids = [
             (item.id, relevance)
             for item, relevance in knowledge_items

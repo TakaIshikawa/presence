@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from runner import script_context
 from evaluation.engagement_scorer import compute_engagement_score
 from output.bluesky_client import BlueskyClient
+from output.x_client import XClient
 
 # Max tweets to fetch per batch (X API limit for GET /2/tweets)
 BATCH_SIZE = 100
@@ -182,6 +183,22 @@ def main():
         if classified["resonated"] or classified["low_resonance"]:
             logger.info(f"\nAuto-classified: {classified['resonated']} resonated, "
                         f"{classified['low_resonance']} low_resonance")
+
+        # Fetch profile metrics (piggyback on engagement job)
+        try:
+            x_client = XClient(
+                config.x.api_key,
+                config.x.api_secret,
+                config.x.access_token,
+                config.x.access_token_secret,
+            )
+            metrics = x_client.get_profile_metrics()
+            if metrics:
+                db.insert_profile_metrics("x", **metrics)
+                logger.info(f"Profile: {metrics['follower_count']} followers, "
+                            f"{metrics['following_count']} following")
+        except Exception as e:
+            logger.warning(f"Profile metrics fetch failed (non-fatal): {e}")
 
         logger.info(f"\nDone. Fetched X metrics for {fetched} posts, Bluesky metrics for {bluesky_fetched} posts.")
 

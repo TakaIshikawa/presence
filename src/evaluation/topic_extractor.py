@@ -84,8 +84,8 @@ class TopicExtractor:
             raise TopicExtractionAPIError(
                 f"Anthropic API call failed: {error_name}: {e}"
             ) from e
-        except Exception as e:
-            # Catch-all for unexpected errors
+        except (IndexError, AttributeError, TypeError, ValueError) as e:
+            # Handle response structure/parsing errors - empty content, missing attributes, type issues, value errors
             error_name = type(e).__name__
             logger.error(f"Topic extraction failed: {error_name}: {e}")
             raise TopicExtractionAPIError(

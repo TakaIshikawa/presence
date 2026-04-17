@@ -40,6 +40,7 @@ def _make_config(historical_enabled=False):
     config.x.access_token = "xt"
     config.x.access_token_secret = "xts"
     config.embeddings = None
+    config.bluesky = None
     if historical_enabled:
         config.historical.enabled = True
         config.historical.injection_frequency = 3
@@ -74,7 +75,7 @@ def _make_comparison(best_score=8.0, reject_reason=None):
     )
 
 
-def _make_pipeline_result(final_score=8.0, reject_reason=None):
+def _make_pipeline_result(final_score=8.0, reject_reason=None, content_format=None):
     comparison = _make_comparison(best_score=final_score, reject_reason=reject_reason)
     return PipelineResult(
         batch_id="abcd1234",
@@ -85,6 +86,7 @@ def _make_pipeline_result(final_score=8.0, reject_reason=None):
         final_score=final_score,
         source_prompts=["prompt1"],
         source_commits=["commit msg"],
+        content_format=content_format,
     )
 
 
@@ -291,3 +293,60 @@ class TestHistoricalContextInjection:
             historical = [c for c in commits_passed if c.get("historical")]
             assert len(historical) == 1
             assert historical[0]["sha"] == "old123"
+
+
+class TestContentFormatPersistence:
+    @_daily_patches
+    def test_content_format_forwarded_to_db(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockXClient, mock_parse_thread, mock_monitoring,
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
+
+        result = _make_pipeline_result(final_score=8.0, content_format="bold_claim")
+        MockPipeline.return_value.run.return_value = result
+
+        mock_parse_thread.return_value = ["tweet1"]
+        MockXClient.return_value.post_thread.return_value = MagicMock(
+            success=True, url="https://x.com/thread/1", tweet_id="tw1"
+        )
+
+        import daily_digest
+        daily_digest.main()
+
+        db.insert_generated_content.assert_called_once()
+        kwargs = db.insert_generated_content.call_args.kwargs
+        assert kwargs["content_format"] == "bold_claim"
+
+    @_daily_patches
+    def test_content_format_none_forwarded(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockXClient, mock_parse_thread, mock_monitoring,
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
+
+        result = _make_pipeline_result(final_score=8.0, content_format=None)
+        MockPipeline.return_value.run.return_value = result
+
+        mock_parse_thread.return_value = ["tweet1"]
+        MockXClient.return_value.post_thread.return_value = MagicMock(
+            success=True, url="https://x.com/thread/1", tweet_id="tw1"
+        )
+
+        import daily_digest
+        daily_digest.main()
+
+        kwargs = db.insert_generated_content.call_args.kwargs
+        assert kwargs["content_format"] is None

@@ -2,7 +2,7 @@
 
 import pytest
 
-from synthesis.few_shot import FewShotSelector, FewShotExample
+from synthesis.few_shot import AGENT_PATTERN, FewShotSelector, FewShotExample
 from synthesis.pipeline import SynthesisPipeline
 from synthesis.stale_patterns import has_stale_pattern, STALE_PATTERNS
 
@@ -1080,3 +1080,108 @@ class TestEdgeCases:
 
         assert len(examples) == 1
         assert examples[0].engagement_score == 8.0
+
+
+# --- Topic quota diversification ---
+
+
+class TestTopicQuota:
+    """Verify agent/non-agent quota selection prevents topic overfitting."""
+
+    def test_caps_agent_examples_when_non_agent_available(self, db):
+        """5 agent + 1 non-agent, limit=3 -> 2 agent + 1 non-agent."""
+        # Highest engagement first so ordering is testable
+        agents = [
+            ("Agent debugging is its own skill", 10.0),
+            ("Agent memory tradeoffs are underrated", 9.0),
+            ("Agent orchestration patterns", 8.0),
+            ("Agent retry loops fail interestingly", 7.0),
+            ("Agent context windows cap iteration", 6.0),
+        ]
+        for i, (content, score) in enumerate(agents, start=1):
+            pid = _insert_published_post(db, content, post_id=i)
+            _insert_engagement(db, pid, engagement_score=score)
+
+        pid_other = _insert_published_post(
+            db, "Refactored the retry queue to use backoff", post_id=100
+        )
+        _insert_engagement(db, pid_other, engagement_score=3.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=3)
+
+        assert len(examples) == 3
+        agent_matches = [e for e in examples if AGENT_PATTERN.search(e.content)]
+        other_matches = [e for e in examples if not AGENT_PATTERN.search(e.content)]
+        assert len(agent_matches) == 2
+        assert len(other_matches) == 1
+        # The two agent posts selected should be the highest-engagement ones
+        assert examples[0].content == "Agent debugging is its own skill"
+        assert examples[1].content == "Agent memory tradeoffs are underrated"
+        assert examples[2].content == "Refactored the retry queue to use backoff"
+
+    def test_falls_back_when_no_non_agent_posts(self, db):
+        """5 agent + 0 non-agent, limit=3 -> 3 agent (backfill preserves behavior)."""
+        contents = [
+            ("Agent debugging is its own skill", 10.0),
+            ("Agent memory tradeoffs are underrated", 9.0),
+            ("Agent orchestration patterns", 8.0),
+            ("Agent retry loops fail interestingly", 7.0),
+            ("Agent context windows cap iteration", 6.0),
+        ]
+        for i, (content, score) in enumerate(contents, start=1):
+            pid = _insert_published_post(db, content, post_id=i)
+            _insert_engagement(db, pid, engagement_score=score)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=3)
+
+        assert len(examples) == 3
+        # All three should be agent posts, ordered by engagement
+        assert [e.content for e in examples] == [
+            "Agent debugging is its own skill",
+            "Agent memory tradeoffs are underrated",
+            "Agent orchestration patterns",
+        ]
+
+    def test_respects_engagement_order_within_buckets(self, db):
+        """Each topic bucket keeps its original engagement ranking."""
+        # Insert out of engagement order to confirm sorting relies on DB output
+        pid_a3 = _insert_published_post(db, "Agent C-tier post", post_id=1)
+        _insert_engagement(db, pid_a3, engagement_score=4.0)
+        pid_a1 = _insert_published_post(db, "Agent A-tier post", post_id=2)
+        _insert_engagement(db, pid_a1, engagement_score=12.0)
+        pid_a2 = _insert_published_post(db, "Agent B-tier post", post_id=3)
+        _insert_engagement(db, pid_a2, engagement_score=8.0)
+
+        pid_o2 = _insert_published_post(db, "Refactor notes on indexing", post_id=4)
+        _insert_engagement(db, pid_o2, engagement_score=3.0)
+        pid_o1 = _insert_published_post(db, "Observability during incidents", post_id=5)
+        _insert_engagement(db, pid_o1, engagement_score=9.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=3)
+
+        assert [e.content for e in examples] == [
+            "Agent A-tier post",
+            "Agent B-tier post",
+            "Observability during incidents",
+        ]
+
+    def test_max_per_topic_zero_excludes_agents_when_others_exist(self, db):
+        """max_per_topic=0 with non-agent posts available -> no agent examples."""
+        pid_agent = _insert_published_post(db, "Agent tooling today", post_id=1)
+        _insert_engagement(db, pid_agent, engagement_score=10.0)
+
+        pid_other1 = _insert_published_post(db, "Indexing tradeoffs", post_id=2)
+        _insert_engagement(db, pid_other1, engagement_score=6.0)
+        pid_other2 = _insert_published_post(db, "Retry queue redesign", post_id=3)
+        _insert_engagement(db, pid_other2, engagement_score=4.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=2, max_per_topic=0)
+
+        # All examples are non-agent (agent pool capped to 0, backfill only
+        # kicks in when quota leaves the total short).
+        assert len(examples) == 2
+        assert all(not AGENT_PATTERN.search(e.content) for e in examples)

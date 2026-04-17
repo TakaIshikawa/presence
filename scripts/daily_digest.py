@@ -141,6 +141,7 @@ def main():
             content=result.final_content,
             eval_score=result.final_score,
             eval_feedback=result.comparison.best_feedback,
+            content_format=result.content_format,
         )
 
         # Store knowledge lineage
