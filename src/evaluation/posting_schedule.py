@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from storage.db import Database
+
 
 @dataclass
 class TimeWindow:
@@ -18,7 +20,7 @@ class TimeWindow:
 class PostingScheduleAnalyzer:
     """Analyzes engagement patterns by time-of-day and day-of-week."""
 
-    def __init__(self, db, min_samples: int = 3):
+    def __init__(self, db: Database, min_samples: int = 3) -> None:
         """Initialize analyzer.
 
         Args:
