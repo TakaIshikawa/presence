@@ -1,7 +1,9 @@
 """Tests for pipeline analytics module."""
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -503,6 +505,67 @@ class TestPipelineAnalytics:
         # Should only get the recent run
         assert len(runs) == 1
         assert runs[0]["batch_id"] == "batch-recent"
+
+    def test_health_report_logs_malformed_json(self, db):
+        """Test that logger.debug is called when malformed JSON is encountered in health_report."""
+        now = datetime.now(timezone.utc)
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated,
+                best_candidate_index, best_score_before_refine,
+                final_score, published, outcome, filter_stats, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "batch-1", "x_thread", 3, 0, 7.5, 7.5, 1, "published",
+                "not valid json",
+                now.isoformat()
+            )
+        )
+        db.conn.commit()
+
+        analytics = PipelineAnalytics(db)
+
+        with patch('evaluation.pipeline_analytics.logger') as mock_logger:
+            report = analytics.health_report(content_type="x_thread", days=30)
+
+            # Should call logger.debug with the error message
+            mock_logger.debug.assert_called_once()
+            call_args = mock_logger.debug.call_args[0][0]
+            assert "Skipping malformed filter_stats JSON in pipeline run" in call_args
+
+        # Should still return a valid report
+        assert report is not None
+        assert report.filter_breakdown == {}
+
+    def test_filter_effectiveness_logs_malformed_json(self, db):
+        """Test that logger.debug is called when malformed JSON is encountered in filter_effectiveness."""
+        now = datetime.now(timezone.utc)
+        db.conn.execute(
+            """INSERT INTO pipeline_runs
+               (batch_id, content_type, candidates_generated,
+                best_candidate_index, best_score_before_refine,
+                final_score, published, outcome, filter_stats, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "batch-1", "x_thread", 3, 0, 7.5, 7.5, 1, "published",
+                "invalid json here",
+                now.isoformat()
+            )
+        )
+        db.conn.commit()
+
+        analytics = PipelineAnalytics(db)
+
+        with patch('evaluation.pipeline_analytics.logger') as mock_logger:
+            effectiveness = analytics.filter_effectiveness(days=30)
+
+            # Should call logger.debug with the error message
+            mock_logger.debug.assert_called_once()
+            call_args = mock_logger.debug.call_args[0][0]
+            assert "Skipping malformed filter_stats row" in call_args
+
+        # Should still return an empty dict
+        assert effectiveness == {}
 
 
 class TestCrossPlatformComparison:
