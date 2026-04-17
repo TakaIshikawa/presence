@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import anthropic
+from anthropic import APIError, APIConnectionError, RateLimitError, AuthenticationError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -55,11 +56,24 @@ class PatternAnalyzer:
 
         prompt = self._build_prompt(resonated, low_resonance)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except APIConnectionError as e:
+            logger.warning(f"Failed to connect to Anthropic API: {e}")
+            return None
+        except RateLimitError as e:
+            logger.warning(f"Anthropic API rate limit exceeded: {e}")
+            return None
+        except AuthenticationError as e:
+            logger.warning(f"Anthropic API authentication failed: {e}")
+            return None
+        except APIError as e:
+            logger.warning(f"Anthropic API error: {e}")
+            return None
 
         analysis = self._parse_response(response.content[0].text)
 
