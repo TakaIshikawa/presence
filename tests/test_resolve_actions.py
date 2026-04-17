@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import tweepy
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -415,8 +416,10 @@ class TestResolveActions:
     def test_skips_already_resolved(self, bridge):
         mock_x = MagicMock()
         mock_x.get_user_tweets.return_value = _make_tweets(1)
+        mock_drafter = MagicMock()
+        mock_drafter.draft.return_value = "Draft text"
 
-        stats = resolve_actions(bridge, mock_x, MagicMock(), "myhandle")
+        stats = resolve_actions(bridge, mock_x, mock_drafter, "myhandle")
 
         assert stats["skipped"] == 1
 
@@ -468,14 +471,16 @@ class TestResolveActions:
         bridge = CultivateBridge(cultivate_db)
         mock_x = MagicMock()
         mock_x.get_user_tweets.return_value = _make_tweets(1)
+        mock_drafter = MagicMock()
+        mock_drafter.draft.return_value = "Draft text"
 
-        stats = resolve_actions(bridge, mock_x, MagicMock(), "myhandle")
+        stats = resolve_actions(bridge, mock_x, mock_drafter, "myhandle")
 
         assert stats["errors"] >= 1
 
     def test_handles_tweet_fetch_failure(self, bridge):
         mock_x = MagicMock()
-        mock_x.get_user_tweets.side_effect = Exception("API error")
+        mock_x.get_user_tweets.side_effect = tweepy.TweepyException("API error")
 
         stats = resolve_actions(bridge, mock_x, MagicMock(), "myhandle")
 
@@ -504,8 +509,10 @@ class TestResolveActions:
 
         mock_x = MagicMock()
         mock_x.get_user_tweets.return_value = _make_tweets(1)
+        mock_drafter = MagicMock()
+        mock_drafter.draft.return_value = "Draft text"
 
-        stats = resolve_actions(bridge, mock_x, MagicMock(), "myhandle")
+        stats = resolve_actions(bridge, mock_x, mock_drafter, "myhandle")
 
         assert stats["errors"] >= 1
 
