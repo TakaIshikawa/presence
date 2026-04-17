@@ -6,12 +6,15 @@ score-engagement correlation.
 """
 
 import json
+import logging
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
 from storage.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -105,7 +108,8 @@ class PipelineAnalytics:
                     for key, value in stats.items():
                         if isinstance(value, (int, float)) and value > 0:
                             filter_breakdown[key] = filter_breakdown.get(key, 0) + int(value)
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug(f"Skipping malformed filter_stats JSON in pipeline run: {e}")
                     continue
 
         # Calculate score distribution
@@ -240,7 +244,8 @@ class PipelineAnalytics:
                 for key, value in stats.items():
                     if isinstance(value, (int, float)) and value > 0:
                         filter_totals[key] = filter_totals.get(key, 0) + int(value)
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug(f"Skipping malformed filter_stats row: {e}")
                 continue
 
         # Calculate percentages
