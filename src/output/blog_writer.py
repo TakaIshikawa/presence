@@ -46,7 +46,7 @@ BLOG_TEMPLATE = '''<!DOCTYPE html>
 
 
 class BlogWriter:
-    def __init__(self, site_path: str, base_url: str = "https://takaishikawa.com"):
+    def __init__(self, site_path: str, base_url: str = "https://takaishikawa.com") -> None:
         self.site_path = Path(site_path).expanduser()
         self.blog_path = self.site_path / "blog"
         self.base_url = base_url
