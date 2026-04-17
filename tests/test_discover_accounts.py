@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from discover_accounts import (
     _get_candidate_handles, _score_account, discover, sync_following,
 )
+from knowledge.embeddings import EmbeddingRateLimitError
 
 
 def _make_config(**proactive_overrides):
@@ -147,7 +148,7 @@ class TestScoreAccount:
         ]
 
         knowledge_store = MagicMock()
-        knowledge_store.search_similar.side_effect = Exception("Rate limit")
+        knowledge_store.search_similar.side_effect = EmbeddingRateLimitError("Rate limit")
 
         relevance, count = _score_account(x_client, knowledge_store, "rate_limited")
         assert relevance == 0.0

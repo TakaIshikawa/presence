@@ -7,6 +7,7 @@ and inserts high-relevance accounts as candidates for human review.
 """
 
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
 from output.x_client import XClient
-from knowledge.embeddings import VoyageEmbeddings
+from knowledge.embeddings import VoyageEmbeddings, EmbeddingError
 from knowledge.store import KnowledgeStore
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ def _score_account(
                 similarity = results[0][1]
                 if similarity >= min_tweet_similarity:
                     scores.append(similarity)
-        except Exception as e:
+        except (EmbeddingError, sqlite3.OperationalError) as e:
             logger.warning(f"Relevance scoring failed for tweet: {e}")
             continue
 
