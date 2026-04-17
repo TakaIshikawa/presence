@@ -224,8 +224,8 @@ def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
         if bridge:
             try:
                 person_ctx = bridge.get_person_context(c["author_handle"])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to get person context for @{c['author_handle']}: {e}")
 
         try:
             draft = drafter.draft_proactive(
@@ -312,8 +312,8 @@ def main():
         if bridge:
             try:
                 bridge.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Error closing cultivate bridge: {e}")
 
         logger.info(f"\nDone. Inserted {inserted} proactive reply drafts.")
         update_monitoring("discover-replies")
