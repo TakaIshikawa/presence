@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch, mock_open
 
 import pytest
 
@@ -594,3 +595,95 @@ class TestEdgeCases:
         result = parser.parse_global_history()
         # Should be a generator/iterator, not a list
         assert hasattr(result, "__next__")
+
+
+# ---------------------------------------------------------------------------
+# File I/O error handling
+# ---------------------------------------------------------------------------
+
+class TestFileIOErrorHandling:
+    def test_parse_global_history_handles_permission_error(self, tmp_path, caplog):
+        """PermissionError on history file is caught and logged."""
+        history_file = tmp_path / "history.jsonl"
+        _write_global_history(history_file, [_make_global_entry("test")])
+
+        parser = ClaudeLogParser(str(tmp_path))
+
+        with patch("builtins.open", side_effect=PermissionError("Access denied")):
+            messages = list(parser.parse_global_history())
+
+        assert messages == []
+        assert "Could not read history file" in caplog.text
+        assert "Access denied" in caplog.text
+
+    def test_parse_global_history_handles_oserror(self, tmp_path, caplog):
+        """General OSError on history file is caught and logged."""
+        history_file = tmp_path / "history.jsonl"
+        _write_global_history(history_file, [_make_global_entry("test")])
+
+        parser = ClaudeLogParser(str(tmp_path))
+
+        with patch("builtins.open", side_effect=OSError("Disk I/O error")):
+            messages = list(parser.parse_global_history())
+
+        assert messages == []
+        assert "Could not read history file" in caplog.text
+        assert "Disk I/O error" in caplog.text
+
+    def test_parse_session_file_handles_permission_error(self, tmp_path, caplog):
+        """PermissionError on session file is caught and logged."""
+        session_file = tmp_path / "session.jsonl"
+        _write_global_history(session_file, [_make_session_entry("test")])
+
+        parser = ClaudeLogParser(str(tmp_path))
+
+        with patch("builtins.open", side_effect=PermissionError("Access denied")):
+            messages = list(parser.parse_session_file(session_file))
+
+        assert messages == []
+        assert "Could not read session file" in caplog.text
+        assert "Access denied" in caplog.text
+
+    def test_parse_session_file_handles_oserror(self, tmp_path, caplog):
+        """General OSError on session file is caught and logged."""
+        session_file = tmp_path / "session.jsonl"
+        _write_global_history(session_file, [_make_session_entry("test")])
+
+        parser = ClaudeLogParser(str(tmp_path))
+
+        with patch("builtins.open", side_effect=OSError("Disk I/O error")):
+            messages = list(parser.parse_session_file(session_file))
+
+        assert messages == []
+        assert "Could not read session file" in caplog.text
+        assert "Disk I/O error" in caplog.text
+
+    def test_normal_operation_after_error_handling(self, tmp_path):
+        """Verify normal operation still works after adding error handling."""
+        # Test parse_global_history
+        entries = [
+            _make_global_entry("First prompt", session_id="s1"),
+            _make_global_entry("Second prompt", session_id="s2"),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path))
+        messages = list(parser.parse_global_history())
+
+        assert len(messages) == 2
+        assert messages[0].prompt_text == "First prompt"
+        assert messages[1].prompt_text == "Second prompt"
+
+        # Test parse_session_file
+        session_file = tmp_path / "session.jsonl"
+        session_entries = [
+            _make_session_entry("User message 1", uuid="u1"),
+            _make_session_entry("User message 2", uuid="u2"),
+        ]
+        _write_global_history(session_file, session_entries)
+
+        messages = list(parser.parse_session_file(session_file))
+
+        assert len(messages) == 2
+        assert messages[0].prompt_text == "User message 1"
+        assert messages[1].prompt_text == "User message 2"
