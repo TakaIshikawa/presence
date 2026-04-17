@@ -1,6 +1,7 @@
 """Tests for CultivateBridge — cultivate DB adapter."""
 
 import json
+import logging
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -470,3 +471,92 @@ class TestPersonContextSerialization:
         assert restored.x_handle == ctx.x_handle
         assert restored.engagement_stage == ctx.engagement_stage
         assert restored.recent_interactions == ctx.recent_interactions
+
+
+# -- Logging tests ------------------------------------------------------------
+
+
+class TestLoggingOnErrors:
+    """Tests verifying debug logging occurs when malformed data is encountered."""
+
+    def test_try_connect_logs_on_db_error(self, tmp_path, caplog):
+        """Verify try_connect logs debug message on sqlite3.Error."""
+        db_path = tmp_path / "corrupt.db"
+        # Create an invalid SQLite file
+        db_path.write_text("not a valid sqlite file")
+
+        with caplog.at_level(logging.DEBUG):
+            bridge = CultivateBridge.try_connect(str(db_path))
+
+        assert bridge is None
+        assert len(caplog.records) == 1
+        assert "Could not connect to cultivate DB" in caplog.text
+        assert str(db_path) in caplog.text
+
+    def test_try_connect_logs_on_schema_mismatch(self, tmp_path, caplog):
+        """Verify try_connect returns None silently for schema mismatch (no error logged)."""
+        # Schema mismatch returns None before the try/except block, so no logging
+        db_path = tmp_path / "wrong_schema.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE foo (id TEXT)")
+        conn.commit()
+        conn.close()
+
+        with caplog.at_level(logging.DEBUG):
+            bridge = CultivateBridge.try_connect(str(db_path))
+
+        assert bridge is None
+        # No logging should occur for schema mismatch (it's an expected case)
+        assert len(caplog.records) == 0
+
+    def test_get_pending_proactive_actions_logs_malformed_payload(
+        self, bridge, cultivate_db, caplog
+    ):
+        """Verify malformed action payload triggers debug log."""
+        # Insert action with invalid JSON payload
+        cultivate_db.execute(
+            """INSERT INTO actions (id, action_type, target_person_id, description,
+               status, created_at, payload)
+               VALUES ('act-bad', 'engage', 'person-a', 'Test action',
+                       'suggested', '2026-04-09T00:00:00', '{invalid json}')"""
+        )
+        cultivate_db.commit()
+
+        with caplog.at_level(logging.DEBUG):
+            actions = bridge.get_pending_proactive_actions()
+
+        # Action should still be returned, but without payload
+        act = [a for a in actions if a.action_id == "act-bad"][0]
+        assert act.payload is None
+
+        # Should have logged the error
+        assert len(caplog.records) == 1
+        assert "Malformed action payload for action act-bad" in caplog.text
+        assert "JSONDecodeError" in str(caplog.records[0].message) or "Expecting" in str(caplog.records[0].message)
+
+    def test_update_action_payload_logs_malformed_existing_payload(
+        self, bridge, cultivate_db, caplog
+    ):
+        """Verify malformed existing payload triggers debug log."""
+        # Insert action with invalid JSON payload
+        cultivate_db.execute(
+            """INSERT INTO actions (id, action_type, target_person_id, description,
+               status, created_at, payload)
+               VALUES ('act-corrupt', 'engage', 'person-a', 'Test action',
+                       'suggested', '2026-04-09T00:00:00', 'not valid json')"""
+        )
+        cultivate_db.commit()
+
+        with caplog.at_level(logging.DEBUG):
+            bridge.update_action_payload("act-corrupt", {"new_field": "value"})
+
+        # Should have logged the error
+        assert len(caplog.records) == 1
+        assert "Malformed existing payload for action act-corrupt" in caplog.text
+
+        # Despite the error, the new payload should be written
+        row = cultivate_db.execute(
+            "SELECT payload FROM actions WHERE id = 'act-corrupt'"
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        assert payload["new_field"] == "value"

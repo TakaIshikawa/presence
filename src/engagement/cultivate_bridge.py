@@ -11,12 +11,15 @@ and interactions tables so cultivate's analysis pipeline stays up to date.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 # Stage names for display
 _STAGE_NAMES = {
@@ -137,7 +140,8 @@ class CultivateBridge:
                 return None
 
             return cls(conn)
-        except (sqlite3.Error, OSError):
+        except (sqlite3.Error, OSError) as e:
+            logger.debug(f"Could not connect to cultivate DB at {db_path}: {e}")
             return None
 
     @property
@@ -239,8 +243,8 @@ class CultivateBridge:
             if row["payload"]:
                 try:
                     payload = json.loads(row["payload"])
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.debug(f"Malformed action payload for action {row['id']}: {e}")
 
             person_ctx = PersonContext(
                 x_handle=row["x_handle"],
@@ -340,8 +344,8 @@ class CultivateBridge:
         if row and row["payload"]:
             try:
                 existing = json.loads(row["payload"])
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.debug(f"Malformed existing payload for action {action_id}: {e}")
 
         existing.update(payload)
 
