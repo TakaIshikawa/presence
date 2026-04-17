@@ -160,7 +160,8 @@ class XClient:
             if user.data:
                 return str(user.data.id)
             return None
-        except tweepy.TweepyException:
+        except tweepy.TweepyException as e:
+            logger.debug(f"Failed to resolve username '{username}': {e}")
             return None
 
     def post(self, text: str) -> PostResult:
@@ -262,7 +263,8 @@ class XClient:
                 }
                 for t in response.data[:count]
             ]
-        except tweepy.TweepyException:
+        except tweepy.TweepyException as e:
+            logger.debug(f"Failed to fetch timeline for user {user_id}: {e}")
             return []
 
     def get_mentions(
