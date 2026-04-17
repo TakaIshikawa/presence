@@ -3,16 +3,21 @@
 
 import json
 import signal
+import sqlite3
 import sys
 import logging
 from pathlib import Path
+from types import FrameType
+
+import anthropic
+import tweepy
 
 WATCHDOG_TIMEOUT = 600  # 10 minutes
 
 logger = logging.getLogger(__name__)
 
 
-def _timeout_handler(signum, frame):
+def _timeout_handler(signum: int, frame: FrameType | None) -> None:
     logger.error("WATCHDOG: Reply poll exceeded 10-minute timeout, exiting")
     sys.exit(1)
 
@@ -26,7 +31,7 @@ from knowledge.embeddings import VoyageEmbeddings
 from knowledge.store import KnowledgeStore
 
 
-def main():
+def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     signal.signal(signal.SIGALRM, _timeout_handler)
@@ -104,7 +109,7 @@ def main():
             mentions, users_by_id = x_client.get_mentions(
                 since_id=since_id, max_results=50
             )
-        except Exception as e:
+        except tweepy.TweepyException as e:
             logger.error(f"Error fetching mentions: {e}")
             if bridge:
                 bridge.close()
@@ -194,7 +199,7 @@ def main():
                             text=mention["text"],
                             created_at=mention.get("created_at", ""),
                         )
-                    except Exception as e:
+                    except (sqlite3.Error, sqlite3.OperationalError) as e:
                         logger.warning(f"  Warning: failed to forward mention to cultivate: {e}")
 
                 # Draft reply (enriched with relationship context and knowledge if available)
@@ -211,7 +216,7 @@ def main():
                     knowledge_ids = draft_result.knowledge_ids
                     if knowledge_ids:
                         logger.info(f"  Used {len(knowledge_ids)} knowledge insights")
-                except Exception as e:
+                except (anthropic.APIError, anthropic.APIConnectionError, anthropic.APITimeoutError, anthropic.RateLimitError) as e:
                     logger.error(f"  Error drafting reply: {e}")
                     continue
 
@@ -255,7 +260,7 @@ def main():
                 if knowledge_ids:
                     try:
                         db.insert_reply_knowledge_links(reply_queue_id, knowledge_ids)
-                    except Exception as e:
+                    except sqlite3.Error as e:
                         logger.warning(f"  Failed to store knowledge links: {e}")
 
                 logger.info(f"  Draft: \"{draft[:80]}...\"" if len(draft) > 80 else f"  Draft: \"{draft}\"")
