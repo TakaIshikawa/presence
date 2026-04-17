@@ -295,10 +295,135 @@ class TestReply:
         assert "Token expired" in result.error
 
 
+# --- BlueskyClient.__init__() ---
+
+
+class TestInit:
+    def test_initializes_with_handle_and_password(self):
+        with patch("output.bluesky_client.Client") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+
+            client = BlueskyClient(handle="user.bsky.social", app_password="secret123")
+
+            assert client.handle == "user.bsky.social"
+            assert client.app_password == "secret123"
+            assert client._logged_in is False
+            mock_cls.assert_called_once()
+
+    def test_creates_atproto_client_instance(self):
+        with patch("output.bluesky_client.Client") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+
+            client = BlueskyClient(handle="test.bsky.social", app_password="pwd")
+
+            assert client.client is mock_client
+
+
 # --- BlueskyClient.get_post_metrics() ---
 
 
 class TestGetPostMetrics:
+    def test_success_returns_metrics_dict(self):
+        client, mock_client = make_bluesky_client()
+
+        # Mock the response structure
+        mock_post = MagicMock()
+        mock_post.like_count = 42
+        mock_post.repost_count = 10
+        mock_post.reply_count = 5
+        mock_post.quote_count = 3
+
+        mock_thread = MagicMock()
+        mock_thread.post = mock_post
+
+        mock_response = MagicMock()
+        mock_response.thread = mock_thread
+
+        mock_client.get_post_thread.return_value = mock_response
+
+        result = client.get_post_metrics("at://did:plc:xyz/app.bsky.feed.post/123")
+
+        assert result == {
+            'like_count': 42,
+            'repost_count': 10,
+            'reply_count': 5,
+            'quote_count': 3,
+        }
+
+    def test_handles_missing_metrics_with_defaults(self):
+        client, mock_client = make_bluesky_client()
+
+        # Mock post with missing attributes
+        mock_post = MagicMock()
+        del mock_post.like_count
+        del mock_post.repost_count
+        del mock_post.reply_count
+        del mock_post.quote_count
+
+        mock_thread = MagicMock()
+        mock_thread.post = mock_post
+
+        mock_response = MagicMock()
+        mock_response.thread = mock_thread
+
+        mock_client.get_post_thread.return_value = mock_response
+
+        result = client.get_post_metrics("at://did:plc:xyz/app.bsky.feed.post/123")
+
+        assert result == {
+            'like_count': 0,
+            'repost_count': 0,
+            'reply_count': 0,
+            'quote_count': 0,
+        }
+
+    def test_handles_none_metrics_values(self):
+        client, mock_client = make_bluesky_client()
+
+        # Mock post with None values
+        mock_post = MagicMock()
+        mock_post.like_count = None
+        mock_post.repost_count = None
+        mock_post.reply_count = None
+        mock_post.quote_count = None
+
+        mock_thread = MagicMock()
+        mock_thread.post = mock_post
+
+        mock_response = MagicMock()
+        mock_response.thread = mock_thread
+
+        mock_client.get_post_thread.return_value = mock_response
+
+        result = client.get_post_metrics("at://did:plc:xyz/app.bsky.feed.post/123")
+
+        # The `or 0` in the implementation should convert None to 0
+        assert result == {
+            'like_count': 0,
+            'repost_count': 0,
+            'reply_count': 0,
+            'quote_count': 0,
+        }
+
+    def test_returns_none_when_response_is_none(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.get_post_thread.return_value = None
+
+        result = client.get_post_metrics("at://did:plc:xyz/app.bsky.feed.post/123")
+
+        assert result is None
+
+    def test_returns_none_when_thread_attribute_missing(self):
+        client, mock_client = make_bluesky_client()
+        mock_response = MagicMock(spec=[])  # No 'thread' attribute
+        mock_client.get_post_thread.return_value = mock_response
+
+        result = client.get_post_metrics("at://did:plc:xyz/app.bsky.feed.post/123")
+
+        assert result is None
+
     def test_atprotocol_error_logs_warning_and_returns_none(self):
         client, mock_client = make_bluesky_client()
         mock_client.get_post_thread.side_effect = NetworkError("Post not found")
@@ -312,3 +437,106 @@ class TestGetPostMetrics:
             assert "Failed to fetch metrics for" in args[0]
             assert "at://did:plc:xyz/app.bsky.feed.post/123" in args
             assert "Post not found" in str(args[2])
+
+
+# --- BlueskyClient.get_post_metrics_batch() ---
+
+
+class TestGetPostMetricsBatch:
+    def test_fetches_metrics_for_all_uris(self):
+        client, mock_client = make_bluesky_client()
+
+        uris = [
+            "at://did:plc:xyz/app.bsky.feed.post/post1",
+            "at://did:plc:xyz/app.bsky.feed.post/post2",
+            "at://did:plc:xyz/app.bsky.feed.post/post3",
+        ]
+
+        # Mock get_post_metrics to return different results
+        with patch.object(client, 'get_post_metrics') as mock_get:
+            mock_get.side_effect = [
+                {'like_count': 10, 'repost_count': 2, 'reply_count': 1, 'quote_count': 0},
+                {'like_count': 20, 'repost_count': 5, 'reply_count': 3, 'quote_count': 1},
+                {'like_count': 30, 'repost_count': 8, 'reply_count': 4, 'quote_count': 2},
+            ]
+
+            with patch("output.bluesky_client.time.sleep") as mock_sleep:
+                results = client.get_post_metrics_batch(uris)
+
+            assert len(results) == 3
+            assert results[0]['like_count'] == 10
+            assert results[1]['like_count'] == 20
+            assert results[2]['like_count'] == 30
+
+            # Verify get_post_metrics was called for each URI
+            assert mock_get.call_count == 3
+            mock_get.assert_any_call(uris[0])
+            mock_get.assert_any_call(uris[1])
+            mock_get.assert_any_call(uris[2])
+
+    def test_rate_limits_between_requests(self):
+        client, mock_client = make_bluesky_client()
+
+        uris = [
+            "at://did:plc:xyz/app.bsky.feed.post/post1",
+            "at://did:plc:xyz/app.bsky.feed.post/post2",
+            "at://did:plc:xyz/app.bsky.feed.post/post3",
+        ]
+
+        with patch.object(client, 'get_post_metrics') as mock_get:
+            mock_get.return_value = {'like_count': 10, 'repost_count': 2, 'reply_count': 1, 'quote_count': 0}
+
+            with patch("output.bluesky_client.time.sleep") as mock_sleep:
+                client.get_post_metrics_batch(uris)
+
+                # Should sleep between each request (N-1 times for N requests)
+                assert mock_sleep.call_count == 2
+                mock_sleep.assert_called_with(1.0)
+
+    def test_no_sleep_after_last_request(self):
+        client, mock_client = make_bluesky_client()
+
+        uris = ["at://did:plc:xyz/app.bsky.feed.post/single"]
+
+        with patch.object(client, 'get_post_metrics') as mock_get:
+            mock_get.return_value = {'like_count': 10, 'repost_count': 2, 'reply_count': 1, 'quote_count': 0}
+
+            with patch("output.bluesky_client.time.sleep") as mock_sleep:
+                client.get_post_metrics_batch(uris)
+
+                # Single URI should not sleep
+                mock_sleep.assert_not_called()
+
+    def test_includes_none_for_failed_fetches(self):
+        client, mock_client = make_bluesky_client()
+
+        uris = [
+            "at://did:plc:xyz/app.bsky.feed.post/post1",
+            "at://did:plc:xyz/app.bsky.feed.post/post2",
+            "at://did:plc:xyz/app.bsky.feed.post/post3",
+        ]
+
+        with patch.object(client, 'get_post_metrics') as mock_get:
+            # Second request fails
+            mock_get.side_effect = [
+                {'like_count': 10, 'repost_count': 2, 'reply_count': 1, 'quote_count': 0},
+                None,
+                {'like_count': 30, 'repost_count': 8, 'reply_count': 4, 'quote_count': 2},
+            ]
+
+            with patch("output.bluesky_client.time.sleep"):
+                results = client.get_post_metrics_batch(uris)
+
+            assert len(results) == 3
+            assert results[0]['like_count'] == 10
+            assert results[1] is None
+            assert results[2]['like_count'] == 30
+
+    def test_empty_list_returns_empty_list(self):
+        client, mock_client = make_bluesky_client()
+
+        with patch("output.bluesky_client.time.sleep") as mock_sleep:
+            results = client.get_post_metrics_batch([])
+
+        assert results == []
+        mock_sleep.assert_not_called()
