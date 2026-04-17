@@ -203,14 +203,60 @@ class TestTopicExtractor:
         assert len(result) == 1
         assert result[0] == ("other", "", 0.5)
 
-    def test_extract_topics_api_exception_returns_default(self, extractor, mock_anthropic_client):
-        """Test that API exceptions return default 'other' topic."""
-        mock_anthropic_client.messages.create.side_effect = Exception("API error")
+    def test_extract_topics_api_connection_error_raises_structured_exception(self, extractor, mock_anthropic_client):
+        """Test that APIConnectionError raises TopicExtractionAPIError."""
+        from evaluation.topic_extractor import TopicExtractionAPIError
+        import anthropic
 
-        result = extractor.extract_topics(TESTING_ARTICLE)
+        # Create a mock request for APIConnectionError
+        mock_request = Mock()
+        api_error = anthropic.APIConnectionError(message="Connection failed", request=mock_request)
+        mock_anthropic_client.messages.create.side_effect = api_error
 
-        assert len(result) == 1
-        assert result[0] == ("other", "", 0.5)
+        with pytest.raises(TopicExtractionAPIError) as exc_info:
+            extractor.extract_topics(TESTING_ARTICLE)
+
+        # Verify error message and chaining
+        assert "APIConnectionError" in str(exc_info.value)
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, anthropic.APIConnectionError)
+
+    def test_extract_topics_api_status_error_raises_structured_exception(self, extractor, mock_anthropic_client):
+        """Test that APIStatusError raises TopicExtractionAPIError."""
+        from evaluation.topic_extractor import TopicExtractionAPIError
+        import anthropic
+
+        # Create a minimal mock response for APIStatusError
+        mock_response = Mock()
+        mock_response.status_code = 500
+        api_error = anthropic.APIStatusError(
+            message="Server error",
+            response=mock_response,
+            body=None
+        )
+        mock_anthropic_client.messages.create.side_effect = api_error
+
+        with pytest.raises(TopicExtractionAPIError) as exc_info:
+            extractor.extract_topics(TESTING_ARTICLE)
+
+        # Verify error message and chaining
+        assert "APIStatusError" in str(exc_info.value)
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, anthropic.APIStatusError)
+
+    def test_extract_topics_generic_exception_raises_structured_exception(self, extractor, mock_anthropic_client):
+        """Test that generic exceptions are wrapped in TopicExtractionAPIError."""
+        from evaluation.topic_extractor import TopicExtractionAPIError
+
+        mock_anthropic_client.messages.create.side_effect = ValueError("Unexpected error")
+
+        with pytest.raises(TopicExtractionAPIError) as exc_info:
+            extractor.extract_topics(TESTING_ARTICLE)
+
+        # Verify error message and chaining
+        assert "ValueError" in str(exc_info.value)
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, ValueError)
 
     def test_extract_topics_empty_string_input(self, extractor, mock_anthropic_client):
         """Test handling of empty string input."""

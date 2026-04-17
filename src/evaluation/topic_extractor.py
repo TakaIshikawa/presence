@@ -8,9 +8,25 @@ import json
 import logging
 from typing import Optional
 
+import anthropic
 from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
+
+
+class TopicExtractionError(Exception):
+    """Base exception for topic extraction errors."""
+    pass
+
+
+class TopicExtractionAPIError(TopicExtractionError):
+    """Raised when Anthropic API calls fail."""
+    pass
+
+
+class TopicExtractionParseError(TopicExtractionError):
+    """Raised when response parsing fails."""
+    pass
 
 # Predefined topic taxonomy
 TOPIC_TAXONOMY = [
@@ -58,9 +74,23 @@ class TopicExtractor:
             text = response.content[0].text.strip()
             return self._parse_extraction_response(text)
 
+        except TopicExtractionError:
+            # Re-raise our own exceptions
+            raise
+        except (anthropic.APIConnectionError, anthropic.APIStatusError) as e:
+            # Anthropic API errors - connection failures, auth errors, rate limits, etc.
+            error_name = type(e).__name__
+            logger.error(f"Topic extraction API error: {error_name}: {e}")
+            raise TopicExtractionAPIError(
+                f"Anthropic API call failed: {error_name}: {e}"
+            ) from e
         except Exception as e:
-            logger.error(f"Topic extraction failed: {e}")
-            return [("other", "", 0.5)]
+            # Catch-all for unexpected errors
+            error_name = type(e).__name__
+            logger.error(f"Topic extraction failed: {error_name}: {e}")
+            raise TopicExtractionAPIError(
+                f"Topic extraction failed: {error_name}: {e}"
+            ) from e
 
     def batch_extract(self, contents: list[str]) -> list[list[tuple[str, str, float]]]:
         """Extract topics for multiple contents efficiently.

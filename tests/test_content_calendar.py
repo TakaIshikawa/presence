@@ -103,14 +103,17 @@ class TestTopicExtractor:
 
     def test_extract_topics_error_handling(self):
         """Test error handling when API call fails."""
+        from evaluation.topic_extractor import TopicExtractionAPIError
+        import pytest
+
         extractor = TopicExtractor(api_key="test-key")
 
         with patch.object(extractor.client.messages, 'create', side_effect=Exception("API error")):
-            topics = extractor.extract_topics("Some content")
+            with pytest.raises(TopicExtractionAPIError) as exc_info:
+                extractor.extract_topics("Some content")
 
-            assert len(topics) == 1
-            assert topics[0][0] == "other"
-            assert topics[0][2] == 0.5  # Low confidence on error
+            assert "Exception" in str(exc_info.value)
+            assert exc_info.value.__cause__ is not None
 
     def test_batch_extract(self):
         """Test batch extraction processes all items."""
