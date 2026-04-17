@@ -1,6 +1,28 @@
 """Tests for engagement score computation."""
 
-from evaluation.engagement_scorer import compute_engagement_score
+from evaluation.engagement_scorer import (
+    compute_engagement_score,
+    WEIGHT_LIKE,
+    WEIGHT_RETWEET,
+    WEIGHT_REPLY,
+    WEIGHT_QUOTE,
+)
+
+
+class TestWeightConstants:
+    """Regression guard: verify weight constants match expected values."""
+
+    def test_weight_like(self):
+        assert WEIGHT_LIKE == 1.0
+
+    def test_weight_retweet(self):
+        assert WEIGHT_RETWEET == 3.0
+
+    def test_weight_reply(self):
+        assert WEIGHT_REPLY == 4.0
+
+    def test_weight_quote(self):
+        assert WEIGHT_QUOTE == 5.0
 
 
 class TestComputeEngagementScore:
@@ -30,3 +52,38 @@ class TestComputeEngagementScore:
     def test_returns_float(self):
         result = compute_engagement_score(1, 0, 0, 0)
         assert isinstance(result, float)
+
+    def test_large_values_no_overflow(self):
+        """Verify large metric counts produce correct results without overflow."""
+        # Use large but realistic values
+        large_likes = 1_000_000
+        large_retweets = 500_000
+        large_replies = 250_000
+        large_quotes = 100_000
+
+        expected = (
+            large_likes * 1.0
+            + large_retweets * 3.0
+            + large_replies * 4.0
+            + large_quotes * 5.0
+        )
+        # 1,000,000 + 1,500,000 + 1,000,000 + 500,000 = 4,000,000
+        assert expected == 4_000_000.0
+
+        result = compute_engagement_score(
+            large_likes, large_retweets, large_replies, large_quotes
+        )
+        assert result == expected
+        assert isinstance(result, float)
+
+    def test_very_large_single_metric(self):
+        """Verify very large single metric value."""
+        result = compute_engagement_score(10_000_000, 0, 0, 0)
+        assert result == 10_000_000.0
+
+    def test_known_computation_example(self):
+        """Verify weighted sum with specific known example from requirements."""
+        # Example: 10 likes + 5 retweets + 2 replies + 1 quote
+        # = 10*1 + 5*3 + 2*4 + 1*5 = 10 + 15 + 8 + 5 = 38.0
+        result = compute_engagement_score(10, 5, 2, 1)
+        assert result == 38.0
