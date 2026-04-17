@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from storage.db import Database
+from knowledge.embeddings import EmbeddingRateLimitError
 
 
 # --- Test Fixtures ---
@@ -286,11 +287,7 @@ class TestBackfillEmbeddings:
         test_db.conn.commit()
 
         # Mock rate limit error on first call, success on second
-        class RateLimitError(Exception):
-            """Mock rate limit exception."""
-            pass
-
-        rate_limit_error = RateLimitError("429 Rate Limit Exceeded")
+        rate_limit_error = EmbeddingRateLimitError("Voyage API rate limit exceeded: 429 Rate Limit Exceeded")
 
         mock_embeddings.embed_batch.side_effect = [
             rate_limit_error,
