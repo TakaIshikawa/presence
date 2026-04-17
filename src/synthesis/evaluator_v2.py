@@ -1,10 +1,13 @@
 """Cross-model comparative evaluator for generated content."""
 
+import logging
 import re
 import anthropic
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -194,11 +197,18 @@ class CrossModelEvaluator:
             engagement_calibration_section=engagement_calibration_section,
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=800,
-            messages=[{"role": "user", "content": filled}],
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=800,
+                messages=[{"role": "user", "content": filled}],
+            )
+        except anthropic.APIConnectionError as e:
+            logger.error(f"Failed to connect to Anthropic API: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            logger.error(f"Anthropic API status error: {e}")
+            raise
 
         return self._parse_response(response.content[0].text, len(candidates))
 
