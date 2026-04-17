@@ -5,7 +5,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from evaluation.pipeline_analytics import PipelineAnalytics, PipelineHealthReport
+from evaluation.pipeline_analytics import (
+    CrossPlatformReport,
+    PipelineAnalytics,
+    PipelineHealthReport,
+)
 
 
 @pytest.fixture
@@ -499,3 +503,603 @@ class TestPipelineAnalytics:
         # Should only get the recent run
         assert len(runs) == 1
         assert runs[0]["batch_id"] == "batch-recent"
+
+
+class TestCrossPlatformComparison:
+    """Tests for cross_platform_comparison() method."""
+
+    def test_no_posts_returns_zeroed_report(self, db):
+        """Test that no posts in period returns a zeroed-out report."""
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert isinstance(report, CrossPlatformReport)
+        assert report.period_days == 30
+        assert report.avg_x_score == 0.0
+        assert report.avg_bluesky_score == 0.0
+        assert report.correlation is None
+        assert report.x_only_count == 0
+        assert report.bluesky_only_count == 0
+        assert report.both_count == 0
+        assert report.platform_winner == {}
+
+    def test_x_only_posts(self, db):
+        """Test posts with only X engagement scores."""
+        now = datetime.now(timezone.utc)
+
+        # Create 3 posts with only X engagement
+        for i in range(3):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"commit-{i}"],
+                source_messages=[f"msg-{i}"],
+                content=f"X only post {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(
+                content_id,
+                f"https://x.com/test/{i}",
+                f"tweet-{i}"
+            )
+            db.insert_engagement(
+                content_id=content_id,
+                tweet_id=f"tweet-{i}",
+                like_count=10 + i,
+                retweet_count=2,
+                reply_count=1,
+                quote_count=0,
+                engagement_score=15.0 + i
+            )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert report.x_only_count == 3
+        assert report.bluesky_only_count == 0
+        assert report.both_count == 0
+        assert report.avg_x_score == 0.0  # Only counted for paired samples
+        assert report.avg_bluesky_score == 0.0
+        assert report.correlation is None
+        assert report.platform_winner == {}
+
+    def test_bluesky_only_posts(self, db):
+        """Test posts with only Bluesky engagement scores."""
+        now = datetime.now(timezone.utc)
+
+        # Create 3 posts with only Bluesky engagement
+        for i in range(3):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"commit-{i}"],
+                source_messages=[f"msg-{i}"],
+                content=f"Bluesky only post {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(
+                content_id,
+                f"https://bsky.app/profile/test/post/{i}",
+                None  # No tweet_id
+            )
+            db.insert_bluesky_engagement(
+                content_id=content_id,
+                bluesky_uri=f"at://did:plc:test/app.bsky.feed.post/{i}",
+                like_count=10 + i,
+                repost_count=2,
+                reply_count=1,
+                quote_count=0,
+                engagement_score=15.0 + i
+            )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert report.x_only_count == 0
+        assert report.bluesky_only_count == 3
+        assert report.both_count == 0
+        assert report.avg_x_score == 0.0
+        assert report.avg_bluesky_score == 0.0  # Only counted for paired samples
+        assert report.correlation is None
+        assert report.platform_winner == {}
+
+    def test_both_platforms_with_winner_determination(self, db):
+        """Test posts with both X and Bluesky scores, checking platform_winner."""
+        now = datetime.now(timezone.utc)
+
+        # Post 1: X wins
+        content_id_1 = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=["commit-1"],
+            source_messages=["msg-1"],
+            content="Post 1",
+            eval_score=8.0,
+            eval_feedback="Good"
+        )
+        db.mark_published(content_id_1, "https://x.com/test/1", "tweet-1")
+        db.insert_engagement(
+            content_id=content_id_1,
+            tweet_id="tweet-1",
+            like_count=30,
+            retweet_count=5,
+            reply_count=2,
+            quote_count=1,
+            engagement_score=35.0
+        )
+        db.insert_bluesky_engagement(
+            content_id=content_id_1,
+            bluesky_uri="at://did:plc:test/app.bsky.feed.post/1",
+            like_count=15,
+            repost_count=2,
+            reply_count=1,
+            quote_count=0,
+            engagement_score=20.0
+        )
+
+        # Post 2: Bluesky wins
+        content_id_2 = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=["commit-2"],
+            source_messages=["msg-2"],
+            content="Post 2",
+            eval_score=8.0,
+            eval_feedback="Good"
+        )
+        db.mark_published(content_id_2, "https://x.com/test/2", "tweet-2")
+        db.insert_engagement(
+            content_id=content_id_2,
+            tweet_id="tweet-2",
+            like_count=10,
+            retweet_count=2,
+            reply_count=1,
+            quote_count=0,
+            engagement_score=15.0
+        )
+        db.insert_bluesky_engagement(
+            content_id=content_id_2,
+            bluesky_uri="at://did:plc:test/app.bsky.feed.post/2",
+            like_count=25,
+            repost_count=5,
+            reply_count=3,
+            quote_count=1,
+            engagement_score=30.0
+        )
+
+        # Post 3: Tie
+        content_id_3 = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=["commit-3"],
+            source_messages=["msg-3"],
+            content="Post 3",
+            eval_score=8.0,
+            eval_feedback="Good"
+        )
+        db.mark_published(content_id_3, "https://x.com/test/3", "tweet-3")
+        db.insert_engagement(
+            content_id=content_id_3,
+            tweet_id="tweet-3",
+            like_count=20,
+            retweet_count=3,
+            reply_count=2,
+            quote_count=0,
+            engagement_score=25.0
+        )
+        db.insert_bluesky_engagement(
+            content_id=content_id_3,
+            bluesky_uri="at://did:plc:test/app.bsky.feed.post/3",
+            like_count=20,
+            repost_count=3,
+            reply_count=2,
+            quote_count=0,
+            engagement_score=25.0
+        )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert report.both_count == 3
+        assert report.x_only_count == 0
+        assert report.bluesky_only_count == 0
+
+        # Check averages: X = (35 + 15 + 25) / 3 = 25.0
+        #                 Bluesky = (20 + 30 + 25) / 3 = 25.0
+        assert report.avg_x_score == 25.0
+        assert report.avg_bluesky_score == 25.0
+
+        # Check platform winners
+        assert report.platform_winner[content_id_1] == 'x'
+        assert report.platform_winner[content_id_2] == 'bluesky'
+        assert report.platform_winner[content_id_3] == 'tie'
+
+        # Correlation should be computed (3 pairs)
+        assert report.correlation is not None
+
+    def test_correlation_computed_with_sufficient_pairs(self, db):
+        """Test that correlation is computed when there are at least 3 paired samples."""
+        now = datetime.now(timezone.utc)
+
+        # Create 4 posts with both platforms (different scores to get meaningful correlation)
+        test_data = [
+            (10.0, 12.0),  # X score, Bluesky score
+            (20.0, 22.0),
+            (30.0, 28.0),
+            (40.0, 42.0),
+        ]
+
+        for i, (x_score, bluesky_score) in enumerate(test_data):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"commit-{i}"],
+                source_messages=[f"msg-{i}"],
+                content=f"Post {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(content_id, f"https://x.com/test/{i}", f"tweet-{i}")
+            db.insert_engagement(
+                content_id=content_id,
+                tweet_id=f"tweet-{i}",
+                like_count=int(x_score),
+                retweet_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=x_score
+            )
+            db.insert_bluesky_engagement(
+                content_id=content_id,
+                bluesky_uri=f"at://did:plc:test/app.bsky.feed.post/{i}",
+                like_count=int(bluesky_score),
+                repost_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=bluesky_score
+            )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert report.both_count == 4
+        assert report.correlation is not None
+        # Scores are highly correlated, should be close to 1.0
+        assert 0.9 <= report.correlation <= 1.0
+
+    def test_insufficient_pairs_for_correlation(self, db):
+        """Test that correlation is None when there are fewer than 3 paired samples."""
+        now = datetime.now(timezone.utc)
+
+        # Create only 2 posts with both platforms
+        for i in range(2):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"commit-{i}"],
+                source_messages=[f"msg-{i}"],
+                content=f"Post {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(content_id, f"https://x.com/test/{i}", f"tweet-{i}")
+            db.insert_engagement(
+                content_id=content_id,
+                tweet_id=f"tweet-{i}",
+                like_count=10 + i,
+                retweet_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=10.0 + i
+            )
+            db.insert_bluesky_engagement(
+                content_id=content_id,
+                bluesky_uri=f"at://did:plc:test/app.bsky.feed.post/{i}",
+                like_count=15 + i,
+                repost_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=15.0 + i
+            )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert report.both_count == 2
+        # Not enough pairs for correlation
+        assert report.correlation is None
+
+    def test_tie_scenario(self, db):
+        """Test that ties are correctly identified when X score equals Bluesky score."""
+        now = datetime.now(timezone.utc)
+
+        content_id = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=["commit-1"],
+            source_messages=["msg-1"],
+            content="Tie post",
+            eval_score=8.0,
+            eval_feedback="Good"
+        )
+        db.mark_published(content_id, "https://x.com/test/1", "tweet-1")
+
+        # Same engagement score on both platforms
+        db.insert_engagement(
+            content_id=content_id,
+            tweet_id="tweet-1",
+            like_count=20,
+            retweet_count=3,
+            reply_count=2,
+            quote_count=1,
+            engagement_score=25.5
+        )
+        db.insert_bluesky_engagement(
+            content_id=content_id,
+            bluesky_uri="at://did:plc:test/app.bsky.feed.post/1",
+            like_count=20,
+            repost_count=3,
+            reply_count=2,
+            quote_count=1,
+            engagement_score=25.5
+        )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert report.both_count == 1
+        assert report.platform_winner[content_id] == 'tie'
+
+    def test_statistics_error_handling(self, db):
+        """Test that StatisticsError is handled gracefully."""
+        now = datetime.now(timezone.utc)
+
+        # Create 3 posts with identical scores (no variance -> correlation fails)
+        for i in range(3):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"commit-{i}"],
+                source_messages=[f"msg-{i}"],
+                content=f"Post {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(content_id, f"https://x.com/test/{i}", f"tweet-{i}")
+            # All identical scores
+            db.insert_engagement(
+                content_id=content_id,
+                tweet_id=f"tweet-{i}",
+                like_count=10,
+                retweet_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=10.0  # Same score for all
+            )
+            db.insert_bluesky_engagement(
+                content_id=content_id,
+                bluesky_uri=f"at://did:plc:test/app.bsky.feed.post/{i}",
+                like_count=15,
+                repost_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=15.0  # Same score for all
+            )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        # Should handle the StatisticsError and return None
+        assert report.both_count == 3
+        assert report.correlation is None
+
+    def test_mixed_platform_posts(self, db):
+        """Test a mix of X-only, Bluesky-only, and both-platform posts."""
+        now = datetime.now(timezone.utc)
+
+        # 2 X-only posts
+        for i in range(2):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"x-commit-{i}"],
+                source_messages=[f"x-msg-{i}"],
+                content=f"X only {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(content_id, f"https://x.com/test/{i}", f"tweet-{i}")
+            db.insert_engagement(
+                content_id=content_id,
+                tweet_id=f"tweet-{i}",
+                like_count=10,
+                retweet_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=10.0
+            )
+
+        # 3 Bluesky-only posts
+        for i in range(3):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"bsky-commit-{i}"],
+                source_messages=[f"bsky-msg-{i}"],
+                content=f"Bluesky only {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(
+                content_id,
+                f"https://bsky.app/profile/test/post/{i}",
+                None
+            )
+            db.insert_bluesky_engagement(
+                content_id=content_id,
+                bluesky_uri=f"at://did:plc:test/app.bsky.feed.post/{i}",
+                like_count=15,
+                repost_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=15.0
+            )
+
+        # 4 Both-platform posts
+        for i in range(4):
+            content_id = db.insert_generated_content(
+                content_type="x_thread",
+                source_commits=[f"both-commit-{i}"],
+                source_messages=[f"both-msg-{i}"],
+                content=f"Both platforms {i}",
+                eval_score=8.0,
+                eval_feedback="Good"
+            )
+            db.mark_published(content_id, f"https://x.com/test/both/{i}", f"tweet-both-{i}")
+            db.insert_engagement(
+                content_id=content_id,
+                tweet_id=f"tweet-both-{i}",
+                like_count=20 + i,
+                retweet_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=20.0 + i
+            )
+            db.insert_bluesky_engagement(
+                content_id=content_id,
+                bluesky_uri=f"at://did:plc:test/app.bsky.feed.post/both/{i}",
+                like_count=25 + i,
+                repost_count=0,
+                reply_count=0,
+                quote_count=0,
+                engagement_score=25.0 + i
+            )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        assert report.x_only_count == 2
+        assert report.bluesky_only_count == 3
+        assert report.both_count == 4
+        assert report.correlation is not None  # 4 pairs is enough
+
+    def test_respects_days_filter(self, db):
+        """Test that the days parameter correctly filters posts."""
+        now = datetime.now(timezone.utc)
+
+        # Recent post (within 30 days)
+        content_id_recent = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=["commit-recent"],
+            source_messages=["msg-recent"],
+            content="Recent post",
+            eval_score=8.0,
+            eval_feedback="Good"
+        )
+        db.mark_published(content_id_recent, "https://x.com/test/recent", "tweet-recent")
+        db.insert_engagement(
+            content_id=content_id_recent,
+            tweet_id="tweet-recent",
+            like_count=10,
+            retweet_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=10.0
+        )
+
+        # Old post (40 days ago) - need to manually set published_at
+        content_id_old = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=["commit-old"],
+            source_messages=["msg-old"],
+            content="Old post",
+            eval_score=8.0,
+            eval_feedback="Good"
+        )
+        db.mark_published(content_id_old, "https://x.com/test/old", "tweet-old")
+        # Update published_at to 40 days ago
+        db.conn.execute(
+            "UPDATE generated_content SET published_at = ? WHERE id = ?",
+            ((now - timedelta(days=40)).isoformat(), content_id_old)
+        )
+        db.conn.commit()
+        db.insert_engagement(
+            content_id=content_id_old,
+            tweet_id="tweet-old",
+            like_count=20,
+            retweet_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=20.0
+        )
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        # Should only count the recent post
+        assert report.x_only_count == 1
+
+        # Try with 50 days - should get both
+        report_50 = analytics.cross_platform_comparison(days=50)
+        assert report_50.x_only_count == 2
+
+    def test_uses_latest_engagement_scores(self, db):
+        """Test that only the latest engagement scores are used when multiple exist."""
+        now = datetime.now(timezone.utc)
+
+        content_id = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=["commit-1"],
+            source_messages=["msg-1"],
+            content="Post with multiple fetches",
+            eval_score=8.0,
+            eval_feedback="Good"
+        )
+        db.mark_published(content_id, "https://x.com/test/1", "tweet-1")
+
+        # Insert older engagement
+        db.conn.execute(
+            """INSERT INTO post_engagement
+               (content_id, tweet_id, like_count, retweet_count,
+                reply_count, quote_count, engagement_score, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                content_id, "tweet-1", 5, 0, 0, 0, 5.0,
+                (now - timedelta(hours=2)).isoformat()
+            )
+        )
+
+        # Insert newer engagement (higher score)
+        db.insert_engagement(
+            content_id=content_id,
+            tweet_id="tweet-1",
+            like_count=20,
+            retweet_count=3,
+            reply_count=2,
+            quote_count=1,
+            engagement_score=25.0
+        )
+
+        # Similar for Bluesky
+        db.conn.execute(
+            """INSERT INTO bluesky_engagement
+               (content_id, bluesky_uri, like_count, repost_count,
+                reply_count, quote_count, engagement_score, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                content_id, "at://did:plc:test/app.bsky.feed.post/1",
+                3, 0, 0, 0, 3.0,
+                (now - timedelta(hours=2)).isoformat()
+            )
+        )
+
+        db.insert_bluesky_engagement(
+            content_id=content_id,
+            bluesky_uri="at://did:plc:test/app.bsky.feed.post/1",
+            like_count=30,
+            repost_count=5,
+            reply_count=3,
+            quote_count=2,
+            engagement_score=35.0
+        )
+        db.conn.commit()
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.cross_platform_comparison(days=30)
+
+        # Should use latest scores (25.0 for X, 35.0 for Bluesky)
+        assert report.both_count == 1
+        assert report.avg_x_score == 25.0
+        assert report.avg_bluesky_score == 35.0
+        assert report.platform_winner[content_id] == 'bluesky'
