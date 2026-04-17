@@ -1,11 +1,15 @@
 """Content repurposer for transforming high-performing posts into different formats."""
 
+import logging
+
 import anthropic
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
 from storage.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -94,11 +98,20 @@ class ContentRepurposer:
 
         filled_prompt = prompt_template.format(original_content=candidate.original_content)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            messages=[{"role": "user", "content": filled_prompt}],
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": filled_prompt}],
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            raise
 
         generated_content = response.content[0].text.strip()
 
@@ -123,11 +136,20 @@ class ContentRepurposer:
 
         filled_prompt = prompt_template.format(original_content=candidate.original_content)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2500,
-            messages=[{"role": "user", "content": filled_prompt}],
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=2500,
+                messages=[{"role": "user", "content": filled_prompt}],
+            )
+        except anthropic.APIConnectionError as e:
+            error_name = type(e).__name__
+            logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
+            raise
+        except anthropic.APIStatusError as e:
+            error_name = type(e).__name__
+            logger.error(f"Anthropic API status error: {error_name}: {e}")
+            raise
 
         generated_content = response.content[0].text.strip()
 
