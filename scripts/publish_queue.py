@@ -27,7 +27,7 @@ from output.bluesky_client import BlueskyClient
 from output.cross_poster import CrossPoster
 
 
-def main():
+def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     signal.signal(signal.SIGALRM, _timeout_handler)

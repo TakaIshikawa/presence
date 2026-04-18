@@ -84,7 +84,7 @@ def quartile_precision(
     return overlap / q_size if q_size > 0 else 0.0
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze backtest results")
     parser.add_argument(
         "--version", required=True,

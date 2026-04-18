@@ -19,7 +19,7 @@ from knowledge.source_scorer import SourceScorer
 logger = logging.getLogger(__name__)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate source quality scoring report"
     )
