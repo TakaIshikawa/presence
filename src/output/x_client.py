@@ -25,6 +25,10 @@ class XClient:
         access_token: str,
         access_token_secret: str
     ):
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._access_token = access_token
+        self._access_token_secret = access_token_secret
         self.client = tweepy.Client(
             consumer_key=api_key,
             consumer_secret=api_secret,
@@ -32,6 +36,7 @@ class XClient:
             access_token_secret=access_token_secret
         )
         self._username: Optional[str] = None
+        self._v1_api_instance: Optional[tweepy.API] = None
 
     @property
     def username(self) -> str:
@@ -39,6 +44,55 @@ class XClient:
             me = self.client.get_me()
             self._username = me.data.username
         return self._username
+
+    @property
+    def _v1_api(self) -> tweepy.API:
+        """Lazily create a v1.1 API instance for media uploads."""
+        if self._v1_api_instance is None:
+            auth = tweepy.OAuth1UserHandler(
+                self._api_key, self._api_secret,
+                self._access_token, self._access_token_secret,
+            )
+            self._v1_api_instance = tweepy.API(auth)
+        return self._v1_api_instance
+
+    def upload_media(self, file_path: str, alt_text: str = "") -> Optional[str]:
+        """Upload a media file via v1.1 API.
+
+        Returns the media_id string, or None on failure.
+        """
+        try:
+            media = self._v1_api.media_upload(filename=file_path)
+            if alt_text:
+                self._v1_api.create_media_metadata(media.media_id, alt_text=alt_text)
+            return str(media.media_id)
+        except tweepy.TweepyException as e:
+            logger.warning(f"Media upload failed: {e}")
+            return None
+
+    def post_with_media(
+        self, text: str, media_path: str, alt_text: str = ""
+    ) -> PostResult:
+        """Post a tweet with an attached image.
+
+        Uploads the image via v1.1, then creates the tweet via v2.
+        """
+        media_id = self.upload_media(media_path, alt_text)
+        if not media_id:
+            return PostResult(success=False, error="Media upload failed")
+
+        try:
+            response = self.client.create_tweet(
+                text=text, media_ids=[media_id]
+            )
+            tweet_id = response.data["id"]
+            return PostResult(
+                success=True,
+                tweet_id=tweet_id,
+                url=f"https://x.com/{self.username}/status/{tweet_id}",
+            )
+        except tweepy.TweepyException as e:
+            return PostResult(success=False, error=str(e))
 
     def get_profile_metrics(self) -> dict | None:
         """Fetch authenticated user's public metrics (follower/following counts)."""

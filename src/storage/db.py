@@ -79,6 +79,10 @@ class Database:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN bluesky_uri TEXT")
             if "content_format" not in cols:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN content_format TEXT")
+            if "image_path" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_path TEXT")
+            if "image_prompt" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_prompt TEXT")
             # Migrate reply_queue for cultivate enrichment
             rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
             if rq_cols and "relationship_context" not in rq_cols:
@@ -276,12 +280,15 @@ class Database:
         content: str,
         eval_score: float,
         eval_feedback: str,
-        content_format: Optional[str] = None
+        content_format: Optional[str] = None,
+        image_path: Optional[str] = None,
+        image_prompt: Optional[str] = None,
     ) -> int:
         cursor = self.conn.execute(
             """INSERT INTO generated_content
-               (content_type, source_commits, source_messages, content, eval_score, eval_feedback, content_format)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (content_type, source_commits, source_messages, content, eval_score, eval_feedback,
+                content_format, image_path, image_prompt)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 content_type,
                 json.dumps(source_commits),
@@ -289,7 +296,9 @@ class Database:
                 content,
                 eval_score,
                 eval_feedback,
-                content_format
+                content_format,
+                image_path,
+                image_prompt,
             )
         )
         self.conn.commit()

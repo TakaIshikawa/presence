@@ -348,6 +348,75 @@ class TestCaching:
         mock_store.get_recent_by_source_type.assert_called_once()
 
 
+class TestBuildHookContext:
+    @patch("synthesis.trend_context.anthropic.Anthropic")
+    def test_builds_hook_context(self, MockAnthropic):
+        mock_client = MagicMock()
+        MockAnthropic.return_value = mock_client
+
+        responses = []
+        resp1 = MagicMock()
+        resp1.content = [MagicMock()]
+        resp1.content[0].text = '["Agent autonomy hype", "Structured outputs everywhere"]'
+        responses.append(resp1)
+        resp2 = MagicMock()
+        resp2.content = [MagicMock()]
+        resp2.content[0].text = json.dumps([
+            "Everyone is posting about agent autonomy; your validator/test work is the part that makes it real."
+        ])
+        responses.append(resp2)
+        mock_client.messages.create.side_effect = responses
+
+        mock_store = MagicMock()
+        mock_store.get_recent_by_source_type.return_value = [
+            _make_item("karpathy", "Agents are getting more autonomous"),
+            _make_item("swyx", "Structured outputs are now table stakes"),
+            _make_item("simonw", "The boring parts of reliability matter"),
+        ]
+
+        builder = TrendContextBuilder(
+            knowledge_store=mock_store,
+            api_key="test-key",
+        )
+        result = builder.build_hook_context(
+            prompts=["Add schema validation for config"],
+            commits=[{"repo_name": "presence", "message": "add 40 validator tests"}],
+        )
+
+        assert "TREND HOOKS" in result
+        assert "agent autonomy" in result.lower()
+
+    @patch("synthesis.trend_context.anthropic.Anthropic")
+    def test_empty_when_no_hooks(self, MockAnthropic):
+        mock_client = MagicMock()
+        MockAnthropic.return_value = mock_client
+
+        resp1 = MagicMock()
+        resp1.content = [MagicMock()]
+        resp1.content[0].text = '["Theme 1"]'
+        resp2 = MagicMock()
+        resp2.content = [MagicMock()]
+        resp2.content[0].text = "not json"
+        mock_client.messages.create.side_effect = [resp1, resp2]
+
+        mock_store = MagicMock()
+        mock_store.get_recent_by_source_type.return_value = [
+            _make_item("a", "post 1"),
+            _make_item("b", "post 2"),
+            _make_item("c", "post 3"),
+        ]
+
+        builder = TrendContextBuilder(
+            knowledge_store=mock_store,
+            api_key="test-key",
+        )
+        result = builder.build_hook_context(
+            prompts=["prompt"],
+            commits=[{"repo_name": "presence", "message": "commit"}],
+        )
+        assert result == ""
+
+
 class TestKnowledgeStoreGetRecent:
     """Tests for KnowledgeStore.get_recent_by_source_type()."""
 
@@ -434,7 +503,7 @@ class TestXClientGetUserId:
 
         result = client.get_user_id("karpathy")
         assert result == "12345"
-        client.client.get_user.assert_called_once_with(username="karpathy")
+        client.client.get_user.assert_called_once_with(username="karpathy", user_auth=True)
 
     def test_returns_none_when_not_found(self):
         from output.x_client import XClient

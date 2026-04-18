@@ -88,6 +88,65 @@ class SynthesisPipeline:
         ),
     ]
 
+    # Long-form post format directives — control essay structure
+    LONG_POST_FORMATS = [
+        (
+            "deep_dive",
+            "FORMAT: Deep-dive into one technical decision you made today. "
+            "What were the options? What did you pick and why? What would you "
+            "tell someone facing the same choice? Write it as a short essay.",
+        ),
+        (
+            "retrospective",
+            "FORMAT: Before/after comparison. Start with how things were, "
+            "describe what you changed, and end with what's different now. "
+            "Focus on the 'why' — what made the old way insufficient.",
+        ),
+        (
+            "framework",
+            "FORMAT: Present a reusable mental framework you discovered while building. "
+            "'When X happens, try Y because Z.' Ground it in today's specific work "
+            "but make it applicable beyond your project.",
+        ),
+        (
+            "narrative",
+            "FORMAT: Tell the full story of a problem you hit today. "
+            "What were you trying to do? What went wrong? How did you figure it out? "
+            "Write it like you're recounting the experience to a colleague.",
+        ),
+        (
+            "analysis",
+            "FORMAT: Analyze a trade-off you faced in today's work. "
+            "What were the competing concerns? What did you sacrifice and why? "
+            "What would have changed your decision?",
+        ),
+    ]
+
+    # Visual post format directives — short text to accompany an image
+    VISUAL_POST_FORMATS = [
+        (
+            "annotated_insight",
+            "FORMAT: A punchy observation that the accompanying image will visualize. "
+            "Frame the insight — the image shows the evidence. Keep it under 200 chars.",
+        ),
+        (
+            "data_callout",
+            "FORMAT: Commentary on a surprising metric or comparison the image highlights. "
+            "'Didn't expect this number...' or 'The gap here tells you everything.'",
+        ),
+        (
+            "meme_commentary",
+            "FORMAT: Relatable developer moment with a touch of humor. "
+            "The image captures the situation — your text adds the punchline or reaction.",
+        ),
+        (
+            "trend_linked",
+            "FORMAT: Connect today's work to a theme people are already reacting to right now. "
+            "Use one real bridge from current discourse if it genuinely fits. "
+            "Your text should name the tension or angle, not summarize the trend.",
+        ),
+    ]
+
     # Thread format directives — control how TWEET 1 hooks the reader
     THREAD_FORMATS = [
         (
@@ -159,6 +218,8 @@ class SynthesisPipeline:
     # Character limits per content type
     CHAR_LIMITS = {
         "x_post": 280,
+        "x_long_post": 2000,
+        "x_visual": 200,
     }
 
     @staticmethod
@@ -412,7 +473,14 @@ class SynthesisPipeline:
         Returns:
             (directives, format_names): Lists of format directives and their names
         """
-        formats = self.THREAD_FORMATS if content_type == "x_thread" else self.POST_FORMATS
+        if content_type == "x_thread":
+            formats = self.THREAD_FORMATS
+        elif content_type == "x_long_post":
+            formats = self.LONG_POST_FORMATS
+        elif content_type == "x_visual":
+            formats = self.VISUAL_POST_FORMATS
+        else:
+            formats = self.POST_FORMATS
 
         if weights:
             # Weighted selection with replacement (allows duplicates if num > len(formats))
@@ -546,6 +614,9 @@ class SynthesisPipeline:
                 db=self.db,
             )
             trend_context, trend_knowledge_ids = trend_builder.build_context_with_ids()
+            trend_hooks = trend_builder.build_hook_context(prompts=prompts, commits=commits)
+            if trend_hooks:
+                trend_context = (trend_context + "\n" + trend_hooks).strip() + "\n"
 
         # Stage 1.6: Load format weights if enabled
         format_weights = None
@@ -562,6 +633,19 @@ class SynthesisPipeline:
         format_directives, format_names = self._select_format_directives(
             self.num_candidates, content_type, weights=format_weights
         )
+        if content_type == "x_visual" and trend_context:
+            trend_directive = next(
+                directive
+                for name, directive in self.VISUAL_POST_FORMATS
+                if name == "trend_linked"
+            )
+            if "trend_linked" not in format_names:
+                if format_directives:
+                    format_directives[-1] = trend_directive
+                    format_names[-1] = "trend_linked"
+                else:
+                    format_directives = [trend_directive]
+                    format_names = ["trend_linked"]
         candidates = self.generator.generate_candidates(
             prompts=prompts,
             commits=commits,

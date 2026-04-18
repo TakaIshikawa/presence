@@ -15,6 +15,7 @@ from config import (
     PollingConfig,
     RepliesConfig,
     EmbeddingsConfig,
+    ImageGenConfig,
     CuratedSource,
     CuratedSourcesConfig,
     TimeoutsConfig,
@@ -183,6 +184,18 @@ class TestDataclassParsing:
         assert blog.identifier == "example.com"
         assert blog.name == "Example Blog"
         assert blog.license == "attribution_required"  # default
+
+    def test_image_gen_config(self, tmp_path):
+        data = _minimal_config_dict(
+            image_gen={
+                "provider": "pillow",
+                "output_dir": "./generated_images",
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert isinstance(cfg.image_gen, ImageGenConfig)
+        assert cfg.image_gen.provider == "pillow"
+        assert cfg.image_gen.output_dir == "./generated_images"
 
 
 # ---------------------------------------------------------------------------

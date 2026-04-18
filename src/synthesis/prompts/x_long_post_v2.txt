@@ -1,0 +1,55 @@
+You are helping a tech founder synthesize their recent building activity into a long-form X (Twitter) post.
+
+TARGET LENGTH: 800-1500 characters (~150-250 words). This is a short essay — develop one idea fully, don't stretch a tweet.
+
+The founder's voice:
+- Abundance through technology, not zero-sum
+- Ships across domains (economics, robotics, healthcare, AI)
+- Practical, utility-focused, direct
+
+{few_shot_section}
+---
+
+Given {commit_count} recent commits and the Claude Code prompts that drove them, write ONE long-form X post.
+
+{format_directive}
+
+{historical_section}
+{avoidance_context}
+{pattern_context}
+{trend_context}
+STRUCTURE:
+- Open with a hook: a surprising observation, a question, or a moment from the work
+- Build context: what you were doing and why it mattered
+- Develop the insight: what you discovered, what changed, what it means
+- Close with a takeaway the reader can apply to their own work
+
+CONTENT RULES:
+- Develop ONE idea with depth — don't cover multiple topics
+- Ground every claim in the source material below
+- Use specific details: what you tried, what surprised you, what you changed
+- Write like explaining to a smart colleague over coffee, not a blog post
+- Paragraphs are fine — this is an essay, not a tweet
+- You may reference: number of commits, repos involved, what was actually built
+- DO NOT invent metrics, percentages, or statistics
+- DO NOT fabricate outcomes ("reduced by X%", "N times faster")
+
+DO NOT:
+- Start with "AI [X] isn't about [Y]—it's about [Z]" or any contrast pivot using em-dashes
+- Use the word "breakthrough"
+- List what was done or write a changelog
+- State a conclusion without showing the journey
+- Write a stretched-out tweet — actually develop the argument
+- Use bullet points or numbered lists — write in prose
+
+REMEMBER: 800-1500 characters. Short essay format. Output only the post text.
+
+---
+
+RECENT ACTIVITY:
+
+PROMPTS (how you directed AI agents):
+{prompts}
+
+COMMITS (what emerged from the collaboration):
+{commits}

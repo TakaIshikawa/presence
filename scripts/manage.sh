@@ -19,10 +19,12 @@ AGENTS=(
     "com.presence.resolve"
     "com.presence.discover"
     "com.presence.discover-accounts"
+    "com.presence.long-post"
+    "com.presence.visual-post"
 )
 
 usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|reply|knowledge|curate|review-accounts}"
+    echo "Usage: $0 {start|stop|restart|status|logs|run|retry|reply|knowledge|curate|review-accounts|long-post}"
     echo ""
     echo "Commands:"
     echo "  start     - Load and start all automation jobs"
@@ -30,12 +32,14 @@ usage() {
     echo "  restart   - Stop then start all jobs"
     echo "  status    - Show status of all jobs"
     echo "  logs      - Tail all log files"
-    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve|discover|discover-accounts)"
+    echo "  run       - Run a specific job now (poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve|discover|discover-accounts|long-post)"
     echo "  retry     - Retry posting unpublished content"
     echo "  reply     - Review and post pending reply drafts"
     echo "  knowledge - Knowledge base commands (build|fetch|stats)"
     echo "  curate    - Content quality curation (list|flag|clear|stats)"
     echo "  review-accounts - Review and approve discovered candidate accounts"
+    echo "  long-post - Generate and post a long-form essay"
+    echo "  visual-post - Generate and post a visual post with image"
     exit 1
 }
 
@@ -155,8 +159,16 @@ run_job() {
             echo "Running discover_accounts.py..."
             cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/discover_accounts.py
             ;;
+        long-post)
+            echo "Running long_post.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/long_post.py
+            ;;
+        visual-post)
+            echo "Running visual_post.py..."
+            cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/visual_post.py
+            ;;
         *)
-            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve|discover|discover-accounts}"
+            echo "Usage: $0 run {poll|daily|weekly|replies|newsletter|retry|knowledge|curated|ops-sync|resolve|discover|discover-accounts|long-post|visual-post}"
             exit 1
             ;;
     esac
@@ -228,6 +240,14 @@ conn.close()
     review-accounts)
         echo "Reviewing candidate accounts..."
         cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/review_accounts.py
+        ;;
+    long-post)
+        echo "Generating long-form post..."
+        cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/long_post.py
+        ;;
+    visual-post)
+        echo "Generating visual post..."
+        cd "$PROJECT_DIR" && /opt/anaconda3/bin/python scripts/visual_post.py
         ;;
     *)
         usage
