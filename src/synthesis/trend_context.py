@@ -117,6 +117,41 @@ class TrendContextBuilder:
 
         return result, knowledge_ids
 
+    def build_hook_context(
+        self,
+        prompts: list[str],
+        commits: list[dict],
+        max_items: int = 15,
+        max_age_hours: int = 72,
+        max_hooks: int = 3,
+    ) -> str:
+        """Build concrete bridge hooks from current work to current discourse."""
+        items = self.store.get_recent_by_source_type(
+            source_type="curated_x",
+            limit=max_items,
+            max_age_hours=max_age_hours,
+        )
+
+        if len(items) < 3 or (not prompts and not commits):
+            return ""
+
+        themes = self._extract_themes(items)
+        if not themes:
+            return ""
+
+        hooks = self._extract_hooks(themes, items, prompts, commits, max_hooks=max_hooks)
+        if not hooks:
+            return ""
+
+        lines = [
+            "TREND HOOKS (bridges from your work to current discourse):",
+            "Only use these when the connection is real. Borrow the angle, not the claim.",
+        ]
+        for hook in hooks[:max_hooks]:
+            lines.append(f"- {hook}")
+        lines.append("")
+        return "\n".join(lines)
+
     def _get_cached(self, cache_ttl_hours: int) -> Optional[str]:
         """Return cached trend context if fresh enough."""
         raw = self.db.get_meta("trend_themes")
@@ -243,6 +278,92 @@ JSON array:"""
                 except json.JSONDecodeError:
                     pass
             logger.warning("Failed to parse trend themes from Claude response")
+        return []
+
+    def _extract_hooks(
+        self,
+        themes: list[str],
+        items: list[KnowledgeItem],
+        prompts: list[str],
+        commits: list[dict],
+        max_hooks: int = 3,
+    ) -> list[str]:
+        """Generate concrete content angles that connect current work to recent discourse."""
+        prompt_text = "\n".join(f"- {p[:220]}" for p in prompts[:5]) or "- none"
+        commit_text = "\n".join(
+            f"- [{c.get('repo_name', '')}] {c.get('message') or c.get('commit_message', '')}"
+            for c in commits[:6]
+        ) or "- none"
+        notable = "\n".join(
+            f"- @{item.author}: {(item.insight or item.content)[:220]}"
+            for item in items[:5]
+        )
+        themes_text = "\n".join(f"- {theme}" for theme in themes[:5])
+
+        prompt = f"""You are connecting a builder's real work to current tech discourse on X.
+
+Current work:
+Prompts:
+{prompt_text}
+
+Commits:
+{commit_text}
+
+Current discourse themes:
+{themes_text}
+
+Notable recent takes:
+{notable}
+
+Return ONLY a JSON array with up to {max_hooks} hook strings.
+Each hook should:
+- be 8-20 words
+- name a current theme people are reacting to
+- show the bridge to this builder's actual work
+- suggest an angle, tension, or contrast worth posting about
+- avoid generic advice and avoid pretending the builder is commenting on news they didn't touch
+
+Good example shape:
+"Everyone is posting about agent autonomy; your validator/test work is the unsexy part that makes it real."
+
+JSON array:"""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.APIConnectionError as e:
+            logger.error(f"Failed to connect to Anthropic API: {type(e).__name__}: {e}")
+            return []
+        except anthropic.APIStatusError as e:
+            logger.error(f"Anthropic API status error: {type(e).__name__}: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Trend hook extraction failed: {type(e).__name__}: {e}")
+            return []
+
+        text = response.content[0].text.strip()
+        if text.startswith("```"):
+            parts = text.split("```")
+            text = parts[1] if len(parts) > 1 else text
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
+        try:
+            hooks = json.loads(text)
+            if isinstance(hooks, list):
+                return [str(h) for h in hooks[:max_hooks]]
+        except json.JSONDecodeError:
+            match = re.search(r"\[.*?\]", text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))[:max_hooks]
+                except json.JSONDecodeError:
+                    pass
+            logger.warning("Failed to parse trend hooks from Claude response")
         return []
 
     @staticmethod

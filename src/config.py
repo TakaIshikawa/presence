@@ -128,6 +128,12 @@ class SchedulingConfig:
 
 
 @dataclass
+class ImageGenConfig:
+    provider: str = "pillow"
+    output_dir: str = "generated_images"
+
+
+@dataclass
 class ProactiveConfig:
     enabled: bool = False
     max_daily_replies: int = 5
@@ -160,6 +166,7 @@ class Config:
     timeouts: TimeoutsConfig
     scheduling: Optional[SchedulingConfig]
     proactive: Optional[ProactiveConfig]
+    image_gen: Optional[ImageGenConfig]
 
 
 def _resolve_env_var(value: str) -> str:
@@ -344,6 +351,14 @@ def load_config(config_path: Optional[str] = None) -> Config:
             min_discovery_samples=data["proactive"].get("min_discovery_samples", 3),
         )
 
+    # Parse image generation config if present
+    image_gen_config = None
+    if "image_gen" in data:
+        image_gen_config = ImageGenConfig(
+            provider=data["image_gen"].get("provider", "pillow"),
+            output_dir=data["image_gen"].get("output_dir", "generated_images"),
+        )
+
     return Config(
         github=GitHubConfig(
             username=_require(data, "github", "username", section="github"),
@@ -388,4 +403,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         timeouts=timeouts_config,
         scheduling=scheduling_config,
         proactive=proactive_config,
+        image_gen=image_gen_config,
     )

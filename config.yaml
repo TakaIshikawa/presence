@@ -93,6 +93,11 @@ scheduling:
   enabled: false         # Enable time-based posting optimization
   min_samples: 20        # Minimum posts needed before optimizing schedule
 
+# Image generation for visual posts
+image_gen:
+  provider: "pillow"
+  output_dir: "./generated_images"
+
 # Proactive engagement (reply to others' tweets for reach)
 proactive:
   enabled: true
