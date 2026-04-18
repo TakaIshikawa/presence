@@ -1,6 +1,7 @@
 """Shared script runner utilities."""
 
 import sys
+import logging
 import subprocess
 from pathlib import Path
 from contextlib import contextmanager
@@ -8,6 +9,8 @@ from collections.abc import Generator
 
 from config import load_config, Config
 from storage.db import Database
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SCHEMA_PATH = str(PROJECT_ROOT / "schema.sql")
@@ -55,5 +58,5 @@ def update_monitoring(operation: str) -> None:
                 check=False,
                 capture_output=True,
             )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        logger.debug(f"Failed to update monitoring for operation '{operation}': {e}")
