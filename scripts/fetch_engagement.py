@@ -95,7 +95,7 @@ def main():
                 response = client.get_tweets(
                     ids=batch, tweet_fields=["public_metrics"]
                 )
-            except Exception as e:
+            except tweepy.TweepyException as e:
                 logger.error(f"API error fetching batch {i // BATCH_SIZE + 1}: {e}")
                 continue
 
