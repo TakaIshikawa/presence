@@ -73,13 +73,13 @@ class TestPipelineConstruction:
         db = MagicMock()
         pipeline = SynthesisPipeline(
             api_key="test-key",
-            generator_model="claude-sonnet-4-20250514",
-            evaluator_model="claude-opus-4-20250514",
+            generator_model="claude-sonnet-4-6",
+            evaluator_model="claude-opus-4-7",
             db=db,
             num_candidates=3,
         )
-        MockGen.assert_called_once_with("test-key", "claude-sonnet-4-20250514", timeout=300.0)
-        MockEval.assert_called_once_with("test-key", "claude-opus-4-20250514", timeout=300.0)
+        MockGen.assert_called_once_with("test-key", "claude-sonnet-4-6", timeout=300.0)
+        MockEval.assert_called_once_with("test-key", "claude-opus-4-7", timeout=300.0)
         assert pipeline.num_candidates == 3
 
 

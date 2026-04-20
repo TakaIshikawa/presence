@@ -22,7 +22,7 @@ def _make_config():
     """Create a mock config object with required attributes."""
     config = MagicMock()
     config.anthropic.api_key = "test-api-key"
-    config.synthesis.eval_model = "claude-opus-4-20250514"
+    config.synthesis.eval_model = "claude-opus-4-7"
     return config
 
 
@@ -129,7 +129,7 @@ class TestMainHappyPath:
         # Verify PatternAnalyzer initialization
         MockPatternAnalyzer.assert_called_once_with(
             api_key="test-api-key",
-            model="claude-opus-4-20250514",
+            model="claude-opus-4-7",
         )
 
         # Verify analyze was called with correct data

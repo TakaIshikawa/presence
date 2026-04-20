@@ -119,7 +119,7 @@ class TestInsightExtractor:
     def test_default_model(self):
         with patch("knowledge.ingest.anthropic.Anthropic"):
             ext = InsightExtractor(api_key="test")
-            assert ext.model == "claude-sonnet-4-20250514"
+            assert ext.model == "claude-sonnet-4-6"
 
     def test_api_connection_error_raises_insight_extraction_error(self, extractor_with_client):
         ext, client = extractor_with_client
