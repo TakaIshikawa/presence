@@ -91,6 +91,12 @@ class TopicExtractor:
             raise TopicExtractionAPIError(
                 f"Topic extraction failed: {error_name}: {e}"
             ) from e
+        except Exception as e:
+            error_name = type(e).__name__
+            logger.error(f"Topic extraction failed: {error_name}: {e}")
+            raise TopicExtractionAPIError(
+                f"Topic extraction failed: {error_name}: {e}"
+            ) from e
 
     def batch_extract(self, contents: list[str]) -> list[list[tuple[str, str, float]]]:
         """Extract topics for multiple contents efficiently.

@@ -396,4 +396,10 @@ JSON array:"""
             lines.append(f"- @{item.author}: {insight}")
 
         lines.append("")
+        lines.append("How to use this:")
+        lines.append("- Connect to a live theme only when today's work gives you a real angle.")
+        lines.append("- Prefer a concrete bridge from your build log over commentary on the trend itself.")
+        lines.append("- Do not mention a person, event, or claim unless it appears in the source context above.")
+
+        lines.append("")
         return "\n".join(lines)
