@@ -20,8 +20,8 @@ paths:
   database: "./presence.db"
 
 synthesis:
-  model: "claude-sonnet-4-20250514"
-  eval_model: "claude-opus-4-20250514"
+  model: "claude-sonnet-4-6"
+  eval_model: "claude-opus-4-7"
   eval_threshold: 0.7  # minimum score to auto-post
   num_candidates: 3
 

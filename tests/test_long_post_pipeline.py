@@ -66,8 +66,8 @@ def _build_pipeline():
 
         pipeline = SynthesisPipeline(
             api_key="test-key",
-            generator_model="claude-sonnet-4-20250514",
-            evaluator_model="claude-opus-4-20250514",
+            generator_model="claude-sonnet-4-6",
+            evaluator_model="claude-opus-4-7",
             db=db,
             num_candidates=3,
         )

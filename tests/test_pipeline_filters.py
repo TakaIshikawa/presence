@@ -35,8 +35,8 @@ def pipeline(mock_db, mock_generator):
          patch("synthesis.pipeline.FewShotSelector"):
         pipeline = SynthesisPipeline(
             api_key="test-key",
-            generator_model="claude-sonnet-4-20250514",
-            evaluator_model="claude-opus-4-20250514",
+            generator_model="claude-sonnet-4-6",
+            evaluator_model="claude-opus-4-7",
             db=mock_db,
             num_candidates=3,
         )

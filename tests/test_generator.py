@@ -543,7 +543,7 @@ class TestConstructor:
     def test_default_model(self):
         with patch("synthesis.generator.anthropic.Anthropic"):
             gen = ContentGenerator(api_key="test")
-            assert gen.model == "claude-sonnet-4-20250514"
+            assert gen.model == "claude-sonnet-4-6"
 
     def test_custom_model(self):
         with patch("synthesis.generator.anthropic.Anthropic"):
