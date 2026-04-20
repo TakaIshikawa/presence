@@ -89,6 +89,13 @@ def post_to_x(x_client: XClient, content_type: str, content: str):
     return x_client.post(content)
 
 
+def is_posting_blocked_error(error: object) -> bool:
+    """Return True when a posting failure should pause new generation."""
+    if error is None:
+        return False
+    return "429" not in str(error)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -164,6 +171,7 @@ def main() -> None:
 
         posted = False
         rate_limited = False
+        posting_blocked = False
 
         # First, try to post any unpublished content from previous runs
         min_score = config.synthesis.eval_threshold * 10
@@ -203,15 +211,26 @@ def main() -> None:
                         logger.info(f"  Cross-posted to Bluesky: {bsky_result.url}")
                     else:
                         logger.warning(f"  Bluesky cross-post failed (non-fatal): {bsky_result.error}")
-            elif "429" in str(result.error):
+            elif not is_posting_blocked_error(result.error):
                 logger.info(f"  Still rate limited, will retry next cycle")
                 rate_limited = True
             else:
+                posting_blocked = True
                 count = db.increment_retry(item["id"])
                 if count >= 3:
                     logger.warning(f"  Post failed: {result.error} (attempt {retry_num}/3 — abandoned)")
                 else:
                     logger.warning(f"  Post failed: {result.error} (attempt {retry_num}/3)")
+
+        if posting_blocked:
+            logger.warning(
+                "Posting is blocked while retrying queued content; "
+                "skipping new generation to avoid spending LLM tokens."
+            )
+            db.set_last_poll_time(current_poll_time)
+            update_monitoring("run-poll")
+            logger.info("Done. No posts made.")
+            return
 
         # --- Phase 1: Ingest new commits ---
         new_commit_count = 0
@@ -488,13 +507,15 @@ def main() -> None:
                 logger.warning("Below threshold, not posting")
 
         # Embed content for future semantic dedup
-        if embedder and content_id:
+        if embedder and content_id and pipeline_result.final_content.strip():
             try:
                 vectors = embedder.embed_batch([pipeline_result.final_content])
                 if vectors:
                     db.set_content_embedding(content_id, serialize_embedding(vectors[0]))
             except (EmbeddingError, sqlite3.Error) as e:
                 logger.warning(f"Embedding failed (non-fatal): {e}")
+        elif embedder and content_id:
+            logger.info("Skipping embedding for empty generated content")
 
         # Record pipeline run
         db.insert_pipeline_run(

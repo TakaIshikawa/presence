@@ -14,6 +14,7 @@ from poll_commits import (
     choose_content_type,
     estimate_tokens,
     get_retryable_content,
+    is_posting_blocked_error,
     is_daily_cap_reached,
     post_to_x,
 )
@@ -149,6 +150,15 @@ class TestContentMixHelpers:
             "thread",
             ["One", "Two"],
         )
+
+    def test_rate_limit_does_not_block_future_generation(self):
+        assert is_posting_blocked_error("429 Too Many Requests") is False
+
+    def test_payment_required_blocks_future_generation(self):
+        assert is_posting_blocked_error("402 Payment Required") is True
+
+    def test_unknown_posting_error_blocks_future_generation(self):
+        assert is_posting_blocked_error("401 Unauthorized") is True
 
 
 # ---------------------------------------------------------------------------
