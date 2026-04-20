@@ -20,7 +20,6 @@ AGENTS=(
     "com.presence.discover"
     "com.presence.discover-accounts"
     "com.presence.long-post"
-    "com.presence.visual-post"
 )
 
 usage() {
