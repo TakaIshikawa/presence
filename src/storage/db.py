@@ -374,6 +374,30 @@ class Database:
             return dt
         return None
 
+    def get_last_published_time_any(
+        self, content_types: list[str]
+    ) -> Optional[datetime]:
+        """Get the most recent published_at timestamp across content types."""
+        if not content_types:
+            return None
+        placeholders = ",".join("?" for _ in content_types)
+        cursor = self.conn.execute(
+            f"""SELECT published_at FROM generated_content
+                WHERE content_type IN ({placeholders})
+                  AND published = 1
+                  AND published_at IS NOT NULL
+                ORDER BY published_at DESC
+                LIMIT 1""",
+            tuple(content_types),
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            dt = datetime.fromisoformat(row[0])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return None
+
     # Poll state
     def get_last_poll_time(self) -> Optional[datetime]:
         """Get the last successful poll time."""

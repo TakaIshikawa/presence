@@ -26,8 +26,8 @@ from storage.db import Database
 from ingestion.github_commits import GitHubClient
 from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
+from synthesis.content_mix import ContentMixPlanner
 from output.x_client import XClient, parse_thread_content
-from output.bluesky_client import BlueskyClient
 from knowledge.embeddings import (
     VoyageEmbeddings,
     serialize_embedding,
@@ -67,6 +67,26 @@ def is_daily_cap_reached(posts_today: int, max_daily: int) -> bool:
 def get_retryable_content(db: Database, min_score: float, content_type: str = "x_thread") -> list[dict]:
     """Return unpublished content eligible for retry (retry_count < MAX_RETRIES)."""
     return db.get_unpublished_content(content_type, min_score)
+
+
+def choose_content_type(
+    db: Database,
+    accumulated_tokens: int,
+    has_prompts: bool,
+) -> tuple[str, str]:
+    """Choose the content type for the next auto-generation run."""
+    decision = ContentMixPlanner(db).choose(
+        accumulated_tokens=accumulated_tokens,
+        has_prompts=has_prompts,
+    )
+    return decision.content_type, decision.reason
+
+
+def post_to_x(x_client: XClient, content_type: str, content: str):
+    """Post generated content to X with the right API path."""
+    if content_type == "x_thread":
+        return x_client.post_thread(parse_thread_content(content))
+    return x_client.post(content)
 
 
 def main() -> None:
@@ -122,7 +142,8 @@ def main() -> None:
 
         # Initialize Bluesky client if configured
         bluesky_client = None
-        if config.bluesky and config.bluesky.enabled:
+        if config.bluesky and getattr(config.bluesky, "enabled", False) is True:
+            from output.bluesky_client import BlueskyClient
             bluesky_client = BlueskyClient(
                 config.bluesky.handle,
                 config.bluesky.app_password
@@ -146,13 +167,16 @@ def main() -> None:
 
         # First, try to post any unpublished content from previous runs
         min_score = config.synthesis.eval_threshold * 10
-        unpublished = get_retryable_content(db, min_score)
+        unpublished = (
+            get_retryable_content(db, min_score, "x_thread")
+            + get_retryable_content(db, min_score, "x_post")
+        )
         if unpublished:
             logger.info(f"Retrying {len(unpublished)} unpublished posts...")
             item = unpublished[0]
             retry_num = (item.get("retry_count") or 0) + 1
-            tweets = parse_thread_content(item["content"])
-            result = x_client.post_thread(tweets)
+            content_type = item.get("content_type", "x_thread")
+            result = post_to_x(x_client, content_type, item["content"])
             if result.success:
                 db.mark_published(item["id"], result.url, tweet_id=result.tweet_id)
                 logger.info(f"  Posted queued: {result.url}")
@@ -162,8 +186,18 @@ def main() -> None:
                 if bluesky_client:
                     from output.cross_poster import CrossPoster
                     cross_poster = CrossPoster(bluesky_client=bluesky_client)
-                    bsky_tweets = [cross_poster.adapt_for_bluesky(t, "x_thread") for t in tweets]
-                    bsky_result = bluesky_client.post_thread(bsky_tweets)
+                    if content_type == "x_thread":
+                        tweets = parse_thread_content(item["content"])
+                        bsky_tweets = [
+                            cross_poster.adapt_for_bluesky(t, "x_thread")
+                            for t in tweets
+                        ]
+                        bsky_result = bluesky_client.post_thread(bsky_tweets)
+                    else:
+                        bsky_text = cross_poster.adapt_for_bluesky(
+                            item["content"], content_type
+                        )
+                        bsky_result = bluesky_client.post(bsky_text)
                     if bsky_result.success:
                         db.mark_published_bluesky(item["id"], bsky_result.uri)
                         logger.info(f"  Cross-posted to Bluesky: {bsky_result.url}")
@@ -209,7 +243,7 @@ def main() -> None:
 
         # --- Phase 2: Readiness check ---
         # Daily post cap
-        posts_today = db.count_posts_today("x_thread")
+        posts_today = db.count_posts_today("x_thread") + db.count_posts_today("x_post")
         max_daily = config.polling.max_daily_posts
         if is_daily_cap_reached(posts_today, max_daily):
             logger.info(f"Daily post limit reached ({posts_today}/{max_daily}), waiting for tomorrow")
@@ -218,7 +252,7 @@ def main() -> None:
             logger.info("Done. No posts made.")
             return
 
-        last_post_time = db.get_last_published_time("x_thread")
+        last_post_time = db.get_last_published_time_any(["x_thread", "x_post"])
         now = datetime.now(timezone.utc)
 
         if last_post_time is None:
@@ -282,14 +316,20 @@ def main() -> None:
         ]
         prompt_text_list = [p.prompt_text for p in prompts_since]
         prompt_uuids = [p.message_uuid for p in prompts_since]
+        content_type, content_type_reason = choose_content_type(
+            db,
+            accumulated_tokens=accumulated_tokens,
+            has_prompts=bool(prompt_text_list),
+        )
+        logger.info(f"Content mix selected {content_type}: {content_type_reason}")
 
         # Inject historical context if configured
         if config.historical and config.historical.enabled:
             from synthesis.theme_selector import ThemeSelector
             theme_selector = ThemeSelector(db)
-            if theme_selector.should_inject("x_thread", config.historical.injection_frequency):
+            if theme_selector.should_inject(content_type, config.historical.injection_frequency):
                 ctx = theme_selector.select(
-                    commit_dicts, "x_thread",
+                    commit_dicts, content_type,
                     lookback_days=config.historical.lookback_days,
                     min_age_days=config.historical.min_age_days,
                     max_commits=config.historical.max_historical_commits,
@@ -305,7 +345,7 @@ def main() -> None:
         pipeline_result = pipeline.run(
             prompts=prompt_text_list,
             commits=commit_dicts,
-            content_type="x_thread",
+            content_type=content_type,
             threshold=config.synthesis.eval_threshold,
         )
 
@@ -321,7 +361,7 @@ def main() -> None:
 
         # Store generated content
         content_id = db.insert_generated_content(
-            content_type="x_thread",
+            content_type=content_type,
             source_commits=[c["sha"] for c in commit_dicts],
             source_messages=prompt_uuids,
             content=pipeline_result.final_content,
@@ -405,9 +445,10 @@ def main() -> None:
 
                 if not should_queue:
                     # Post immediately
-                    logger.info("Posting thread to X...")
-                    tweets = parse_thread_content(pipeline_result.final_content)
-                    result = x_client.post_thread(tweets)
+                    logger.info(f"Posting {content_type} to X...")
+                    result = post_to_x(
+                        x_client, content_type, pipeline_result.final_content
+                    )
                     if result.success:
                         db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
                         logger.info(f"Posted: {result.url}")
@@ -418,8 +459,18 @@ def main() -> None:
                         if bluesky_client:
                             from output.cross_poster import CrossPoster
                             cross_poster = CrossPoster(bluesky_client=bluesky_client)
-                            bsky_tweets = [cross_poster.adapt_for_bluesky(t, "x_thread") for t in tweets]
-                            bsky_result = bluesky_client.post_thread(bsky_tweets)
+                            if content_type == "x_thread":
+                                tweets = parse_thread_content(pipeline_result.final_content)
+                                bsky_tweets = [
+                                    cross_poster.adapt_for_bluesky(t, "x_thread")
+                                    for t in tweets
+                                ]
+                                bsky_result = bluesky_client.post_thread(bsky_tweets)
+                            else:
+                                bsky_text = cross_poster.adapt_for_bluesky(
+                                    pipeline_result.final_content, content_type
+                                )
+                                bsky_result = bluesky_client.post(bsky_text)
                             if bsky_result.success:
                                 db.mark_published_bluesky(content_id, bsky_result.uri)
                                 logger.info(f"Cross-posted to Bluesky: {bsky_result.url}")
@@ -448,7 +499,7 @@ def main() -> None:
         # Record pipeline run
         db.insert_pipeline_run(
             batch_id=pipeline_result.batch_id,
-            content_type="x_thread",
+            content_type=content_type,
             candidates_generated=len(pipeline_result.candidates),
             best_candidate_index=best_idx,
             best_score_before_refine=pipeline_result.comparison.best_score,

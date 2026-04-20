@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context
 from evaluation.engagement_scorer import compute_engagement_score
-from output.bluesky_client import BlueskyClient
 from output.x_client import XClient
 
 # Max tweets to fetch per batch (X API limit for GET /2/tweets)
@@ -127,6 +126,7 @@ def main() -> None:
                     quote_count=quote_count,
                     engagement_score=score,
                 )
+                db.backfill_prediction_actuals(post["id"], score)
                 fetched += 1
                 logger.info(
                     f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}"
@@ -134,13 +134,14 @@ def main() -> None:
 
         # Fetch Bluesky engagement metrics if enabled
         bluesky_fetched = 0
-        if config.bluesky and config.bluesky.enabled:
+        if config.bluesky and getattr(config.bluesky, "enabled", False) is True:
             logger.info("\n--- Fetching Bluesky engagement ---")
             bluesky_posts = db.get_content_needing_bluesky_engagement(max_age_days=7)
 
             if bluesky_posts:
                 logger.info(f"Fetching Bluesky metrics for {len(bluesky_posts)} posts")
 
+                from output.bluesky_client import BlueskyClient
                 bluesky_client = BlueskyClient(
                     handle=config.bluesky.handle,
                     app_password=config.bluesky.app_password

@@ -11,9 +11,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from poll_commits import (
     check_readiness,
+    choose_content_type,
     estimate_tokens,
     get_retryable_content,
     is_daily_cap_reached,
+    post_to_x,
 )
 from storage.db import MAX_RETRIES
 
@@ -120,6 +122,35 @@ class TestEstimateTokens:
         assert estimate_tokens([]) == 0
 
 
+class TestContentMixHelpers:
+    def test_choose_content_type_returns_reason(self, db):
+        content_type, reason = choose_content_type(
+            db,
+            accumulated_tokens=2000,
+            has_prompts=True,
+        )
+
+        assert content_type == "x_thread"
+        assert reason
+
+    def test_post_to_x_uses_single_post_for_x_post(self):
+        client = type("Client", (), {})()
+        client.post = lambda text: ("post", text)
+        client.post_thread = lambda tweets: ("thread", tweets)
+
+        assert post_to_x(client, "x_post", "hello") == ("post", "hello")
+
+    def test_post_to_x_uses_thread_for_x_thread(self):
+        client = type("Client", (), {})()
+        client.post = lambda text: ("post", text)
+        client.post_thread = lambda tweets: ("thread", tweets)
+
+        assert post_to_x(client, "x_thread", "TWEET 1:\nOne\n\nTWEET 2:\nTwo") == (
+            "thread",
+            ["One", "Two"],
+        )
+
+
 # ---------------------------------------------------------------------------
 # Integration tests using the in-memory DB fixture from conftest.py
 # ---------------------------------------------------------------------------
@@ -156,6 +187,30 @@ class TestDailyCapIntegration:
 
         posts_today = db.count_posts_today("x_thread")
         assert is_daily_cap_reached(posts_today, max_daily=3) is False
+
+    def test_last_published_time_any_uses_latest_across_posts_and_threads(self, db):
+        older = datetime.now(timezone.utc) - timedelta(hours=3)
+        newer = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        post_id = db.insert_generated_content(
+            "x_post", [], [], "post", 8.0, "ok"
+        )
+        thread_id = db.insert_generated_content(
+            "x_thread", [], [], "thread", 8.0, "ok"
+        )
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
+            (older.isoformat(), thread_id),
+        )
+        db.conn.execute(
+            "UPDATE generated_content SET published = 1, published_at = ? WHERE id = ?",
+            (newer.isoformat(), post_id),
+        )
+        db.conn.commit()
+
+        latest = db.get_last_published_time_any(["x_thread", "x_post"])
+
+        assert latest == newer
 
 
 class TestRetryLogicIntegration:
