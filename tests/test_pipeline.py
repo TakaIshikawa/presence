@@ -117,6 +117,12 @@ class TestContentTypeRouting:
 
         # condense was called for the over-limit candidate
         pipeline.generator.condense.assert_called()
+        pattern_context = pipeline.generator.generate_candidates.call_args.kwargs[
+            "pattern_context"
+        ]
+        assert "VOICE MEMORY" in pattern_context
+        assert "CONTENT MIX PLAN" in pattern_context
+        assert "OUTCOME LEARNING" in pattern_context
         assert result.final_content is not None
 
     @patch("synthesis.pipeline.ContentRefiner")

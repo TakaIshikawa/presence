@@ -14,6 +14,7 @@ from synthesis.generator import ContentGenerator
 from synthesis.evaluator_v2 import CrossModelEvaluator, ComparisonResult
 from synthesis.refiner import ContentRefiner, RefinementResult
 from synthesis.few_shot import FewShotSelector
+from synthesis.presence_context import PresenceContextBuilder
 from synthesis.stale_patterns import STALE_PATTERNS
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,7 @@ class SynthesisPipeline:
         self.knowledge_store = knowledge_store
         self.engagement_predictor = engagement_predictor
         self.format_weighting_enabled = format_weighting_enabled
+        self.presence_context_builder = PresenceContextBuilder(db)
 
     # Character limits per content type
     CHAR_LIMITS = {
@@ -601,6 +603,11 @@ class SynthesisPipeline:
         # Stage 2: Multi-candidate generation with format variation
         avoidance_context = self._build_avoidance_context()
         pattern_context = self._build_pattern_context()
+        presence_context = self.presence_context_builder.build_prompt_section(
+            content_type
+        )
+        if presence_context:
+            pattern_context = (pattern_context + "\n" + presence_context).strip() + "\n"
 
         # Stage 1.5: Trend context from curated sources
         trend_context = ""
