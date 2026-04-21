@@ -212,6 +212,21 @@ CREATE TABLE IF NOT EXISTS newsletter_sends (
 
 CREATE INDEX IF NOT EXISTS idx_newsletter_sends_sent_at ON newsletter_sends(sent_at);
 
+-- Track newsletter engagement metrics from Buttondown (time-series)
+CREATE TABLE IF NOT EXISTS newsletter_engagement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
+    issue_id TEXT NOT NULL,
+    opens INTEGER DEFAULT 0,
+    clicks INTEGER DEFAULT 0,
+    unsubscribes INTEGER DEFAULT 0,
+    fetched_at TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_send ON newsletter_engagement(newsletter_send_id);
+CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_issue ON newsletter_engagement(issue_id);
+
 -- Reply queue for reply-to-reply engagement
 CREATE TABLE IF NOT EXISTS reply_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

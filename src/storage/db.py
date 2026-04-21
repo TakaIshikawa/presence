@@ -140,6 +140,21 @@ class Database:
             """)
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_uri ON bluesky_engagement(bluesky_uri)")
+            # Migrate: create newsletter_engagement table if missing
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS newsletter_engagement (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
+                    issue_id TEXT NOT NULL,
+                    opens INTEGER DEFAULT 0,
+                    clicks INTEGER DEFAULT 0,
+                    unsubscribes INTEGER DEFAULT 0,
+                    fetched_at TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_send ON newsletter_engagement(newsletter_send_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_issue ON newsletter_engagement(issue_id)")
             self.conn.commit()
         except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
             raise DatabaseError(
@@ -1206,6 +1221,49 @@ class Database:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt
         return None
+
+    def get_newsletter_sends_needing_metrics(
+        self, max_age_days: int = 90, stale_hours: int = 6
+    ) -> list[dict]:
+        """Get recent sent newsletter issues whose metrics need refreshing."""
+        cursor = self.conn.execute(
+            """SELECT ns.id, ns.issue_id, ns.subject, ns.sent_at,
+                      ne.fetched_at AS last_fetched
+               FROM newsletter_sends ns
+               LEFT JOIN (
+                   SELECT newsletter_send_id, MAX(fetched_at) AS fetched_at
+                   FROM newsletter_engagement
+                   GROUP BY newsletter_send_id
+               ) ne ON ne.newsletter_send_id = ns.id
+               WHERE ns.status = 'sent'
+                 AND ns.issue_id IS NOT NULL
+                 AND ns.issue_id != ''
+                 AND ns.sent_at >= datetime('now', ?)
+                 AND (ne.fetched_at IS NULL
+                      OR ne.fetched_at < datetime('now', ?))
+               ORDER BY ns.sent_at DESC""",
+            (f"-{max_age_days} days", f"-{stale_hours} hours"),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def insert_newsletter_engagement(
+        self,
+        newsletter_send_id: int,
+        issue_id: str,
+        opens: int,
+        clicks: int,
+        unsubscribes: int,
+    ) -> int:
+        """Insert a Buttondown newsletter metrics snapshot."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO newsletter_engagement
+               (newsletter_send_id, issue_id, opens, clicks, unsubscribes, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (newsletter_send_id, issue_id, opens, clicks, unsubscribes, now),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
 
     def get_published_content_in_range(
         self,

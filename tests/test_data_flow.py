@@ -235,3 +235,47 @@ class TestEngagementFeedbackFlow:
         assert result is True
         assert len(ops_data["runs"]) == 1
         assert ops_data["runs"][0]["operationId"] == "run-poll"
+
+
+class TestNewsletterMetricsFlow:
+    def test_newsletter_send_readable_by_metrics_backfill(self, db):
+        """A sent newsletter with an issue_id should be eligible for metrics."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-123",
+            subject="Weekly Update",
+            content_ids=[1, 2],
+            subscriber_count=50,
+        )
+
+        sends = db.get_newsletter_sends_needing_metrics(max_age_days=90)
+
+        assert len(sends) == 1
+        assert sends[0]["id"] == send_id
+        assert sends[0]["issue_id"] == "issue-123"
+
+    def test_newsletter_metrics_snapshot_persists(self, db):
+        """Fetched Buttondown metrics should be stored as a snapshot."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-123",
+            subject="Weekly Update",
+            content_ids=[],
+            subscriber_count=50,
+        )
+
+        db.insert_newsletter_engagement(
+            newsletter_send_id=send_id,
+            issue_id="issue-123",
+            opens=22,
+            clicks=5,
+            unsubscribes=1,
+        )
+
+        row = db.conn.execute(
+            """SELECT opens, clicks, unsubscribes
+               FROM newsletter_engagement
+               WHERE newsletter_send_id = ?""",
+            (send_id,),
+        ).fetchone()
+        assert row["opens"] == 22
+        assert row["clicks"] == 5
+        assert row["unsubscribes"] == 1

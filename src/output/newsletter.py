@@ -24,6 +24,14 @@ class NewsletterContent:
     source_content_ids: list[int] = field(default_factory=list)
 
 
+@dataclass
+class NewsletterMetrics:
+    issue_id: str
+    opens: int = 0
+    clicks: int = 0
+    unsubscribes: int = 0
+
+
 class NewsletterAssembler:
     """Assembles newsletter content from the week's published posts."""
 
@@ -201,3 +209,22 @@ class ButtondownClient:
         except requests.RequestException:
             pass
         return 0
+
+    def get_email_analytics(self, issue_id: str) -> Optional[NewsletterMetrics]:
+        """Fetch aggregate analytics for a Buttondown email issue."""
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}/emails/{issue_id}/analytics",
+                timeout=self.timeout,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return NewsletterMetrics(
+                    issue_id=issue_id,
+                    opens=int(data.get("opens") or 0),
+                    clicks=int(data.get("clicks") or 0),
+                    unsubscribes=int(data.get("unsubscriptions") or 0),
+                )
+        except (ValueError, TypeError, requests.RequestException):
+            pass
+        return None
