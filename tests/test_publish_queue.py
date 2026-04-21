@@ -1,6 +1,7 @@
 """Tests for publish_queue.py — scheduled post publishing from queue."""
 
 import sys
+import types
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, call
@@ -9,9 +10,25 @@ from dataclasses import dataclass
 import pytest
 
 # Mock the atproto module before any imports
+class FakeAtProtocolError(Exception):
+    pass
+
+
+class FakeNetworkError(FakeAtProtocolError):
+    pass
+
+
+class FakeUnauthorizedError(FakeAtProtocolError):
+    pass
+
+
+fake_atproto_exceptions = types.ModuleType("atproto.exceptions")
+fake_atproto_exceptions.AtProtocolError = FakeAtProtocolError
+fake_atproto_exceptions.NetworkError = FakeNetworkError
+fake_atproto_exceptions.UnauthorizedError = FakeUnauthorizedError
 sys.modules['atproto'] = MagicMock()
 sys.modules['atproto'].Client = MagicMock()
-sys.modules['atproto.exceptions'] = MagicMock(AtProtocolError=Exception)
+sys.modules['atproto.exceptions'] = fake_atproto_exceptions
 
 # Add scripts/ and src/ to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
