@@ -270,6 +270,66 @@ class TestDatabaseTopicMethods:
         assert len(generated) == 1
         assert generated[0]["topic"] == "testing"
 
+    def test_create_and_list_campaigns(self, db):
+        """Test creating and listing content campaigns."""
+        campaign_id = db.create_campaign(
+            name="Testing Foundations",
+            goal="Build a multi-post testing arc",
+            start_date="2026-05-01",
+            end_date="2026-05-15",
+            status="planned"
+        )
+
+        assert campaign_id > 0
+
+        campaigns = db.get_campaigns(status="planned")
+        assert len(campaigns) == 1
+        assert campaigns[0]["id"] == campaign_id
+        assert campaigns[0]["name"] == "Testing Foundations"
+        assert campaigns[0]["goal"] == "Build a multi-post testing arc"
+        assert campaigns[0]["start_date"] == "2026-05-01"
+        assert campaigns[0]["end_date"] == "2026-05-15"
+
+    def test_planned_topic_campaign_assignment(self, db):
+        """Test assigning planned topics to a campaign."""
+        campaign_id = db.create_campaign(
+            name="Architecture Arc",
+            goal="Connect architecture posts",
+            start_date="2026-06-01"
+        )
+
+        planned_id = db.insert_planned_topic(
+            topic="architecture",
+            angle="service boundaries",
+            target_date="2026-06-03",
+            campaign_id=campaign_id
+        )
+
+        planned = db.get_planned_topics(status="planned")
+        assert len(planned) == 1
+        assert planned[0]["id"] == planned_id
+        assert planned[0]["campaign_id"] == campaign_id
+        assert planned[0]["campaign_name"] == "Architecture Arc"
+        assert planned[0]["campaign_goal"] == "Connect architecture posts"
+
+    def test_attach_planned_topic_to_campaign(self, db):
+        """Test attaching an existing planned topic to a campaign."""
+        planned_id = db.insert_planned_topic(topic="testing")
+        campaign_id = db.create_campaign(name="Regression Testing")
+
+        db.attach_planned_topic_to_campaign(planned_id, campaign_id)
+
+        planned = db.get_planned_topics(status="planned")
+        assert planned[0]["campaign_id"] == campaign_id
+        assert planned[0]["campaign_name"] == "Regression Testing"
+
+    def test_attach_planned_topic_to_missing_campaign_fails(self, db):
+        """Test attach validation for missing campaigns."""
+        planned_id = db.insert_planned_topic(topic="testing")
+
+        with pytest.raises(ValueError):
+            db.attach_planned_topic_to_campaign(planned_id, 999)
+
     def test_mark_planned_topic_generated(self, db):
         """Test linking a planned topic to generated content."""
         # Create a planned topic

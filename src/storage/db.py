@@ -109,6 +109,24 @@ class Database:
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # Migrate: create content calendar campaign support if missing
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_campaigns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    goal TEXT,
+                    start_date TEXT,
+                    end_date TEXT,
+                    status TEXT DEFAULT 'planned',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_campaigns_status ON content_campaigns(status)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_campaigns_dates ON content_campaigns(start_date, end_date)")
+            pt_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(planned_topics)")}
+            if pt_cols and "campaign_id" not in pt_cols:
+                self.conn.execute("ALTER TABLE planned_topics ADD COLUMN campaign_id INTEGER REFERENCES content_campaigns(id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_topics_campaign ON planned_topics(campaign_id)")
             # Migrate curated_sources for account discovery
             cs_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(curated_sources)")}
             if cs_cols:
@@ -1840,7 +1858,8 @@ class Database:
         topic: str,
         angle: str = None,
         target_date: str = None,
-        source_material: str = None
+        source_material: str = None,
+        campaign_id: int = None
     ) -> int:
         """Plan a future topic for content generation.
 
@@ -1849,14 +1868,16 @@ class Database:
             angle: Specific angle or approach to cover
             target_date: Target publication date (ISO format)
             source_material: Optional commit SHAs or session IDs to draw from
+            campaign_id: Optional campaign to group this planned topic under
 
         Returns:
             ID of the planned topic
         """
         cursor = self.conn.execute(
-            """INSERT INTO planned_topics (topic, angle, target_date, source_material)
-               VALUES (?, ?, ?, ?)""",
-            (topic, angle, target_date, source_material)
+            """INSERT INTO planned_topics
+               (topic, angle, target_date, source_material, campaign_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (topic, angle, target_date, source_material, campaign_id)
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -1871,12 +1892,83 @@ class Database:
             List of planned topic dicts
         """
         cursor = self.conn.execute(
-            """SELECT * FROM planned_topics
-               WHERE status = ?
-               ORDER BY target_date ASC NULLS LAST, created_at ASC""",
+            """SELECT pt.*,
+                      cc.name AS campaign_name,
+                      cc.goal AS campaign_goal,
+                      cc.start_date AS campaign_start_date,
+                      cc.end_date AS campaign_end_date,
+                      cc.status AS campaign_status
+               FROM planned_topics pt
+               LEFT JOIN content_campaigns cc ON cc.id = pt.campaign_id
+               WHERE pt.status = ?
+               ORDER BY cc.start_date ASC NULLS LAST,
+                        pt.campaign_id ASC NULLS LAST,
+                        pt.target_date ASC NULLS LAST,
+                        pt.created_at ASC""",
             (status,)
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def create_campaign(
+        self,
+        name: str,
+        goal: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        status: str = "planned",
+    ) -> int:
+        """Create a content campaign for grouping planned topics."""
+        cursor = self.conn.execute(
+            """INSERT INTO content_campaigns (name, goal, start_date, end_date, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, goal, start_date, end_date, status)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_campaign(self, campaign_id: int) -> dict | None:
+        """Get a single content campaign by ID."""
+        cursor = self.conn.execute(
+            "SELECT * FROM content_campaigns WHERE id = ?",
+            (campaign_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_campaigns(self, status: str = None) -> list[dict]:
+        """List content campaigns, optionally filtered by status."""
+        if status:
+            cursor = self.conn.execute(
+                """SELECT * FROM content_campaigns
+                   WHERE status = ?
+                   ORDER BY start_date ASC NULLS LAST, created_at ASC""",
+                (status,)
+            )
+        else:
+            cursor = self.conn.execute(
+                """SELECT * FROM content_campaigns
+                   ORDER BY start_date ASC NULLS LAST, created_at ASC"""
+            )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def attach_planned_topic_to_campaign(
+        self,
+        planned_id: int,
+        campaign_id: int | None
+    ) -> None:
+        """Attach a planned topic to a campaign, or detach it with None."""
+        if campaign_id is not None and self.get_campaign(campaign_id) is None:
+            raise ValueError(f"Campaign {campaign_id} does not exist")
+
+        cursor = self.conn.execute(
+            """UPDATE planned_topics
+               SET campaign_id = ?
+               WHERE id = ?""",
+            (campaign_id, planned_id)
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Planned topic {planned_id} does not exist")
+        self.conn.commit()
 
     def mark_planned_topic_generated(
         self,
