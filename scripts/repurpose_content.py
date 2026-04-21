@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from runner import script_context, update_monitoring
 from synthesis.repurposer import ContentRepurposer
 from synthesis.evaluator_v2 import CrossModelEvaluator
+from output.blog_writer import BlogWriter
 from output.x_client import XClient, parse_thread_content
 
 logger = logging.getLogger(__name__)
@@ -140,7 +141,19 @@ def main() -> None:
             else:
                 logger.error(f"Post failed: {post_result.error}")
         else:
-            logger.info(f"Stored {result.target_type} for manual review (content_id: {content_id})")
+            blog_writer = BlogWriter(config.paths.static_site)
+            draft_result = blog_writer.write_draft(
+                result.content,
+                source_content_id=result.source_id,
+                generated_content_id=content_id,
+            )
+            if draft_result.success:
+                logger.info(
+                    f"Stored {result.target_type} for manual review "
+                    f"(content_id: {content_id}, draft: {draft_result.file_path})"
+                )
+            else:
+                logger.error(f"Draft write failed: {draft_result.error}")
 
     update_monitoring("repurpose")
     logger.info("Done")

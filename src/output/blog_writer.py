@@ -1,9 +1,10 @@
 """Generate and commit blog posts to static site."""
 
 import re
+import json
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from dataclasses import dataclass
 
@@ -49,6 +50,7 @@ class BlogWriter:
     def __init__(self, site_path: str, base_url: str = "https://takaishikawa.com") -> None:
         self.site_path = Path(site_path).expanduser()
         self.blog_path = self.site_path / "blog"
+        self.drafts_path = self.site_path / "drafts"
         self.base_url = base_url
 
     def _slugify(self, title: str) -> str:
@@ -94,6 +96,16 @@ class BlogWriter:
                 return line
         return ""
 
+    def _extract_title_and_body(self, content: str) -> tuple[Optional[str], str]:
+        """Extract TITLE: metadata and the remaining markdown body."""
+        title_match = re.search(r"^TITLE:\s*(.+)$", content, re.MULTILINE)
+        if not title_match:
+            return None, content.strip()
+
+        title = title_match.group(1).strip()
+        body = content[title_match.end():].strip()
+        return title, body
+
     def _update_index(self, slug: str, title: str, date_str: str) -> None:
         """Add new post to index.html."""
         index_path = self.site_path / "index.html"
@@ -111,13 +123,9 @@ class BlogWriter:
 
     def write_post(self, content: str) -> BlogResult:
         """Parse generated content and write blog post."""
-        # Extract title
-        title_match = re.search(r"^TITLE:\s*(.+)$", content, re.MULTILINE)
-        if not title_match:
+        title, body = self._extract_title_and_body(content)
+        if not title:
             return BlogResult(success=False, error="No title found in content")
-
-        title = title_match.group(1).strip()
-        body = content[title_match.end():].strip()
 
         # Generate slug and paths
         slug = self._slugify(title)
@@ -146,6 +154,40 @@ class BlogWriter:
             success=True,
             file_path=str(file_path),
             url=f"{self.base_url}/blog/{slug}.html"
+        )
+
+    def write_draft(
+        self,
+        content: str,
+        source_content_id: int,
+        generated_content_id: int,
+    ) -> BlogResult:
+        """Write generated markdown as a reviewable static-site draft."""
+        title, body = self._extract_title_and_body(content)
+        if not title:
+            return BlogResult(success=False, error="No title found in content")
+
+        slug = self._slugify(title)
+        file_path = self.drafts_path / f"{slug}.md"
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        frontmatter = "\n".join([
+            "---",
+            f"title: {json.dumps(title)}",
+            f"source_content_id: {source_content_id}",
+            f"generated_content_id: {generated_content_id}",
+            "status: draft",
+            f"created_at: {json.dumps(created_at)}",
+            "---",
+            "",
+        ])
+
+        self.drafts_path.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(frontmatter + body + "\n")
+
+        return BlogResult(
+            success=True,
+            file_path=str(file_path),
         )
 
     def commit_and_push(self, title: str) -> bool:

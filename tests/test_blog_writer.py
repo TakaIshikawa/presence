@@ -214,6 +214,52 @@ class TestWritePost:
 
 
 # ---------------------------------------------------------------------------
+# BlogWriter.write_draft
+# ---------------------------------------------------------------------------
+
+
+class TestWriteDraft:
+    def test_creates_markdown_draft_with_frontmatter(self, tmp_path):
+        site = tmp_path
+        writer = BlogWriter(str(site))
+
+        content = "TITLE: My Draft Post\n\n## Outline\n\nDraft body."
+        result = writer.write_draft(
+            content,
+            source_content_id=123,
+            generated_content_id=42,
+        )
+
+        draft_file = site / "drafts" / "my-draft-post.md"
+        assert result.success is True
+        assert result.file_path == str(draft_file)
+        assert draft_file.exists()
+
+        draft = draft_file.read_text()
+        assert draft.startswith("---\n")
+        assert 'title: "My Draft Post"' in draft
+        assert "source_content_id: 123" in draft
+        assert "generated_content_id: 42" in draft
+        assert "status: draft" in draft
+        assert "created_at: " in draft
+        assert "TITLE:" not in draft
+        assert "## Outline\n\nDraft body." in draft
+
+    def test_missing_title_returns_error(self, tmp_path):
+        writer = BlogWriter(str(tmp_path))
+
+        result = writer.write_draft(
+            "No title line here.\n\nJust body.",
+            source_content_id=123,
+            generated_content_id=42,
+        )
+
+        assert result.success is False
+        assert "No title" in result.error
+        assert not (tmp_path / "drafts").exists()
+
+
+# ---------------------------------------------------------------------------
 # BlogWriter._update_index
 # ---------------------------------------------------------------------------
 
