@@ -11,14 +11,77 @@ import pytest
 # Mock the atproto module before any imports
 sys.modules['atproto'] = MagicMock()
 sys.modules['atproto'].Client = MagicMock()
-sys.modules['atproto.exceptions'] = MagicMock()
-sys.modules['atproto.exceptions'].AtProtocolError = Exception
+sys.modules['atproto.exceptions'] = MagicMock(AtProtocolError=Exception)
 
 # Add scripts/ and src/ to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from storage.db import Database
+
+
+@dataclass
+class FakePostResult:
+    success: bool
+    url: str = ""
+    tweet_id: str = ""
+    error: str = ""
+    uri: str = ""
+
+
+class FakeXClient:
+    def __init__(self, post_result=None, thread_result=None):
+        self.post_result = post_result
+        self.thread_result = thread_result or post_result
+        self.posts = []
+        self.threads = []
+
+    def post(self, content):
+        self.posts.append(content)
+        return self.post_result
+
+    def post_thread(self, tweets):
+        self.threads.append(tweets)
+        return self.thread_result
+
+
+class FakeBlueskyClient:
+    def __init__(self, post_result=None, thread_result=None):
+        self.post_result = post_result
+        self.thread_result = thread_result or post_result
+        self.posts = []
+        self.threads = []
+
+    def post(self, content):
+        self.posts.append(content)
+        return self.post_result
+
+    def post_thread(self, tweets):
+        self.threads.append(tweets)
+        return self.thread_result
+
+
+class FakeCrossPoster:
+    def __init__(self, bluesky_client=None):
+        self.bluesky_client = bluesky_client
+
+    def adapt_for_bluesky(self, text, content_type):
+        return f"bsky:{text}"
+
+
+def make_config(bluesky_enabled=True):
+    config = MagicMock()
+    config.x.api_key = "test_key"
+    config.x.api_secret = "test_secret"
+    config.x.access_token = "test_token"
+    config.x.access_token_secret = "test_token_secret"
+    if bluesky_enabled:
+        config.bluesky.enabled = True
+        config.bluesky.handle = "test.bsky.social"
+        config.bluesky.app_password = "test_password"
+    else:
+        config.bluesky = None
+    return config
 
 
 # --- Test Fixtures ---
@@ -661,6 +724,169 @@ def test_main_bluesky_failure_preserves_x_success(test_db, base_time):
     assert bsky_state["status"] == "failed"
     assert bsky_state["error"] == "Bluesky rate limit"
     assert bsky_state["attempt_count"] == 1
+
+
+def test_main_all_attempts_bluesky_when_x_fails_and_records_only_x_error(test_db, base_time):
+    """If X fails and Bluesky succeeds, keep Bluesky state and name only X in queue error."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Test post", "x_post", 7.0, 0)
+    ).lastrowid
+    queue_id = test_db.conn.execute(
+        """INSERT INTO publish_queue (content_id, scheduled_at, platform, status)
+           VALUES (?, ?, ?, ?)""",
+        (content_id, base_time.isoformat(), "all", "queued")
+    ).lastrowid
+    test_db.conn.commit()
+
+    fake_x = FakeXClient(FakePostResult(success=False, error="Rate limit exceeded"))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/abc",
+        url="https://bsky.app/profile/test.bsky.social/post/abc",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    queue_row = test_db.conn.execute(
+        "SELECT status, error FROM publish_queue WHERE id = ?",
+        (queue_id,)
+    ).fetchone()
+    content_row = test_db.conn.execute(
+        "SELECT published, published_url, bluesky_uri FROM generated_content WHERE id = ?",
+        (content_id,)
+    ).fetchone()
+
+    assert fake_x.posts == ["Test post"]
+    assert fake_bluesky.posts == ["bsky:Test post"]
+    assert queue_row["status"] == "failed"
+    assert queue_row["error"] == "X: Rate limit exceeded"
+    assert content_row["published"] == 0
+    assert content_row["published_url"] is None
+    assert content_row["bluesky_uri"] == "at://did:plc:test/app.bsky.feed.post/abc"
+
+
+def test_main_all_skips_previously_successful_x_on_bluesky_retry(test_db, base_time):
+    """A retry should not repost X when only Bluesky is still missing."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published, published_url, tweet_id)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("Retry post", "x_post", 7.0, 1, "https://x.com/test/status/123", "123")
+    ).lastrowid
+    queue_id = test_db.conn.execute(
+        """INSERT INTO publish_queue (content_id, scheduled_at, platform, status, error)
+           VALUES (?, ?, ?, ?, ?)""",
+        (content_id, base_time.isoformat(), "all", "queued", "Bluesky: timeout")
+    ).lastrowid
+    test_db.conn.commit()
+
+    fake_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/duplicate",
+        tweet_id="duplicate",
+    ))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/retry",
+        url="https://bsky.app/profile/test.bsky.social/post/retry",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    queue_row = test_db.conn.execute(
+        "SELECT status, error FROM publish_queue WHERE id = ?",
+        (queue_id,)
+    ).fetchone()
+    content_row = test_db.conn.execute(
+        "SELECT published_url, tweet_id, bluesky_uri FROM generated_content WHERE id = ?",
+        (content_id,)
+    ).fetchone()
+
+    assert fake_x.posts == []
+    assert fake_bluesky.posts == ["bsky:Retry post"]
+    assert queue_row["status"] == "published"
+    assert queue_row["error"] is None
+    assert content_row["published_url"] == "https://x.com/test/status/123"
+    assert content_row["tweet_id"] == "123"
+    assert content_row["bluesky_uri"] == "at://did:plc:test/app.bsky.feed.post/retry"
+
+
+def test_main_all_marks_published_without_posting_when_all_platforms_done(test_db, base_time):
+    """A queued item with all requested platform state already present should only close the queue."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published, published_url, tweet_id, bluesky_uri)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "Already posted",
+            "x_post",
+            7.0,
+            1,
+            "https://x.com/test/status/123",
+            "123",
+            "at://did:plc:test/app.bsky.feed.post/already",
+        )
+    ).lastrowid
+    queue_id = test_db.conn.execute(
+        """INSERT INTO publish_queue (content_id, scheduled_at, platform, status)
+           VALUES (?, ?, ?, ?)""",
+        (content_id, base_time.isoformat(), "all", "queued")
+    ).lastrowid
+    test_db.conn.commit()
+
+    fake_x = FakeXClient(FakePostResult(success=False, error="should not post"))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(success=False, error="should not post"))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    queue_row = test_db.conn.execute(
+        "SELECT status, error FROM publish_queue WHERE id = ?",
+        (queue_id,)
+    ).fetchone()
+
+    assert fake_x.posts == []
+    assert fake_bluesky.posts == []
+    assert queue_row["status"] == "published"
+    assert queue_row["error"] is None
 
 
 def test_queue_respects_time_boundary(test_db, base_time):

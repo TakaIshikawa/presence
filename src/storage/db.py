@@ -1930,7 +1930,8 @@ class Database:
         """
         cursor = self.conn.execute(
             """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
-                      gc.content, gc.content_type
+                      gc.content, gc.content_type, gc.published,
+                      gc.published_url, gc.tweet_id, gc.bluesky_uri
                FROM publish_queue pq
                INNER JOIN generated_content gc ON gc.id = pq.content_id
                WHERE pq.status = 'queued'
@@ -1949,7 +1950,7 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute(
             """UPDATE publish_queue
-               SET status = 'published', published_at = ?
+               SET status = 'published', published_at = ?, error = NULL
                WHERE id = ?""",
             (now, queue_id)
         )
