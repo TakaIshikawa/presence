@@ -1,5 +1,7 @@
 """SQLite storage layer for Presence."""
 
+from __future__ import annotations
+
 import sqlite3
 import json
 from pathlib import Path
@@ -25,7 +27,7 @@ class IntegrityError(DatabaseError):
 
 
 class Database:
-    def __init__(self, db_path: str = "./presence.db"):
+    def __init__(self, db_path: str = "./presence.db") -> None:
         self.db_path = Path(db_path).expanduser()
         self.conn: Optional[sqlite3.Connection] = None
 
@@ -43,11 +45,11 @@ class Database:
             self.conn.close()
             self.conn = None
 
-    def __enter__(self):
+    def __enter__(self) -> Database:
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
     def init_schema(self, schema_path: str = "./schema.sql") -> None:
