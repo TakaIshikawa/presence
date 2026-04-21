@@ -275,6 +275,18 @@ CREATE INDEX IF NOT EXISTS idx_content_topics_topic ON content_topics(topic);
 CREATE INDEX IF NOT EXISTS idx_content_topics_content ON content_topics(content_id);
 
 -- Planned topics for forward-looking content calendar
+CREATE TABLE IF NOT EXISTS content_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    goal TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    status TEXT DEFAULT 'planned', -- 'planned', 'active', 'completed', 'paused'
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_content_campaigns_status ON content_campaigns(status);
+CREATE INDEX IF NOT EXISTS idx_content_campaigns_dates ON content_campaigns(start_date, end_date);
+
 CREATE TABLE IF NOT EXISTS planned_topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     topic TEXT NOT NULL,
@@ -282,9 +294,11 @@ CREATE TABLE IF NOT EXISTS planned_topics (
     source_material TEXT,          -- optional: commit SHAs or session IDs to draw from
     target_date TEXT,              -- when to aim for publication
     status TEXT DEFAULT 'planned', -- 'planned', 'generated', 'skipped'
+    campaign_id INTEGER REFERENCES content_campaigns(id), -- optional multi-post arc
     content_id INTEGER REFERENCES generated_content(id),  -- link when generated
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_planned_topics_campaign ON planned_topics(campaign_id);
 
 -- Publish queue for scheduled posting at optimal times
 CREATE TABLE IF NOT EXISTS publish_queue (
