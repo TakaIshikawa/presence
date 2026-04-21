@@ -274,7 +274,18 @@ def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
 
     # 6. Draft replies for top candidates
     inserted = 0
+    account_cooldown_hours = getattr(proactive, "account_cooldown_hours", 0)
     for c in top:
+        if db.count_recent_proactive_posts_to_author(
+            c["author_handle"], account_cooldown_hours
+        ) > 0:
+            logger.info(
+                "  Skipping @%s — contacted within last %s hours",
+                c["author_handle"],
+                account_cooldown_hours,
+            )
+            continue
+
         # Per-account weekly cap
         if db.count_weekly_replies_to_author(c["author_handle"]) >= proactive.reply_cap_per_account:
             logger.info(f"  Skipping @{c['author_handle']} — weekly cap reached")

@@ -106,6 +106,7 @@ image_gen:
 proactive:
   enabled: true
   max_daily_replies: 5          # Cap proactive replies per day
+  account_cooldown_hours: 72    # Skip/deny proactive actions to accounts contacted recently
   min_relevance: 0.50           # Minimum semantic relevance to our knowledge base
   max_tweet_age_hours: 24       # Only reply to tweets newer than this
   reply_cap_per_account: 2      # Max replies per account per week

@@ -16,6 +16,7 @@ from config import (
     RepliesConfig,
     EmbeddingsConfig,
     ImageGenConfig,
+    ProactiveConfig,
     CuratedSource,
     CuratedSourcesConfig,
     TimeoutsConfig,
@@ -217,6 +218,20 @@ class TestDataclassParsing:
         assert cfg.image_gen.provider == "pillow"
         assert cfg.image_gen.output_dir == "./generated_images"
 
+    def test_proactive_config(self, tmp_path):
+        data = _minimal_config_dict(
+            proactive={
+                "enabled": True,
+                "max_daily_replies": 3,
+                "account_cooldown_hours": 48,
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert isinstance(cfg.proactive, ProactiveConfig)
+        assert cfg.proactive.enabled is True
+        assert cfg.proactive.max_daily_replies == 3
+        assert cfg.proactive.account_cooldown_hours == 48
+
 
 # ---------------------------------------------------------------------------
 # Environment variable resolution in load_config
@@ -309,6 +324,11 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert cfg.replies.enabled is True
         assert cfg.replies.max_daily_replies == 10
+
+    def test_proactive_account_cooldown_default(self, tmp_path):
+        data = _minimal_config_dict(proactive={"enabled": True})
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.proactive.account_cooldown_hours == 72
 
     def test_replies_partial_defaults(self, tmp_path):
         data = _minimal_config_dict(replies={"enabled": False})

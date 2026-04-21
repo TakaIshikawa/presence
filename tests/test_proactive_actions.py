@@ -117,6 +117,38 @@ class TestProactiveActionsDB:
 
         assert db.count_weekly_replies_to_author("karpathy") == 2
 
+    def test_count_recent_proactive_posts_to_author_counts_all_action_types(self, db):
+        for action_type in ("reply", "quote_tweet", "like", "retweet"):
+            aid = self._insert_action(
+                db,
+                action_type=action_type,
+                target_tweet_id=f"{action_type}_recent",
+                target_author_handle="Karpathy",
+            )
+            db.mark_proactive_posted(aid, f"posted_{action_type}")
+
+        assert db.count_recent_proactive_posts_to_author("karpathy", 72) == 4
+        assert db.count_recent_proactive_posts_to_author("@KARPATHY", 72) == 4
+
+    def test_count_recent_proactive_posts_to_author_respects_cooldown_window(self, db):
+        recent_id = self._insert_action(
+            db, target_tweet_id="recent", target_author_handle="karpathy"
+        )
+        db.mark_proactive_posted(recent_id, "posted_recent")
+
+        old_id = self._insert_action(
+            db, target_tweet_id="old", target_author_handle="karpathy"
+        )
+        old_date = (datetime.now(timezone.utc) - timedelta(hours=73)).isoformat()
+        db.conn.execute(
+            "UPDATE proactive_actions SET status='posted', posted_at=? WHERE id=?",
+            (old_date, old_id),
+        )
+        db.conn.commit()
+
+        assert db.count_recent_proactive_posts_to_author("karpathy", 72) == 1
+        assert db.count_recent_proactive_posts_to_author("karpathy", 0) == 0
+
     def test_proactive_action_exists(self, db):
         assert db.proactive_action_exists("tweet_001", "reply") is False
         self._insert_action(db, target_tweet_id="tweet_001", action_type="reply")
@@ -152,6 +184,7 @@ class TestProactiveConfig:
         config = ProactiveConfig()
         assert config.enabled is False
         assert config.max_daily_replies == 5
+        assert config.account_cooldown_hours == 72
         assert config.min_relevance == 0.50
         assert config.max_tweet_age_hours == 24
         assert config.reply_cap_per_account == 2
@@ -184,6 +217,7 @@ polling:
 proactive:
   enabled: true
   max_daily_replies: 3
+  account_cooldown_hours: 48
   min_relevance: 0.60
   search_enabled: true
   search_keywords:
@@ -197,6 +231,7 @@ proactive:
         assert config.proactive is not None
         assert config.proactive.enabled is True
         assert config.proactive.max_daily_replies == 3
+        assert config.proactive.account_cooldown_hours == 48
         assert config.proactive.min_relevance == 0.60
         assert config.proactive.search_enabled is True
         assert config.proactive.search_keywords == ["AI agents", "LLM tools"]

@@ -21,6 +21,7 @@ from review_helpers import truncate, read_char, format_relationship_context
 
 _EXEC_TAG_RE = re.compile(r"^\[(\w+)\]")
 _VALID_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet", "follow"}
+_COOLDOWN_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet"}
 
 
 def _normalize_presence_action(row: dict) -> dict:
@@ -125,6 +126,32 @@ def _open_action_url(action: dict) -> None:
     webbrowser.open(url)
 
 
+def _account_cooldown_hours(config) -> int:
+    """Return the configured proactive account cooldown window."""
+    if not config.proactive or not config.proactive.enabled:
+        return 0
+    return max(0, getattr(config.proactive, "account_cooldown_hours", 0))
+
+
+def _account_cooldown_block_reason(action: dict, db, cooldown_hours: int) -> str | None:
+    """Return a human-readable reason when approval is blocked by account cooldown."""
+    if action.get("action_type") not in _COOLDOWN_EXEC_TYPES or cooldown_hours <= 0:
+        return None
+
+    handle = action.get("target_handle", "")
+    if not handle:
+        return None
+
+    count = db.count_recent_proactive_posts_to_author(handle, cooldown_hours)
+    if count <= 0:
+        return None
+
+    return (
+        f"@{handle.lstrip('@')} has {count} posted proactive action"
+        f"{'s' if count != 1 else ''} in the last {cooldown_hours} hours"
+    )
+
+
 def main():
     with script_context() as (config, db):
         # Collect actions from both sources
@@ -181,8 +208,10 @@ def main():
 
         # Daily cap enforcement
         max_daily = 999
+        account_cooldown_hours = 0
         if config.proactive and config.proactive.enabled:
             max_daily = config.proactive.max_daily_replies
+            account_cooldown_hours = _account_cooldown_hours(config)
 
         quit_requested = False
         completed = 0
@@ -210,13 +239,22 @@ def main():
                 print()
                 continue
 
+            cooldown_block_reason = _account_cooldown_block_reason(
+                action, db, account_cooldown_hours
+            )
+            if cooldown_block_reason:
+                print(f"\n  Approval blocked: {cooldown_block_reason}.")
+
             if exec_type in ("like", "retweet"):
                 if not tweet_id:
                     print("  No tweet_id, skipping.")
                     continue
                 print()
                 while True:
-                    sys.stdout.write("  [a]pprove  [o]pen  [d]ismiss  [s]kip  [q]uit > ")
+                    if cooldown_block_reason:
+                        sys.stdout.write("  [o]pen  [d]ismiss  [s]kip  [q]uit > ")
+                    else:
+                        sys.stdout.write("  [a]pprove  [o]pen  [d]ismiss  [s]kip  [q]uit > ")
                     sys.stdout.flush()
                     choice = read_char().lower()
                     print(choice)
@@ -227,6 +265,9 @@ def main():
                     elif choice == "q":
                         quit_requested = True
                     elif choice == "a":
+                        if cooldown_block_reason:
+                            print(f"  Approval blocked: {cooldown_block_reason}.")
+                            continue
                         result = x_client.like(tweet_id) if exec_type == "like" else x_client.retweet(tweet_id)
                         if result.success:
                             _mark_completed(action, db, bridge, tweet_id)
@@ -297,7 +338,10 @@ def main():
 
                 print()
                 while True:
-                    sys.stdout.write("  [a]pprove  [e]dit  [o]pen  [d]ismiss  [s]kip  [q]uit > ")
+                    if cooldown_block_reason:
+                        sys.stdout.write("  [o]pen  [d]ismiss  [s]kip  [q]uit > ")
+                    else:
+                        sys.stdout.write("  [a]pprove  [e]dit  [o]pen  [d]ismiss  [s]kip  [q]uit > ")
                     sys.stdout.flush()
                     choice = read_char().lower()
                     print(choice)
@@ -308,6 +352,9 @@ def main():
                     elif choice == "q":
                         quit_requested = True
                     elif choice == "a":
+                        if cooldown_block_reason:
+                            print(f"  Approval blocked: {cooldown_block_reason}.")
+                            continue
                         if exec_type == "reply":
                             result = x_client.reply(draft, tweet_id)
                         else:
@@ -322,6 +369,9 @@ def main():
                         else:
                             print(f"  Error: {result.error}")
                     elif choice == "e":
+                        if cooldown_block_reason:
+                            print(f"  Approval blocked: {cooldown_block_reason}.")
+                            continue
                         edited = input("  Your text: ").strip()
                         if not edited:
                             print("  Empty, cancelled.")

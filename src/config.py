@@ -142,6 +142,7 @@ class ImageGenConfig:
 class ProactiveConfig:
     enabled: bool = False
     max_daily_replies: int = 5
+    account_cooldown_hours: int = 72
     min_relevance: float = 0.50
     max_tweet_age_hours: int = 24
     reply_cap_per_account: int = 2
@@ -362,6 +363,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         proactive_config = ProactiveConfig(
             enabled=data["proactive"].get("enabled", False),
             max_daily_replies=data["proactive"].get("max_daily_replies", 5),
+            account_cooldown_hours=data["proactive"].get("account_cooldown_hours", 72),
             min_relevance=data["proactive"].get("min_relevance", 0.50),
             max_tweet_age_hours=data["proactive"].get("max_tweet_age_hours", 24),
             reply_cap_per_account=data["proactive"].get("reply_cap_per_account", 2),
