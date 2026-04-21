@@ -161,16 +161,29 @@ class TestDataclassParsing:
     def test_curated_sources_config(self, tmp_path):
         data = _minimal_config_dict(
             curated_sources={
+                "rss_entries_per_source": 3,
                 "x_accounts": [
                     {"username": "acct1", "name": "Account 1", "license": "open"}
                 ],
                 "blogs": [
-                    {"domain": "example.com", "name": "Example Blog"}
+                    {
+                        "domain": "example.com",
+                        "name": "Example Blog",
+                        "feed_url": "https://example.com/feed.xml",
+                    }
+                ],
+                "newsletters": [
+                    {
+                        "domain": "newsletter.example.com",
+                        "name": "Example Newsletter",
+                        "feed_url": "https://newsletter.example.com/rss",
+                    }
                 ],
             }
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert isinstance(cfg.curated_sources, CuratedSourcesConfig)
+        assert cfg.curated_sources.rss_entries_per_source == 3
 
         assert len(cfg.curated_sources.x_accounts) == 1
         src = cfg.curated_sources.x_accounts[0]
@@ -184,6 +197,13 @@ class TestDataclassParsing:
         assert blog.identifier == "example.com"
         assert blog.name == "Example Blog"
         assert blog.license == "attribution_required"  # default
+        assert blog.feed_url == "https://example.com/feed.xml"
+
+        assert len(cfg.curated_sources.newsletters) == 1
+        newsletter = cfg.curated_sources.newsletters[0]
+        assert newsletter.identifier == "newsletter.example.com"
+        assert newsletter.name == "Example Newsletter"
+        assert newsletter.feed_url == "https://newsletter.example.com/rss"
 
     def test_image_gen_config(self, tmp_path):
         data = _minimal_config_dict(
@@ -452,6 +472,7 @@ class TestEdgeCases:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.curated_sources.x_accounts == []
         assert cfg.curated_sources.blogs == []
+        assert cfg.curated_sources.newsletters == []
 
     def test_curated_sources_missing_sublists(self, tmp_path):
         """Section present but sub-keys omitted — defaults to empty lists."""
@@ -459,6 +480,7 @@ class TestEdgeCases:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.curated_sources.x_accounts == []
         assert cfg.curated_sources.blogs == []
+        assert cfg.curated_sources.newsletters == []
 
     def test_curated_source_default_license(self, tmp_path):
         data = _minimal_config_dict(

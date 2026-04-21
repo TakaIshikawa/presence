@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example Curated Feed</title>
+    <link>https://example.com/</link>
+    <description>Fixture feed for tests</description>
+    <item>
+      <title>Building reliable agent loops</title>
+      <link>https://example.com/agent-loops</link>
+      <description><![CDATA[Short summary about agent loop design.]]></description>
+      <content:encoded><![CDATA[
+        <p>Reliable agent loops separate planning, action, and verification so failures can be isolated and retried.</p>
+      ]]></content:encoded>
+    </item>
+    <item>
+      <title>Context windows as product constraints</title>
+      <link>https://example.com/context-windows</link>
+      <description><![CDATA[Context windows should shape the product interface.]]></description>
+    </item>
+  </channel>
+</rss>

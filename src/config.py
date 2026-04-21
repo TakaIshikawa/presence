@@ -3,7 +3,7 @@
 import os
 import yaml
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -78,14 +78,17 @@ class CuratedSource:
     identifier: str  # username or domain
     name: str
     license: str
+    feed_url: Optional[str] = None
 
 
 @dataclass
 class CuratedSourcesConfig:
     x_accounts: list[CuratedSource]
     blogs: list[CuratedSource]
+    newsletters: list[CuratedSource] = field(default_factory=list)
     max_x_accounts_per_run: int = 25
     x_tweets_per_account: int = 5
+    rss_entries_per_source: int = 5
 
 
 @dataclass
@@ -253,7 +256,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
             CuratedSource(
                 identifier=acc.get("username", ""),
                 name=acc.get("name", ""),
-                license=acc.get("license", "attribution_required")
+                license=acc.get("license", "attribution_required"),
+                feed_url=acc.get("feed_url"),
             )
             for acc in data["curated_sources"].get("x_accounts", [])
         ]
@@ -261,15 +265,27 @@ def load_config(config_path: Optional[str] = None) -> Config:
             CuratedSource(
                 identifier=blog.get("domain", ""),
                 name=blog.get("name", ""),
-                license=blog.get("license", "attribution_required")
+                license=blog.get("license", "attribution_required"),
+                feed_url=blog.get("feed_url"),
             )
             for blog in data["curated_sources"].get("blogs", [])
+        ]
+        newsletters = [
+            CuratedSource(
+                identifier=newsletter.get("domain", newsletter.get("identifier", "")),
+                name=newsletter.get("name", ""),
+                license=newsletter.get("license", "attribution_required"),
+                feed_url=newsletter.get("feed_url"),
+            )
+            for newsletter in data["curated_sources"].get("newsletters", [])
         ]
         curated_sources_config = CuratedSourcesConfig(
             x_accounts=x_accounts,
             blogs=blogs,
+            newsletters=newsletters,
             max_x_accounts_per_run=data["curated_sources"].get("max_x_accounts_per_run", 25),
             x_tweets_per_account=data["curated_sources"].get("x_tweets_per_account", 5),
+            rss_entries_per_source=data["curated_sources"].get("rss_entries_per_source", 5),
         )
 
     # Parse newsletter config if present

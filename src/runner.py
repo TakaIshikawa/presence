@@ -36,15 +36,21 @@ def _sync_curated_sources(config: Config, db: Database) -> None:
         return
     if config.curated_sources.x_accounts:
         db.sync_config_sources(
-            [{"identifier": a.identifier, "name": a.name, "license": a.license}
+            [{"identifier": a.identifier, "name": a.name, "license": a.license, "feed_url": a.feed_url}
              for a in config.curated_sources.x_accounts],
             "x_account",
         )
     if config.curated_sources.blogs:
         db.sync_config_sources(
-            [{"identifier": b.identifier, "name": b.name, "license": b.license}
+            [{"identifier": b.identifier, "name": b.name, "license": b.license, "feed_url": b.feed_url}
              for b in config.curated_sources.blogs],
             "blog",
+        )
+    if getattr(config.curated_sources, "newsletters", None):
+        db.sync_config_sources(
+            [{"identifier": n.identifier, "name": n.name, "license": n.license, "feed_url": n.feed_url}
+             for n in config.curated_sources.newsletters],
+            "newsletter",
         )
 
 

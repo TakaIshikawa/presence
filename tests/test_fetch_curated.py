@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from fetch_curated import fetch_user_tweets
+from knowledge.rss import parse_feed
 
 
 # --- helpers ---
@@ -73,6 +74,50 @@ class TestFetchUserTweets:
         assert result[0]["id"] == "100"
         x_client.get_user_id.assert_not_called()
         x_client.get_user_tweets.assert_called_once_with("cached-id", count=3)
+
+
+# --- RSS fetching ---
+
+
+class TestFetchCuratedFeeds:
+    def test_parse_local_rss_fixture(self):
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+
+        entries = parse_feed(fixture.read_text(), limit=2)
+
+        assert len(entries) == 2
+        assert entries[0].title == "Building reliable agent loops"
+        assert entries[0].link == "https://example.com/agent-loops"
+        assert "separate planning" in entries[0].content
+        assert entries[1].summary == "Context windows should shape the product interface."
+
+    @patch("fetch_curated.ingest_curated_article")
+    @patch("fetch_curated.fetch_feed_entries")
+    def test_ingests_new_feed_entries_and_skips_existing(self, mock_fetch_entries, mock_ingest):
+        from fetch_curated import fetch_curated_feed_source
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        mock_fetch_entries.return_value = parse_feed(fixture.read_text(), limit=2)
+        store = MagicMock()
+        store.exists.side_effect = [False, True]
+        extractor = MagicMock()
+        source = SimpleNamespace(
+            identifier="example.com",
+            name="Example Blog",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+        )
+
+        count = fetch_curated_feed_source(store, extractor, source, limit=2)
+
+        assert count == 1
+        store.exists.assert_any_call("curated_article", "https://example.com/agent-loops")
+        store.exists.assert_any_call("curated_article", "https://example.com/context-windows")
+        mock_ingest.assert_called_once()
+        assert mock_ingest.call_args.kwargs["url"] == "https://example.com/agent-loops"
+        assert mock_ingest.call_args.kwargs["title"] == "Building reliable agent loops"
+        assert mock_ingest.call_args.kwargs["author"] == "Example Blog"
+        assert mock_ingest.call_args.kwargs["license_type"] == "open"
 
 
 # --- TestMain filtering ---
@@ -175,14 +220,28 @@ class TestMainFiltering:
                 main()
             assert "embeddings not configured" in caplog.text
 
+    @patch("fetch_curated.InsightExtractor")
+    @patch("fetch_curated.KnowledgeStore")
+    @patch("fetch_curated.get_embedding_provider")
     @patch("fetch_curated.script_context")
-    def test_circuit_breaker_skips_before_initializing(self, mock_script_context):
+    def test_circuit_breaker_skips_x_before_initializing(
+        self, mock_script_context, mock_embedder, MockStore, MockExtractor
+    ):
         config = MagicMock()
+        config.embeddings.provider = "voyage"
+        config.embeddings.api_key = "key"
+        config.embeddings.model = "model"
+        config.anthropic.api_key = "key"
+        config.synthesis.model = "model"
+        config.curated_sources.x_accounts = []
+        config.curated_sources.blogs = []
+        config.curated_sources.newsletters = []
         db = MagicMock()
         db.get_meta.side_effect = lambda key: {
             "x_api_blocked_until": "2999-01-01T00:00:00+00:00",
             "x_api_block_reason": "402 Payment Required",
         }.get(key)
+        db.get_active_curated_sources.return_value = []
         mock_script_context.return_value.__enter__.return_value = (config, db)
 
         with patch("fetch_curated.XClient") as MockXClient:
