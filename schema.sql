@@ -216,10 +216,15 @@ CREATE INDEX IF NOT EXISTS idx_newsletter_sends_sent_at ON newsletter_sends(sent
 CREATE TABLE IF NOT EXISTS reply_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     inbound_tweet_id TEXT UNIQUE NOT NULL,  -- their reply tweet ID
+    platform TEXT DEFAULT 'x',              -- x | bluesky
     inbound_author_handle TEXT,
     inbound_author_id TEXT,
     inbound_text TEXT NOT NULL,
     our_tweet_id TEXT NOT NULL,              -- which of our posts they replied to
+    inbound_url TEXT,
+    inbound_cid TEXT,
+    our_platform_id TEXT,
+    platform_metadata TEXT,                  -- JSON: platform-specific reply context
     our_content_id INTEGER REFERENCES generated_content(id),
     our_post_text TEXT,                      -- our original post content
     draft_text TEXT,                         -- Claude-drafted reply
@@ -252,6 +257,12 @@ CREATE INDEX IF NOT EXISTS idx_reply_knowledge_links_knowledge ON reply_knowledg
 CREATE TABLE IF NOT EXISTS reply_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     last_mention_id TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS platform_reply_state (
+    platform TEXT PRIMARY KEY,
+    cursor TEXT,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

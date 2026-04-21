@@ -31,6 +31,7 @@ def _make_config(
     enrich_replies=False,
     reply_quality_threshold=6.0,
     embeddings_enabled=False,
+    bluesky_enabled=False,
 ):
     """Build a minimal Config-like namespace matching load_config() shape."""
     x = SimpleNamespace(
@@ -41,6 +42,11 @@ def _make_config(
     paths = SimpleNamespace(database=":memory:")
     replies = SimpleNamespace(
         enabled=replies_enabled, max_daily_replies=max_daily_replies
+    )
+    bluesky = SimpleNamespace(
+        enabled=bluesky_enabled,
+        handle="me.bsky.social",
+        app_password="bsky-password",
     )
 
     cultivate = None
@@ -69,6 +75,7 @@ def _make_config(
 
     return SimpleNamespace(
         x=x,
+        bluesky=bluesky,
         anthropic=anthropic,
         synthesis=synthesis,
         paths=paths,
@@ -104,12 +111,45 @@ def _make_me(user_id="my_id", username="my_handle"):
     return SimpleNamespace(data=data)
 
 
+def _make_bluesky_notification(
+    uri="at://did:plc:alice/app.bsky.feed.post/reply1",
+    cid="reply-cid",
+    text="Nice Bluesky post!",
+    author_did="did:plc:alice",
+    author_handle="alice.bsky.social",
+    reason="reply",
+    root_uri="at://did:plc:me/app.bsky.feed.post/root1",
+    created_at="2026-04-21T12:00:00Z",
+):
+    return {
+        "uri": uri,
+        "cid": cid,
+        "reason": reason,
+        "reason_subject": root_uri,
+        "indexed_at": created_at,
+        "author": {
+            "did": author_did,
+            "handle": author_handle,
+            "display_name": "Alice",
+        },
+        "record": {
+            "text": text,
+            "created_at": created_at,
+            "reply": {
+                "root": {"uri": root_uri, "cid": "root-cid"},
+                "parent": {"uri": root_uri, "cid": "root-cid"},
+            },
+        },
+    }
+
+
 USERS_BY_ID = {
     "user_A": {"id": "user_A", "username": "alice", "name": "Alice"},
     "user_B": {"id": "user_B", "username": "bob", "name": "Bob"},
 }
 
 OUR_CONTENT = {"id": 1, "content": "Here is our original post text."}
+BLSKY_CONTENT = {"id": 2, "content": "Here is our Bluesky post text."}
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +166,7 @@ def _patches():
         patch(f"{_PATCH_BASE}.script_context") as mock_script_context,
         patch(f"{_PATCH_BASE}.update_monitoring") as mock_update_monitoring,
         patch(f"{_PATCH_BASE}.XClient") as MockXClient,
+        patch(f"{_PATCH_BASE}.BlueskyClient") as MockBlueskyClient,
         patch(f"{_PATCH_BASE}.ReplyDrafter") as MockDrafter,
         patch(f"{_PATCH_BASE}.signal") as mock_signal,
     ):
@@ -134,8 +175,10 @@ def _patches():
         db.count_replies_today.return_value = 0
         db.is_reply_processed.return_value = False
         db.get_last_mention_id.return_value = None
+        db.get_platform_reply_cursor.return_value = None
         db.get_meta.return_value = None
         db.get_content_by_tweet_id.return_value = OUR_CONTENT
+        db.get_content_by_bluesky_uri.return_value = BLSKY_CONTENT
         db.insert_reply_draft.return_value = 1
 
         # Mock config
@@ -150,12 +193,15 @@ def _patches():
         x_client.get_authenticated_user.return_value = ("my_id", "my_handle")
         x_client.get_mentions.return_value = ([], USERS_BY_ID)
 
+        bluesky_client = MockBlueskyClient.return_value
+        bluesky_client.get_notifications.return_value = ([], None)
+
         drafter = MockDrafter.return_value
         draft_result = SimpleNamespace(
             reply_text="Great point, thanks for sharing!",
             knowledge_ids=[],
         )
-        drafter.draft_with_lineage_with_lineage.return_value = draft_result
+        drafter.draft_with_lineage.return_value = draft_result
 
         yield SimpleNamespace(
             script_context=mock_script_context,
@@ -164,6 +210,8 @@ def _patches():
             db=db,
             MockXClient=MockXClient,
             x_client=x_client,
+            MockBlueskyClient=MockBlueskyClient,
+            bluesky_client=bluesky_client,
             MockDrafter=MockDrafter,
             drafter=drafter,
             signal=mock_signal,
@@ -354,7 +402,98 @@ class TestCursorManagement:
 
 
 # ---------------------------------------------------------------------------
-# 4. Cultivate integration path
+# 4. Bluesky notification processing
+# ---------------------------------------------------------------------------
+
+
+class TestBlueskyNotifications:
+    def test_dedupes_processed_bluesky_notifications(self, _patches):
+        """Already queued Bluesky notifications are skipped."""
+        _patches.config.bluesky.enabled = True
+        notification = _make_bluesky_notification()
+        _patches.bluesky_client.get_notifications.return_value = (
+            [notification],
+            "next-cursor",
+        )
+        _patches.db.is_reply_processed.return_value = True
+
+        main()
+
+        _patches.drafter.draft_with_lineage.assert_not_called()
+        _patches.db.insert_reply_draft.assert_not_called()
+        _patches.db.set_platform_reply_cursor.assert_called_once_with(
+            "bluesky",
+            "next-cursor",
+        )
+
+    def test_updates_bluesky_cursor_from_notifications_response(self, _patches):
+        """The Bluesky platform cursor is persisted after polling."""
+        _patches.config.bluesky.enabled = True
+        _patches.db.get_platform_reply_cursor.return_value = "old-cursor"
+        _patches.bluesky_client.get_notifications.return_value = (
+            [_make_bluesky_notification()],
+            "new-cursor",
+        )
+
+        main()
+
+        _patches.bluesky_client.get_notifications.assert_called_once_with(
+            cursor="old-cursor",
+            limit=50,
+        )
+        _patches.db.set_platform_reply_cursor.assert_called_once_with(
+            "bluesky",
+            "new-cursor",
+        )
+
+    def test_inserts_bluesky_notification_into_reply_queue(self, _patches):
+        """Valid Bluesky reply notifications become reviewable reply drafts."""
+        _patches.config.bluesky.enabled = True
+        notification = _make_bluesky_notification(
+            uri="at://did:plc:alice/app.bsky.feed.post/reply42",
+            cid="bafyreply",
+            text="How does this work on Bluesky?",
+        )
+        _patches.bluesky_client.get_notifications.return_value = (
+            [notification],
+            "next-cursor",
+        )
+        _patches.drafter.draft_with_lineage.return_value = SimpleNamespace(
+            reply_text="It works through notifications.",
+            knowledge_ids=[],
+        )
+
+        main()
+
+        _patches.db.insert_reply_draft.assert_called_once()
+        kwargs = _patches.db.insert_reply_draft.call_args.kwargs
+        assert kwargs["inbound_tweet_id"] == "at://did:plc:alice/app.bsky.feed.post/reply42"
+        assert kwargs["platform"] == "bluesky"
+        assert kwargs["inbound_author_handle"] == "alice.bsky.social"
+        assert kwargs["inbound_author_id"] == "did:plc:alice"
+        assert kwargs["inbound_text"] == "How does this work on Bluesky?"
+        assert kwargs["our_tweet_id"] == "at://did:plc:me/app.bsky.feed.post/root1"
+        assert kwargs["our_content_id"] == 2
+        assert kwargs["our_post_text"] == "Here is our Bluesky post text."
+        assert kwargs["draft_text"] == "It works through notifications."
+        assert kwargs["inbound_cid"] == "bafyreply"
+        assert kwargs["our_platform_id"] == "at://did:plc:me/app.bsky.feed.post/root1"
+        assert kwargs["inbound_url"] == "https://bsky.app/profile/alice.bsky.social/post/reply42"
+        metadata = json.loads(kwargs["platform_metadata"])
+        assert metadata["reason"] == "reply"
+        assert metadata["reply_refs"] == ["at://did:plc:me/app.bsky.feed.post/root1"]
+
+        _patches.drafter.draft_with_lineage.assert_called_once_with(
+            our_post="Here is our Bluesky post text.",
+            their_reply="How does this work on Bluesky?",
+            their_handle="alice.bsky.social",
+            self_handle="me.bsky.social",
+            person_context=None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 5. Cultivate integration path
 # ---------------------------------------------------------------------------
 
 
