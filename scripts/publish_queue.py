@@ -13,6 +13,20 @@ WATCHDOG_TIMEOUT = 300  # 5 minutes
 logger = logging.getLogger(__name__)
 
 
+def _requested_platforms(platform: str) -> list[str]:
+    if platform == 'all':
+        return ['x', 'bluesky']
+    return [platform]
+
+
+def _already_published(item: dict, platform: str) -> bool:
+    if platform == 'x':
+        return bool(item.get('published'))
+    if platform == 'bluesky':
+        return bool(item.get('bluesky_uri'))
+    return False
+
+
 def _timeout_handler(signum, frame):
     logger.error("WATCHDOG: Publish queue process exceeded 5-minute timeout, exiting")
     sys.exit(1)
@@ -74,14 +88,27 @@ def main() -> None:
             logger.info(f"Publishing content {content_id} (queued for {scheduled_at})")
 
             try:
+                requested_platforms = _requested_platforms(platform)
+                pending_platforms = [
+                    p for p in requested_platforms
+                    if not _already_published(item, p)
+                ]
+
+                if not pending_platforms:
+                    db.mark_queue_published(queue_id)
+                    logger.info(f"  Queue item {queue_id} already completed")
+                    continue
+
                 # Parse content into tweets if it's a thread
                 if content_type == 'x_thread':
                     tweets = parse_thread_content(content)
                 else:
                     tweets = [content]
 
+                platform_errors = []
+
                 # Publish to X if needed
-                if platform in ('x', 'all'):
+                if 'x' in pending_platforms:
                     if content_type == 'x_thread':
                         result = x_client.post_thread(tweets)
                     else:
@@ -92,28 +119,36 @@ def main() -> None:
                         logger.info(f"  Posted to X: {result.url}")
                     else:
                         logger.error(f"  X posting failed: {result.error}")
-                        db.mark_queue_failed(queue_id, f"X: {result.error}")
-                        continue  # Skip Bluesky if X failed
+                        platform_errors.append(f"X: {result.error}")
 
                 # Cross-post to Bluesky if needed and configured
-                if platform in ('bluesky', 'all') and bluesky_client:
-                    cross_poster = CrossPoster(bluesky_client=bluesky_client)
-                    bsky_tweets = [cross_poster.adapt_for_bluesky(t, content_type) for t in tweets]
+                if 'bluesky' in pending_platforms:
+                    if bluesky_client:
+                        cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                        bsky_tweets = [cross_poster.adapt_for_bluesky(t, content_type) for t in tweets]
 
-                    if content_type == 'x_thread':
-                        bsky_result = bluesky_client.post_thread(bsky_tweets)
+                        if content_type == 'x_thread':
+                            bsky_result = bluesky_client.post_thread(bsky_tweets)
+                        else:
+                            bsky_result = bluesky_client.post(bsky_tweets[0])
+
+                        if bsky_result.success:
+                            db.mark_published_bluesky(content_id, bsky_result.uri)
+                            logger.info(f"  Posted to Bluesky: {bsky_result.url}")
+                        else:
+                            logger.error(f"  Bluesky posting failed: {bsky_result.error}")
+                            platform_errors.append(f"Bluesky: {bsky_result.error}")
                     else:
-                        bsky_result = bluesky_client.post(bsky_tweets[0])
+                        logger.error("  Bluesky posting failed: client not configured")
+                        platform_errors.append("Bluesky: client not configured")
 
-                    if bsky_result.success:
-                        db.mark_published_bluesky(content_id, bsky_result.uri)
-                        logger.info(f"  Posted to Bluesky: {bsky_result.url}")
-                    else:
-                        logger.warning(f"  Bluesky posting failed (non-fatal): {bsky_result.error}")
-
-                # Mark queue item as published
-                db.mark_queue_published(queue_id)
-                logger.info(f"  Queue item {queue_id} completed")
+                if platform_errors:
+                    db.mark_queue_failed(queue_id, "; ".join(platform_errors))
+                    logger.info(f"  Queue item {queue_id} failed for: {', '.join(platform_errors)}")
+                else:
+                    # Mark queue item as published
+                    db.mark_queue_published(queue_id)
+                    logger.info(f"  Queue item {queue_id} completed")
 
             except (sqlite3.Error, KeyError, IndexError, AttributeError, TypeError, ValueError) as e:
                 logger.error(f"  Unexpected error publishing content {content_id}: {e}")
