@@ -1,17 +1,9 @@
 """Cross-posting helper for publishing content to multiple platforms."""
 
-import re
-import unicodedata
 from typing import Optional
+from .platform_adapter import BlueskyPlatformAdapter, count_graphemes
 from .x_client import XClient, PostResult
 from .bluesky_client import BlueskyClient, BlueskyPostResult
-
-
-def count_graphemes(text: str) -> int:
-    """Count grapheme clusters in text (Bluesky uses grapheme length)."""
-    # Simple grapheme counting using Unicode grapheme breaks
-    # This is a basic implementation; production might use the 'grapheme' package
-    return len(list(unicodedata.normalize('NFC', text)))
 
 
 class CrossPoster:
@@ -20,17 +12,22 @@ class CrossPoster:
     def __init__(
         self,
         x_client: Optional[XClient] = None,
-        bluesky_client: Optional[BlueskyClient] = None
+        bluesky_client: Optional[BlueskyClient] = None,
+        platform_adapter: Optional[BlueskyPlatformAdapter] = None,
+        divergence_analyzer: object = None,
     ):
         self.x_client = x_client
         self.bluesky_client = bluesky_client
+        self.platform_adapter = platform_adapter or BlueskyPlatformAdapter(
+            context_provider=divergence_analyzer
+        )
 
     def adapt_for_bluesky(self, text: str, content_type: str = "x_post") -> str:
         """Adapt X content for Bluesky (300 grapheme limit).
 
-        Bluesky has a 300 grapheme limit vs X's 280 character limit.
-        Content is generated platform-agnostically, so minimal adaptation
-        is needed.
+        This uses a deterministic platform adapter by default. If the adapter
+        is configured with a PlatformDivergenceAnalyzer, its adaptation context
+        can influence rule-based cleanup without requiring an LLM.
 
         Args:
             text: Original text content
@@ -39,18 +36,7 @@ class CrossPoster:
         Returns:
             Adapted text suitable for Bluesky
         """
-        adapted = text
-
-        # Truncate at 300 graphemes if needed
-        grapheme_count = count_graphemes(adapted)
-        if grapheme_count > 300:
-            # Simple truncation - could be smarter about sentence boundaries
-            # For now, just cut at 297 graphemes and add ellipsis
-            # Normalize once, then slice (after NFC normalization, len == grapheme count)
-            normalized = unicodedata.normalize('NFC', adapted)
-            adapted = normalized[:297] + '...'
-
-        return adapted
+        return self.platform_adapter.adapt(text, content_type)
 
     def publish(
         self,
