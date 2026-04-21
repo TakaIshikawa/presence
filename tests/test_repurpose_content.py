@@ -17,9 +17,10 @@ from synthesis.repurposer import RepurposeCandidate, RepurposeResult
 # --- Helpers ---
 
 
-def _make_config(daily_post_cap=3):
+def _make_config(daily_post_cap=3, static_site="/tmp/fake-site"):
     config = MagicMock()
     config.paths.database = ":memory:"
+    config.paths.static_site = static_site
     config.anthropic.api_key = "test-key"
     config.synthesis.model = "gen-model"
     config.synthesis.eval_model = "eval-model"
@@ -421,6 +422,52 @@ class TestMainBlogSeedStoredForReview:
             eval_feedback="Strong candidate",
         )
         # Verify no X posting for blog_seed
+        mock_parse_thread.assert_not_called()
+        MockXClient.assert_not_called()
+        db.mark_published.assert_not_called()
+        mock_monitoring.assert_called_once_with("repurpose")
+
+    def test_blog_seed_writes_markdown_draft_under_static_site_path(self, tmp_path):
+        config = _make_config(static_site=str(tmp_path))
+        db = MagicMock()
+        db.count_posts_today.return_value = 0
+        db.get_top_performing_posts.return_value = [{"content": "ref1"}]
+        db.get_all_classified_posts.return_value = {"resonated": [], "low_resonance": []}
+        db.get_engagement_calibration_stats.return_value = {}
+        db.insert_repurposed_content.return_value = 42
+
+        candidate = _make_candidate(content_id=123, target_type="blog_seed")
+        result = RepurposeResult(
+            source_id=123,
+            target_type="blog_seed",
+            content="TITLE: Reviewable Draft\n\n## Outline\n\nDraft opening.",
+            generation_prompt="Test prompt",
+        )
+
+        import repurpose_content
+
+        with patch("repurpose_content.script_context") as mock_ctx, \
+             patch("repurpose_content.ContentRepurposer") as MockRepurposer, \
+             patch("repurpose_content.CrossModelEvaluator") as MockEvaluator, \
+             patch("repurpose_content.XClient") as MockXClient, \
+             patch("repurpose_content.parse_thread_content") as mock_parse_thread, \
+             patch("repurpose_content.update_monitoring") as mock_monitoring:
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            MockRepurposer.return_value.find_candidates.return_value = [candidate]
+            MockRepurposer.return_value.expand_to_blog_seed.return_value = result
+            MockEvaluator.return_value.evaluate.return_value = _make_comparison(best_score=8.0)
+
+            repurpose_content.main()
+
+        draft_file = tmp_path / "drafts" / "reviewable-draft.md"
+        assert draft_file.exists()
+        draft = draft_file.read_text()
+        assert 'title: "Reviewable Draft"' in draft
+        assert "source_content_id: 123" in draft
+        assert "generated_content_id: 42" in draft
+        assert "status: draft" in draft
+        assert "## Outline\n\nDraft opening." in draft
+
         mock_parse_thread.assert_not_called()
         MockXClient.assert_not_called()
         db.mark_published.assert_not_called()
