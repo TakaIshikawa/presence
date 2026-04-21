@@ -36,6 +36,7 @@ def _make_config(proactive_overrides=None):
     proactive_defaults = {
         "enabled": True,
         "max_daily_replies": 5,
+        "account_cooldown_hours": 72,
         "min_relevance": 0.50,
         "max_tweet_age_hours": 24,
         "reply_cap_per_account": 2,
@@ -203,6 +204,22 @@ class TestDiscoverFiltering:
 
         inserted = self._discover_with_batch_patch(config, db, x_client, ks, drafter, rel, pt)
         assert inserted == 0  # all blocked by weekly cap
+
+    def test_account_cooldown_skips_recently_contacted_author(self, db):
+        tweet = _make_tweet("t1", "AI agents are transforming workflows")
+        config, x_client, ks, drafter, rel, pt = self._setup_mocks(db, [tweet])
+        prior_id = db.insert_proactive_action(
+            action_type="like",
+            target_tweet_id="prior_like",
+            target_tweet_text="Prior tweet",
+            target_author_handle="karpathy",
+        )
+        db.mark_proactive_posted(prior_id, "prior_like")
+
+        inserted = self._discover_with_batch_patch(config, db, x_client, ks, drafter, rel, pt)
+
+        assert inserted == 0
+        drafter.draft_proactive.assert_not_called()
 
     def test_scores_by_relevance(self, db):
         """Higher relevance tweets should be ranked first."""

@@ -20,6 +20,8 @@ from review_proactive import (
     _mark_dismissed,
     _format_action_header,
     _open_action_url,
+    _account_cooldown_block_reason,
+    _account_cooldown_hours,
 )
 
 
@@ -278,6 +280,63 @@ class TestDailyCapIntegration:
         assert len(actions) == 2
         assert actions[0]["source"] == "presence"
         assert actions[1]["source"] == "cultivate"
+
+
+# --- Account cooldown integration ---
+
+
+class TestAccountCooldownIntegration:
+    def test_configured_cooldown_hours(self):
+        config = SimpleNamespace(
+            proactive=SimpleNamespace(enabled=True, account_cooldown_hours=48)
+        )
+        assert _account_cooldown_hours(config) == 48
+
+    def test_disabled_proactive_has_no_cooldown(self):
+        config = SimpleNamespace(
+            proactive=SimpleNamespace(enabled=False, account_cooldown_hours=48)
+        )
+        assert _account_cooldown_hours(config) == 0
+
+    @pytest.mark.parametrize("action_type", ["reply", "quote_tweet", "like", "retweet"])
+    def test_blocks_approval_when_account_contacted_recently(self, db, action_type):
+        aid = db.insert_proactive_action(
+            action_type=action_type,
+            target_tweet_id=f"old_{action_type}",
+            target_tweet_text="test",
+            target_author_handle="karpathy",
+        )
+        db.mark_proactive_posted(aid, f"posted_{action_type}")
+        action = _normalize_presence_action(
+            _make_presence_row(action_type=action_type, target_author_handle="KARPATHY")
+        )
+
+        reason = _account_cooldown_block_reason(action, db, cooldown_hours=72)
+
+        assert reason is not None
+        assert "@KARPATHY" in reason
+        assert "last 72 hours" in reason
+
+    @pytest.mark.parametrize("action_type", ["reply", "quote_tweet", "like", "retweet"])
+    def test_allows_approval_after_account_cooldown_window(self, db, action_type):
+        aid = db.insert_proactive_action(
+            action_type=action_type,
+            target_tweet_id=f"old_{action_type}",
+            target_tweet_text="test",
+            target_author_handle="karpathy",
+        )
+        db.mark_proactive_posted(aid, f"posted_{action_type}")
+        old_date = "2026-01-01T00:00:00+00:00"
+        db.conn.execute(
+            "UPDATE proactive_actions SET posted_at=? WHERE id=?",
+            (old_date, aid),
+        )
+        db.conn.commit()
+        action = _normalize_presence_action(
+            _make_presence_row(action_type=action_type, target_author_handle="karpathy")
+        )
+
+        assert _account_cooldown_block_reason(action, db, cooldown_hours=72) is None
 
 
 # --- Open action URL ---

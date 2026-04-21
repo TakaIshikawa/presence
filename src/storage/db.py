@@ -596,6 +596,27 @@ class Database:
         )
         return cursor.fetchone()[0]
 
+    def count_recent_proactive_posts_to_author(
+        self, handle: str, cooldown_hours: int
+    ) -> int:
+        """Count posted proactive actions to a target handle in a cooldown window."""
+        if not handle or cooldown_hours <= 0:
+            return 0
+
+        normalized_handle = handle.lstrip("@").lower()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)
+        ).isoformat()
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) FROM proactive_actions
+               WHERE LOWER(LTRIM(target_author_handle, '@')) = ?
+                 AND status = 'posted'
+                 AND posted_at IS NOT NULL
+                 AND datetime(posted_at) >= datetime(?)""",
+            (normalized_handle, cutoff),
+        )
+        return cursor.fetchone()[0]
+
     def proactive_action_exists(self, tweet_id: str, action_type: str) -> bool:
         """Check if a proactive action already exists for this tweet+type."""
         cursor = self.conn.execute(
