@@ -93,6 +93,17 @@ class Database:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_score REAL")
             if rq_cols and "quality_flags" not in rq_cols:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN quality_flags TEXT")
+            if rq_cols and "platform" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN platform TEXT DEFAULT 'x'")
+            if rq_cols and "inbound_url" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN inbound_url TEXT")
+            if rq_cols and "inbound_cid" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN inbound_cid TEXT")
+            if rq_cols and "our_platform_id" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN our_platform_id TEXT")
+            if rq_cols and "platform_metadata" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN platform_metadata TEXT")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_platform ON reply_queue(platform, inbound_tweet_id)")
             # Migrate pipeline_runs for outcome tracking
             pr_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pipeline_runs)")}
             if pr_cols and "outcome" not in pr_cols:
@@ -127,6 +138,13 @@ class Database:
             if pt_cols and "campaign_id" not in pt_cols:
                 self.conn.execute("ALTER TABLE planned_topics ADD COLUMN campaign_id INTEGER REFERENCES content_campaigns(id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_topics_campaign ON planned_topics(campaign_id)")
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS platform_reply_state (
+                    platform TEXT PRIMARY KEY,
+                    cursor TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             # Migrate curated_sources for account discovery
             cs_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(curated_sources)")}
             if cs_cols:
@@ -1293,16 +1311,23 @@ class Database:
         relationship_context: Optional[str] = None,
         quality_score: Optional[float] = None,
         quality_flags: Optional[str] = None,
+        platform: str = "x",
+        inbound_url: Optional[str] = None,
+        inbound_cid: Optional[str] = None,
+        our_platform_id: Optional[str] = None,
+        platform_metadata: Optional[str] = None,
     ) -> int:
         """Insert a drafted reply into the queue."""
         cursor = self.conn.execute(
             """INSERT INTO reply_queue
-               (inbound_tweet_id, inbound_author_handle, inbound_author_id,
-                inbound_text, our_tweet_id, our_content_id, our_post_text,
+               (inbound_tweet_id, platform, inbound_author_handle, inbound_author_id,
+                inbound_text, our_tweet_id, inbound_url, inbound_cid,
+                our_platform_id, platform_metadata, our_content_id, our_post_text,
                 draft_text, relationship_context, quality_score, quality_flags)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (inbound_tweet_id, inbound_author_handle, inbound_author_id,
-             inbound_text, our_tweet_id, our_content_id, our_post_text,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (inbound_tweet_id, platform, inbound_author_handle, inbound_author_id,
+             inbound_text, our_tweet_id, inbound_url, inbound_cid,
+             our_platform_id, platform_metadata, our_content_id, our_post_text,
              draft_text, relationship_context, quality_score, quality_flags)
         )
         self.conn.commit()
@@ -1373,6 +1398,27 @@ class Database:
         )
         self.conn.commit()
 
+    def get_platform_reply_cursor(self, platform: str) -> Optional[str]:
+        """Get the stored reply polling cursor for a platform."""
+        cursor = self.conn.execute(
+            "SELECT cursor FROM platform_reply_state WHERE platform = ?",
+            (platform,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_platform_reply_cursor(self, platform: str, cursor_value: str) -> None:
+        """Update the reply polling cursor for a platform."""
+        self.conn.execute(
+            """INSERT INTO platform_reply_state (platform, cursor, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(platform) DO UPDATE SET
+               cursor = excluded.cursor,
+               updated_at = CURRENT_TIMESTAMP""",
+            (platform, cursor_value)
+        )
+        self.conn.commit()
+
     def insert_reply_knowledge_links(
         self, reply_queue_id: int, knowledge_ids: list[tuple[int, float]]
     ) -> None:
@@ -1398,6 +1444,15 @@ class Database:
         cursor = self.conn.execute(
             "SELECT id, content, content_type FROM generated_content WHERE tweet_id = ?",
             (tweet_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_content_by_bluesky_uri(self, bluesky_uri: str) -> Optional[dict]:
+        """Look up generated content by its published Bluesky AT URI."""
+        cursor = self.conn.execute(
+            "SELECT id, content, content_type FROM generated_content WHERE bluesky_uri = ?",
+            (bluesky_uri,)
         )
         row = cursor.fetchone()
         return dict(row) if row else None

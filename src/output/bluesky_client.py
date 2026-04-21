@@ -147,6 +147,75 @@ class BlueskyClient:
         except AtProtocolError as e:
             return BlueskyPostResult(success=False, error=f'{type(e).__name__}: {e}')
 
+    def get_notifications(
+        self,
+        cursor: Optional[str] = None,
+        limit: int = 50,
+    ) -> tuple[list[dict], Optional[str]]:
+        """Fetch Bluesky notifications using AT Protocol notification APIs.
+
+        Args:
+            cursor: Optional AT Protocol pagination cursor.
+            limit: Maximum notifications to fetch.
+
+        Returns:
+            Tuple of normalized notification dicts and the next cursor.
+        """
+        self._ensure_login()
+        params = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+
+        response = self.client.app.bsky.notification.list_notifications(
+            params=params
+        )
+        notifications = [
+            self._notification_to_dict(notification)
+            for notification in (getattr(response, "notifications", None) or [])
+        ]
+        return notifications, getattr(response, "cursor", None)
+
+    @staticmethod
+    def _notification_to_dict(notification) -> dict:
+        """Convert an atproto notification model to plain Python data."""
+        author = getattr(notification, "author", None)
+        record = getattr(notification, "record", None)
+        record_reply = getattr(record, "reply", None) if record else None
+
+        def ref_to_dict(ref) -> Optional[dict]:
+            if not ref:
+                return None
+            return {
+                "uri": getattr(ref, "uri", None),
+                "cid": getattr(ref, "cid", None),
+            }
+
+        reply = None
+        if record_reply:
+            reply = {
+                "root": ref_to_dict(getattr(record_reply, "root", None)),
+                "parent": ref_to_dict(getattr(record_reply, "parent", None)),
+            }
+
+        return {
+            "uri": getattr(notification, "uri", None),
+            "cid": getattr(notification, "cid", None),
+            "reason": getattr(notification, "reason", None),
+            "reason_subject": getattr(notification, "reason_subject", None),
+            "indexed_at": getattr(notification, "indexed_at", None),
+            "is_read": getattr(notification, "is_read", None),
+            "author": {
+                "did": getattr(author, "did", None),
+                "handle": getattr(author, "handle", None),
+                "display_name": getattr(author, "display_name", None),
+            },
+            "record": {
+                "text": getattr(record, "text", "") if record else "",
+                "created_at": getattr(record, "created_at", None) if record else None,
+                "reply": reply,
+            },
+        }
+
     def get_post_metrics(self, uri: str) -> Optional[dict]:
         """Fetch engagement metrics for a single post.
 

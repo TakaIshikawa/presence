@@ -11,6 +11,7 @@ from types import FrameType
 
 import anthropic
 import tweepy
+from atproto.exceptions import AtProtocolError
 
 WATCHDOG_TIMEOUT = 600  # 10 minutes
 
@@ -26,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
 from output.x_client import XClient
+from output.bluesky_client import BlueskyClient
 from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
@@ -46,6 +48,162 @@ def _get_authenticated_x_identity(db, x_client: XClient) -> tuple[str, str]:
     db.set_meta("x_authenticated_user_id", user_id)
     db.set_meta("x_authenticated_username", username)
     return user_id, username
+
+
+def _bluesky_post_url(handle: str, uri: str) -> str | None:
+    if not handle or not uri:
+        return None
+    return f"https://bsky.app/profile/{handle}/post/{uri.split('/')[-1]}"
+
+
+def _bluesky_reply_refs(notification: dict) -> list[str]:
+    refs = []
+    record = notification.get("record") or {}
+    reply = record.get("reply") or {}
+    for key in ("parent", "root"):
+        ref = reply.get(key) or {}
+        uri = ref.get("uri")
+        if uri and uri not in refs:
+            refs.append(uri)
+    reason_subject = notification.get("reason_subject")
+    if reason_subject and reason_subject not in refs:
+        refs.append(reason_subject)
+    return refs
+
+
+def _poll_bluesky_replies(
+    config,
+    db,
+    drafter: ReplyDrafter,
+    replies_today: int,
+    max_daily: int,
+) -> tuple[int, int]:
+    """Poll Bluesky notifications and queue draft replies."""
+    bluesky_config = getattr(config, "bluesky", None)
+    if not bluesky_config or not getattr(bluesky_config, "enabled", False):
+        return 0, 0
+
+    remaining_cap = max_daily - replies_today
+    if remaining_cap <= 0:
+        return 0, 0
+
+    client = BlueskyClient(
+        bluesky_config.handle,
+        bluesky_config.app_password,
+    )
+    cursor = db.get_platform_reply_cursor("bluesky")
+    logger.info(f"Polling Bluesky notifications cursor={cursor or 'None'}")
+
+    try:
+        notifications, next_cursor = client.get_notifications(
+            cursor=cursor,
+            limit=50,
+        )
+    except AtProtocolError as e:
+        logger.error(f"Error fetching Bluesky notifications: {e}")
+        return 0, 0
+
+    if not notifications:
+        logger.info("No new Bluesky notifications")
+        if next_cursor and next_cursor != cursor:
+            db.set_platform_reply_cursor("bluesky", next_cursor)
+        return 0, 0
+
+    logger.info(f"Found {len(notifications)} Bluesky notifications")
+    drafted = 0
+    skipped = 0
+
+    for notification in notifications:
+        if drafted >= remaining_cap:
+            logger.info(f"Daily reply cap reached during Bluesky processing ({replies_today + drafted}/{max_daily})")
+            break
+
+        reason = notification.get("reason")
+        if reason not in {"mention", "reply"}:
+            skipped += 1
+            continue
+
+        inbound_uri = notification.get("uri")
+        if not inbound_uri:
+            skipped += 1
+            continue
+
+        if db.is_reply_processed(inbound_uri):
+            skipped += 1
+            continue
+
+        author = notification.get("author") or {}
+        author_handle = author.get("handle") or "unknown"
+        if author_handle == bluesky_config.handle:
+            skipped += 1
+            continue
+
+        our_content = None
+        our_uri = None
+        for candidate_uri in _bluesky_reply_refs(notification):
+            our_content = db.get_content_by_bluesky_uri(candidate_uri)
+            if our_content:
+                our_uri = candidate_uri
+                break
+
+        if not our_content or not our_uri:
+            skipped += 1
+            continue
+
+        record = notification.get("record") or {}
+        inbound_text = record.get("text") or ""
+        logger.info(f"  Drafting Bluesky reply to @{author_handle}: \"{inbound_text[:60]}...\"")
+
+        try:
+            draft_result = drafter.draft_with_lineage(
+                our_post=our_content["content"],
+                their_reply=inbound_text,
+                their_handle=author_handle,
+                self_handle=bluesky_config.handle,
+                person_context=None,
+            )
+            draft = draft_result.reply_text
+            knowledge_ids = draft_result.knowledge_ids
+        except (anthropic.APIError, anthropic.APIConnectionError, anthropic.APITimeoutError, anthropic.RateLimitError) as e:
+            logger.error(f"  Error drafting Bluesky reply: {e}")
+            continue
+
+        metadata = {
+            "reason": reason,
+            "reason_subject": notification.get("reason_subject"),
+            "indexed_at": notification.get("indexed_at"),
+            "record_created_at": record.get("created_at"),
+            "reply_refs": _bluesky_reply_refs(notification),
+        }
+        reply_queue_id = db.insert_reply_draft(
+            inbound_tweet_id=inbound_uri,
+            inbound_author_handle=author_handle,
+            inbound_author_id=author.get("did") or "",
+            inbound_text=inbound_text,
+            our_tweet_id=our_uri,
+            our_content_id=our_content["id"],
+            our_post_text=our_content["content"],
+            draft_text=draft,
+            platform="bluesky",
+            inbound_url=_bluesky_post_url(author_handle, inbound_uri),
+            inbound_cid=notification.get("cid"),
+            our_platform_id=our_uri,
+            platform_metadata=json.dumps(metadata),
+        )
+
+        if knowledge_ids:
+            try:
+                db.insert_reply_knowledge_links(reply_queue_id, knowledge_ids)
+            except sqlite3.Error as e:
+                logger.warning(f"  Failed to store Bluesky knowledge links: {e}")
+
+        logger.info(f"  Bluesky draft: \"{draft[:80]}...\"" if len(draft) > 80 else f"  Bluesky draft: \"{draft}\"")
+        drafted += 1
+
+    if next_cursor and next_cursor != cursor:
+        db.set_platform_reply_cursor("bluesky", next_cursor)
+
+    return drafted, skipped
 
 
 def main() -> None:
@@ -150,7 +308,15 @@ def main() -> None:
             logger.info("No new mentions")
             if bridge:
                 bridge.close()
+            bsky_drafted, bsky_skipped = _poll_bluesky_replies(
+                config,
+                db,
+                drafter,
+                replies_today,
+                max_daily,
+            )
             update_monitoring("poll-replies")
+            logger.info(f"Done. {bsky_drafted} drafted, {bsky_skipped} skipped.")
             return
 
         logger.info(f"Found {len(mentions)} mentions")
@@ -304,6 +470,16 @@ def main() -> None:
             # Ensure bridge is closed even if an error occurs
             if bridge:
                 bridge.close()
+
+        bsky_drafted, bsky_skipped = _poll_bluesky_replies(
+            config,
+            db,
+            drafter,
+            replies_today + drafted,
+            max_daily,
+        )
+        drafted += bsky_drafted
+        skipped += bsky_skipped
 
     update_monitoring("poll-replies")
     logger.info(f"Done. {drafted} drafted, {skipped} skipped.")

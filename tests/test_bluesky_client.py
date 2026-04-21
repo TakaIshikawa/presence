@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,6 +35,42 @@ def mock_send_post(mock_client, uri="at://did:plc:abc/app.bsky.feed.post/123", c
     response.cid = cid
     mock_client.send_post.return_value = response
     return response
+
+
+def make_notification(
+    uri="at://did:plc:reply/app.bsky.feed.post/r1",
+    cid="reply-cid",
+    reason="reply",
+    text="Nice post",
+):
+    """Build a minimal atproto-shaped notification object."""
+    return SimpleNamespace(
+        uri=uri,
+        cid=cid,
+        reason=reason,
+        reason_subject="at://did:plc:me/app.bsky.feed.post/root",
+        indexed_at="2026-04-21T00:00:00Z",
+        is_read=False,
+        author=SimpleNamespace(
+            did="did:plc:alice",
+            handle="alice.bsky.social",
+            display_name="Alice",
+        ),
+        record=SimpleNamespace(
+            text=text,
+            created_at="2026-04-21T00:00:00Z",
+            reply=SimpleNamespace(
+                root=SimpleNamespace(
+                    uri="at://did:plc:me/app.bsky.feed.post/root",
+                    cid="root-cid",
+                ),
+                parent=SimpleNamespace(
+                    uri="at://did:plc:me/app.bsky.feed.post/root",
+                    cid="root-cid",
+                ),
+            ),
+        ),
+    )
 
 
 # --- BlueskyClient._ensure_login() ---
@@ -293,6 +330,70 @@ class TestReply:
         assert result.success is False
         assert "UnauthorizedError" in result.error
         assert "Token expired" in result.error
+
+
+# --- BlueskyClient.get_notifications() ---
+
+
+class TestGetNotifications:
+    def test_calls_atproto_notifications_with_cursor_and_limit(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.app.bsky.notification.list_notifications.return_value = (
+            SimpleNamespace(notifications=[], cursor="next-cursor")
+        )
+
+        notifications, cursor = client.get_notifications(
+            cursor="existing-cursor",
+            limit=25,
+        )
+
+        assert notifications == []
+        assert cursor == "next-cursor"
+        mock_client.app.bsky.notification.list_notifications.assert_called_once_with(
+            params={"limit": 25, "cursor": "existing-cursor"}
+        )
+
+    def test_normalizes_notification_payloads(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.app.bsky.notification.list_notifications.return_value = (
+            SimpleNamespace(
+                notifications=[make_notification(text="What about this?")],
+                cursor="next-cursor",
+            )
+        )
+
+        notifications, cursor = client.get_notifications()
+
+        assert cursor == "next-cursor"
+        assert notifications == [
+            {
+                "uri": "at://did:plc:reply/app.bsky.feed.post/r1",
+                "cid": "reply-cid",
+                "reason": "reply",
+                "reason_subject": "at://did:plc:me/app.bsky.feed.post/root",
+                "indexed_at": "2026-04-21T00:00:00Z",
+                "is_read": False,
+                "author": {
+                    "did": "did:plc:alice",
+                    "handle": "alice.bsky.social",
+                    "display_name": "Alice",
+                },
+                "record": {
+                    "text": "What about this?",
+                    "created_at": "2026-04-21T00:00:00Z",
+                    "reply": {
+                        "root": {
+                            "uri": "at://did:plc:me/app.bsky.feed.post/root",
+                            "cid": "root-cid",
+                        },
+                        "parent": {
+                            "uri": "at://did:plc:me/app.bsky.feed.post/root",
+                            "cid": "root-cid",
+                        },
+                    },
+                },
+            }
+        ]
 
 
 # --- BlueskyClient.__init__() ---
