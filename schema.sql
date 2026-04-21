@@ -275,8 +275,19 @@ CREATE INDEX IF NOT EXISTS idx_content_topics_topic ON content_topics(topic);
 CREATE INDEX IF NOT EXISTS idx_content_topics_content ON content_topics(content_id);
 
 -- Planned topics for forward-looking content calendar
+CREATE TABLE IF NOT EXISTS content_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    goal TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    status TEXT DEFAULT 'active', -- 'active', 'paused', 'completed'
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS planned_topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER REFERENCES content_campaigns(id),
     topic TEXT NOT NULL,
     angle TEXT,                    -- specific angle to cover
     source_material TEXT,          -- optional: commit SHAs or session IDs to draw from

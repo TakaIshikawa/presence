@@ -67,6 +67,32 @@ def test_content_mix_includes_planned_topics_gaps_and_role(db):
     assert "Under-covered topics" in section
 
 
+def test_campaign_context_includes_active_campaign_and_next_planned_topic(db):
+    campaign_id = db.insert_content_campaign(
+        name="Reliability Week",
+        goal="show practical reliability lessons from real build work",
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+    )
+    db.insert_planned_topic(
+        campaign_id=campaign_id,
+        topic="testing",
+        angle="dry-runs before risky releases",
+        target_date="2026-04-22",
+    )
+
+    section = PresenceContextBuilder(db).build_campaign_context()
+
+    assert "CAMPAIGN CONTEXT" in section
+    assert "Use this only when the source prompts or commits genuinely support it" in section
+    assert "Reliability Week" in section
+    assert "practical reliability lessons" in section
+    assert "2026-04-01 to 2026-04-30" in section
+    assert "testing" in section
+    assert "dry-runs before risky releases" in section
+    assert "2026-04-22" in section
+
+
 def test_outcome_learning_includes_real_metrics(db):
     content_id = _published_content(db, "A concrete post that got engagement.")
     db.insert_engagement(

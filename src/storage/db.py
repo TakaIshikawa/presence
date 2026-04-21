@@ -101,6 +101,21 @@ class Database:
                 self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
             if pr_cols and "filter_stats" not in pr_cols:
                 self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
+            # Migrate campaign planning tables/columns
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_campaigns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    goal TEXT,
+                    start_date TEXT,
+                    end_date TEXT,
+                    status TEXT DEFAULT 'active',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            pt_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(planned_topics)")}
+            if pt_cols and "campaign_id" not in pt_cols:
+                self.conn.execute("ALTER TABLE planned_topics ADD COLUMN campaign_id INTEGER REFERENCES content_campaigns(id)")
             # Migrate: create meta table if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS meta (
@@ -1640,12 +1655,45 @@ class Database:
 
         return sorted(gaps)
 
+    def insert_content_campaign(
+        self,
+        name: str,
+        goal: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        status: str = "active",
+    ) -> int:
+        """Create a content campaign for planned topic guidance."""
+        cursor = self.conn.execute(
+            """INSERT INTO content_campaigns (name, goal, start_date, end_date, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, goal, start_date, end_date, status),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_active_campaign(self) -> Optional[dict]:
+        """Return the active campaign whose date window contains today, if any."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        cursor = self.conn.execute(
+            """SELECT * FROM content_campaigns
+               WHERE status = 'active'
+                 AND (start_date IS NULL OR start_date <= ?)
+                 AND (end_date IS NULL OR end_date >= ?)
+               ORDER BY start_date DESC NULLS LAST, created_at DESC
+               LIMIT 1""",
+            (today, today),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def insert_planned_topic(
         self,
         topic: str,
         angle: str = None,
         target_date: str = None,
-        source_material: str = None
+        source_material: str = None,
+        campaign_id: int = None,
     ) -> int:
         """Plan a future topic for content generation.
 
@@ -1659,9 +1707,9 @@ class Database:
             ID of the planned topic
         """
         cursor = self.conn.execute(
-            """INSERT INTO planned_topics (topic, angle, target_date, source_material)
-               VALUES (?, ?, ?, ?)""",
-            (topic, angle, target_date, source_material)
+            """INSERT INTO planned_topics (campaign_id, topic, angle, target_date, source_material)
+               VALUES (?, ?, ?, ?, ?)""",
+            (campaign_id, topic, angle, target_date, source_material)
         )
         self.conn.commit()
         return cursor.lastrowid
