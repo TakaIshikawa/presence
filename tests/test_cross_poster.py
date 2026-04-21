@@ -36,6 +36,23 @@ class TestCountGraphemes:
 
 
 class TestAdaptForBluesky:
+    def test_delegates_to_platform_adapter(self):
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            def adapt(self, text, content_type):
+                self.calls.append((text, content_type))
+                return "adapted for bluesky"
+
+        adapter = FakeAdapter()
+        cross_poster = CrossPoster(platform_adapter=adapter)
+
+        result = cross_poster.adapt_for_bluesky("Tweet for X", "x_thread")
+
+        assert result == "adapted for bluesky"
+        assert adapter.calls == [("Tweet for X", "x_thread")]
+
     def test_text_under_300_graphemes_unchanged(self):
         cross_poster = CrossPoster()
         text = "This is a short post"
