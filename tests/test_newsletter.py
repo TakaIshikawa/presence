@@ -10,6 +10,7 @@ import requests
 from output.newsletter import (
     NewsletterAssembler,
     NewsletterContent,
+    NewsletterMetrics,
     NewsletterResult,
     ButtondownClient,
 )
@@ -415,6 +416,75 @@ class TestButtondownClient:
 
         assert count == 0
 
+    @patch("output.newsletter.requests.Session")
+    def test_get_email_analytics_success(self, MockSession):
+        """Test get_email_analytics() parses Buttondown metrics."""
+        mock_session = MockSession.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "opens": 50,
+            "clicks": 12,
+            "unsubscriptions": 2,
+        }
+        mock_session.get.return_value = mock_response
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        metrics = client.get_email_analytics("issue-123")
+
+        assert metrics == NewsletterMetrics(
+            issue_id="issue-123",
+            opens=50,
+            clicks=12,
+            unsubscribes=2,
+        )
+        mock_session.get.assert_called_once_with(
+            f"{ButtondownClient.BASE_URL}/emails/issue-123/analytics",
+            timeout=30,
+        )
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_email_analytics_defaults_missing_counts(self, MockSession):
+        """Missing Buttondown analytics fields are treated as zero."""
+        mock_session = MockSession.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {}
+        mock_session.get.return_value = mock_response
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        metrics = client.get_email_analytics("issue-123")
+
+        assert metrics.opens == 0
+        assert metrics.clicks == 0
+        assert metrics.unsubscribes == 0
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_email_analytics_http_error(self, MockSession):
+        """HTTP failures return None for analytics fetches."""
+        mock_session = MockSession.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_session.get.return_value = mock_response
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+
+        assert client.get_email_analytics("missing") is None
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_email_analytics_request_exception(self, MockSession):
+        """RequestException returns None for analytics fetches."""
+        mock_session = MockSession.return_value
+        mock_session.get.side_effect = requests.RequestException("Timeout")
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+
+        assert client.get_email_analytics("issue-123") is None
+
 
 # --- DB Methods ---
 
@@ -447,3 +517,70 @@ class TestNewsletterDB:
         results = db.get_published_content_in_range("x_post", week_start, now)
         assert len(results) == 1
         assert results[0]["content"] == "In range."
+
+    def test_insert_newsletter_engagement(self, db):
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-1",
+            subject="Test Subject",
+            content_ids=[1],
+            subscriber_count=42,
+        )
+
+        engagement_id = db.insert_newsletter_engagement(
+            newsletter_send_id=send_id,
+            issue_id="issue-1",
+            opens=10,
+            clicks=3,
+            unsubscribes=1,
+        )
+
+        row = db.conn.execute(
+            """SELECT newsletter_send_id, issue_id, opens, clicks, unsubscribes, fetched_at
+               FROM newsletter_engagement WHERE id = ?""",
+            (engagement_id,),
+        ).fetchone()
+        assert row["newsletter_send_id"] == send_id
+        assert row["issue_id"] == "issue-1"
+        assert row["opens"] == 10
+        assert row["clicks"] == 3
+        assert row["unsubscribes"] == 1
+        assert row["fetched_at"]
+
+    def test_get_newsletter_sends_needing_metrics(self, db):
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-1",
+            subject="Needs Metrics",
+            content_ids=[],
+            subscriber_count=10,
+        )
+        db.insert_newsletter_send(
+            issue_id="",
+            subject="No Issue ID",
+            content_ids=[],
+            subscriber_count=10,
+        )
+
+        sends = db.get_newsletter_sends_needing_metrics(max_age_days=90)
+
+        assert len(sends) == 1
+        assert sends[0]["id"] == send_id
+        assert sends[0]["issue_id"] == "issue-1"
+
+    def test_get_newsletter_sends_needing_metrics_skips_fresh_snapshot(self, db):
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-1",
+            subject="Already Fetched",
+            content_ids=[],
+            subscriber_count=10,
+        )
+        db.insert_newsletter_engagement(
+            newsletter_send_id=send_id,
+            issue_id="issue-1",
+            opens=10,
+            clicks=3,
+            unsubscribes=0,
+        )
+
+        sends = db.get_newsletter_sends_needing_metrics(max_age_days=90)
+
+        assert sends == []
