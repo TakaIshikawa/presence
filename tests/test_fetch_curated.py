@@ -60,6 +60,20 @@ class TestFetchUserTweets:
 
         assert result == []
 
+    def test_uses_cached_user_id_when_db_provided(self):
+        x_client = MagicMock()
+        x_client.get_user_tweets.return_value = [
+            {"id": "100", "text": "Hello world"},
+        ]
+        db = MagicMock()
+        db.get_meta.return_value = "cached-id"
+
+        result = fetch_user_tweets(x_client, "testuser", limit=3, db=db)
+
+        assert result[0]["id"] == "100"
+        x_client.get_user_id.assert_not_called()
+        x_client.get_user_tweets.assert_called_once_with("cached-id", count=3)
+
 
 # --- TestMain filtering ---
 
@@ -160,3 +174,20 @@ class TestMainFiltering:
             with pytest.raises(SystemExit):
                 main()
             assert "embeddings not configured" in caplog.text
+
+    @patch("fetch_curated.script_context")
+    def test_circuit_breaker_skips_before_initializing(self, mock_script_context):
+        config = MagicMock()
+        db = MagicMock()
+        db.get_meta.side_effect = lambda key: {
+            "x_api_blocked_until": "2999-01-01T00:00:00+00:00",
+            "x_api_block_reason": "402 Payment Required",
+        }.get(key)
+        mock_script_context.return_value.__enter__.return_value = (config, db)
+
+        with patch("fetch_curated.XClient") as MockXClient:
+            from fetch_curated import main
+
+            main()
+
+        MockXClient.assert_not_called()

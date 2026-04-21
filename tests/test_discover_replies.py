@@ -259,6 +259,44 @@ class TestDiscoverFiltering:
         pending = db.get_pending_proactive_actions()
         assert pending[0]["relevance_score"] == 0.0
 
+    def test_caps_curated_accounts_per_run_and_uses_cached_user_ids(self, db):
+        accounts = [
+            SimpleNamespace(identifier="alice"),
+            SimpleNamespace(identifier="bob"),
+            SimpleNamespace(identifier="carol"),
+        ]
+        config = _make_config({
+            "max_accounts_per_run": 2,
+            "tweets_per_account": 1,
+            "min_relevance": 0.0,
+        })
+        config.curated_sources.x_accounts = accounts
+        db.set_meta("x_user_id:alice", "111")
+
+        x_client = MagicMock()
+        x_client.username = "myhandle"
+        x_client.get_user_id.return_value = "222"
+        x_client.get_user_tweets.return_value = []
+        drafter = MagicMock()
+
+        inserted = discover(config, db, x_client, None, drafter)
+
+        assert inserted == 0
+        x_client.get_user_id.assert_called_once_with("bob")
+        assert x_client.get_user_tweets.call_count == 2
+        x_client.get_user_tweets.assert_any_call("111", count=1)
+        x_client.get_user_tweets.assert_any_call("222", count=1)
+
+    def test_circuit_breaker_skips_discovery(self, db):
+        config, x_client, ks, drafter, rel, pt = self._setup_mocks(db, [])
+        db.set_meta("x_api_blocked_until", "2999-01-01T00:00:00+00:00")
+        db.set_meta("x_api_block_reason", "402 Payment Required")
+
+        inserted = self._discover_with_batch_patch(config, db, x_client, ks, drafter, rel, pt)
+
+        assert inserted == 0
+        x_client.get_user_id.assert_not_called()
+
 
 class TestBatchScoreRelevance:
     """Test the batch scoring function directly."""

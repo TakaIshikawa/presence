@@ -10,7 +10,20 @@ if TYPE_CHECKING:
     from storage.db import Database
 
 
-def get_active_x_accounts(config: Config, db: Database) -> list:
+def _rotate_accounts(accounts: list, limit: int, cursor: int) -> list:
+    if limit <= 0 or len(accounts) <= limit:
+        return accounts
+    start = cursor % len(accounts)
+    rotated = accounts[start:] + accounts[:start]
+    return rotated[:limit]
+
+
+def get_active_x_accounts(
+    config: Config,
+    db: Database,
+    limit: int | None = None,
+    cursor_key: str | None = None,
+) -> list:
     """Merge config curated X accounts with DB-approved accounts, deduplicated.
 
     Returns a list of objects with .identifier, .name, .license attributes.
@@ -36,4 +49,19 @@ def get_active_x_accounts(config: Config, db: Database) -> list:
             ))
             seen.add(row["identifier"].lower())
 
-    return accounts
+    if limit is None or limit <= 0 or len(accounts) <= limit:
+        return accounts
+
+    cursor = 0
+    if cursor_key:
+        try:
+            cursor = int(db.get_meta(cursor_key) or "0")
+        except ValueError:
+            cursor = 0
+
+    selected = _rotate_accounts(accounts, limit, cursor)
+
+    if cursor_key:
+        db.set_meta(cursor_key, str((cursor + limit) % len(accounts)))
+
+    return selected

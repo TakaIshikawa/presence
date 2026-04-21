@@ -84,6 +84,8 @@ class CuratedSource:
 class CuratedSourcesConfig:
     x_accounts: list[CuratedSource]
     blogs: list[CuratedSource]
+    max_x_accounts_per_run: int = 25
+    x_tweets_per_account: int = 5
 
 
 @dataclass
@@ -146,6 +148,8 @@ class ProactiveConfig:
     max_candidates_per_run: int = 5
     min_discovery_relevance: float = 0.45
     min_discovery_samples: int = 3
+    max_accounts_per_run: int = 25
+    tweets_per_account: int = 5
 
 
 @dataclass
@@ -263,7 +267,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         ]
         curated_sources_config = CuratedSourcesConfig(
             x_accounts=x_accounts,
-            blogs=blogs
+            blogs=blogs,
+            max_x_accounts_per_run=data["curated_sources"].get("max_x_accounts_per_run", 25),
+            x_tweets_per_account=data["curated_sources"].get("x_tweets_per_account", 5),
         )
 
     # Parse newsletter config if present
@@ -349,6 +355,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_candidates_per_run=data["proactive"].get("max_candidates_per_run", 5),
             min_discovery_relevance=data["proactive"].get("min_discovery_relevance", 0.45),
             min_discovery_samples=data["proactive"].get("min_discovery_samples", 3),
+            max_accounts_per_run=data["proactive"].get("max_accounts_per_run", 25),
+            tweets_per_account=data["proactive"].get("tweets_per_account", 5),
         )
 
     # Parse image generation config if present

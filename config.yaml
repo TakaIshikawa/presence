@@ -71,6 +71,8 @@ embeddings:
 
 # Curated external sources (manually approved)
 curated_sources:
+  max_x_accounts_per_run: 25
+  x_tweets_per_account: 5
   x_accounts:
     # AI/ML builders and researchers
     - username: "karpathy"
@@ -105,6 +107,8 @@ proactive:
   min_relevance: 0.50           # Minimum semantic relevance to our knowledge base
   max_tweet_age_hours: 24       # Only reply to tweets newer than this
   reply_cap_per_account: 2      # Max replies per account per week
+  max_accounts_per_run: 25      # Rotate through at most this many curated accounts per run
+  tweets_per_account: 5         # Recent tweets to inspect per account
   search_enabled: false         # Enable X search (costs API credits)
   search_keywords: []           # Keywords to search for (when search_enabled)
   account_discovery_enabled: true   # Auto-discover candidate accounts

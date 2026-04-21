@@ -11,6 +11,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context
 from output.x_client import XClient
+from output.x_api_guard import (
+    get_x_api_block_reason,
+    mark_x_api_blocked_if_needed,
+)
 
 # Rate limiting: seconds between X posts
 POST_DELAY_SECONDS = 30
@@ -25,6 +29,11 @@ def main():
     )
 
     with script_context() as (config, db):
+        block_reason = get_x_api_block_reason(db)
+        if block_reason:
+            logger.warning(f"X API circuit breaker active; skipping retry: {block_reason}")
+            return
+
         x_client = XClient(
             config.x.api_key,
             config.x.api_secret,
@@ -54,6 +63,9 @@ def main():
                 logger.info("Posted: %s", result.url)
                 posts_made += 1
             else:
+                if mark_x_api_blocked_if_needed(db, result.error):
+                    logger.warning("X API blocked; stopping retries")
+                    break
                 count = db.increment_retry(item['id'])
                 if count >= 3:
                     logger.warning("Failed: %s -- abandoned after 3 attempts", result.error)

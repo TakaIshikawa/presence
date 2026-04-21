@@ -12,6 +12,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from runner import script_context
 from evaluation.engagement_scorer import compute_engagement_score
 from output.x_client import XClient
+from output.x_api_guard import (
+    get_x_api_block_reason,
+    mark_x_api_blocked_if_needed,
+)
 
 # Max tweets to fetch per batch (X API limit for GET /2/tweets)
 BATCH_SIZE = 100
@@ -65,13 +69,23 @@ def main() -> None:
     )
 
     with script_context() as (config, db):
+        block_reason = get_x_api_block_reason(db)
+        if block_reason:
+            logger.warning(f"X API circuit breaker active; skipping engagement fetch: {block_reason}")
+            return
+
         # Backfill tweet_ids from URLs for pre-pipeline posts
         backfilled = backfill_tweet_ids(db)
         if backfilled:
             logger.info(f"Backfilled {backfilled} tweet_ids from URLs")
 
         # Use bearer token for read endpoints (OAuth 2.0 App-Only)
-        bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
+        try:
+            bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
+        except Exception as e:
+            mark_x_api_blocked_if_needed(db, e)
+            logger.error(f"Failed to get X bearer token: {e}")
+            return
         client = tweepy.Client(bearer_token=bearer_token)
 
         # Get posts that need metrics (published in last 30 days, not fetched in 6h)
@@ -95,7 +109,10 @@ def main() -> None:
                     ids=batch, tweet_fields=["public_metrics"]
                 )
             except tweepy.TweepyException as e:
+                blocked_until = mark_x_api_blocked_if_needed(db, e)
                 logger.error(f"API error fetching batch {i // BATCH_SIZE + 1}: {e}")
+                if blocked_until:
+                    break
                 continue
 
             if not response.data:
@@ -198,7 +215,10 @@ def main() -> None:
                 db.insert_profile_metrics("x", **metrics)
                 logger.info(f"Profile: {metrics['follower_count']} followers, "
                             f"{metrics['following_count']} following")
+            else:
+                mark_x_api_blocked_if_needed(db, x_client.last_error)
         except Exception as e:
+            mark_x_api_blocked_if_needed(db, e)
             logger.warning(f"Profile metrics fetch failed (non-fatal): {e}")
 
         logger.info(f"\nDone. Fetched X metrics for {fetched} posts, Bluesky metrics for {bluesky_fetched} posts.")

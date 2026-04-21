@@ -26,9 +26,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
 from output.x_client import XClient
+from output.x_api_guard import (
+    get_x_api_block_reason,
+    mark_x_api_blocked_if_needed,
+)
 from engagement.reply_drafter import ReplyDrafter
 from knowledge.embeddings import VoyageEmbeddings
 from knowledge.store import KnowledgeStore
+
+
+def _get_authenticated_x_identity(db, x_client: XClient) -> tuple[str, str]:
+    """Return cached authenticated X user id/handle, resolving once if needed."""
+    cached_id = db.get_meta("x_authenticated_user_id")
+    cached_handle = db.get_meta("x_authenticated_username")
+    if isinstance(cached_id, str) and cached_id and isinstance(cached_handle, str) and cached_handle:
+        return cached_id, cached_handle
+
+    user_id, username = x_client.get_authenticated_user()
+    db.set_meta("x_authenticated_user_id", user_id)
+    db.set_meta("x_authenticated_username", username)
+    return user_id, username
 
 
 def main() -> None:
@@ -38,6 +55,12 @@ def main() -> None:
     signal.alarm(WATCHDOG_TIMEOUT)
 
     with script_context() as (config, db):
+        block_reason = get_x_api_block_reason(db)
+        if block_reason:
+            logger.warning(f"X API circuit breaker active; skipping replies: {block_reason}")
+            update_monitoring("poll-replies")
+            return
+
         # Check if replies are enabled
         if config.replies and not config.replies.enabled:
             logger.info("Replies disabled in config, skipping")
@@ -96,9 +119,15 @@ def main() -> None:
             return
 
         # Get our user ID for filtering
-        me = x_client.client.get_me()
-        my_user_id = str(me.data.id)
-        my_handle = me.data.username
+        try:
+            my_user_id, my_handle = _get_authenticated_x_identity(db, x_client)
+        except tweepy.TweepyException as e:
+            mark_x_api_blocked_if_needed(db, e)
+            logger.error(f"Error fetching authenticated user: {e}")
+            if bridge:
+                bridge.close()
+            update_monitoring("poll-replies")
+            return
 
         # Load cursor
         since_id = db.get_last_mention_id()
@@ -107,9 +136,10 @@ def main() -> None:
         # Fetch mentions
         try:
             mentions, users_by_id = x_client.get_mentions(
-                since_id=since_id, max_results=50
+                since_id=since_id, max_results=50, user_id=my_user_id
             )
         except tweepy.TweepyException as e:
+            mark_x_api_blocked_if_needed(db, e)
             logger.error(f"Error fetching mentions: {e}")
             if bridge:
                 bridge.close()

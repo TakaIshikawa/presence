@@ -28,6 +28,10 @@ from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from synthesis.content_mix import ContentMixPlanner
 from output.x_client import XClient, parse_thread_content
+from output.x_api_guard import (
+    get_x_api_block_reason,
+    mark_x_api_blocked_if_needed,
+)
 from knowledge.embeddings import (
     VoyageEmbeddings,
     serialize_embedding,
@@ -169,6 +173,17 @@ def main() -> None:
         current_poll_time = datetime.now(timezone.utc)
         logger.info(f"Polling for commits since {since.isoformat()}")
 
+        block_reason = get_x_api_block_reason(db)
+        if block_reason:
+            logger.warning(
+                "X API circuit breaker active; skipping generation/posting: %s",
+                block_reason,
+            )
+            db.set_last_poll_time(current_poll_time)
+            update_monitoring("run-poll")
+            logger.info("Done. No posts made.")
+            return
+
         posted = False
         rate_limited = False
         posting_blocked = False
@@ -215,6 +230,7 @@ def main() -> None:
                 logger.info(f"  Still rate limited, will retry next cycle")
                 rate_limited = True
             else:
+                mark_x_api_blocked_if_needed(db, result.error)
                 posting_blocked = True
                 count = db.increment_retry(item["id"])
                 if count >= 3:
@@ -496,6 +512,7 @@ def main() -> None:
                             else:
                                 logger.warning(f"Bluesky cross-post failed (non-fatal): {bsky_result.error}")
                     else:
+                        mark_x_api_blocked_if_needed(db, result.error)
                         logger.error(f"Post failed: {result.error}")
                         outcome = "below_threshold"
                         rejection_reason = f"Post failed: {result.error}"

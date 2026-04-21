@@ -134,6 +134,7 @@ def _patches():
         db.count_replies_today.return_value = 0
         db.is_reply_processed.return_value = False
         db.get_last_mention_id.return_value = None
+        db.get_meta.return_value = None
         db.get_content_by_tweet_id.return_value = OUR_CONTENT
         db.insert_reply_draft.return_value = 1
 
@@ -146,6 +147,7 @@ def _patches():
 
         x_client = MockXClient.return_value
         x_client.client.get_me.return_value = _make_me()
+        x_client.get_authenticated_user.return_value = ("my_id", "my_handle")
         x_client.get_mentions.return_value = ([], USERS_BY_ID)
 
         drafter = MockDrafter.return_value
@@ -784,6 +786,45 @@ class TestEarlyExitConditions:
             main()
 
         mock_bridge.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 11. X identity caching
+# ---------------------------------------------------------------------------
+
+
+class TestXIdentityCache:
+    def test_cached_identity_avoids_get_me_and_is_used_for_mentions(self, _patches):
+        _patches.db.get_meta.side_effect = lambda key: {
+            "x_authenticated_user_id": "cached-99",
+            "x_authenticated_username": "cacheduser",
+        }.get(key)
+        _patches.x_client.get_mentions.return_value = ([], USERS_BY_ID)
+
+        main()
+
+        _patches.x_client.get_authenticated_user.assert_not_called()
+        _patches.db.set_meta.assert_not_called()
+        _patches.x_client.get_mentions.assert_called_once_with(
+            since_id=None,
+            max_results=50,
+            user_id="cached-99",
+        )
+
+    def test_missing_cached_identity_is_resolved_and_stored(self, _patches):
+        _patches.db.get_meta.return_value = None
+        _patches.x_client.get_mentions.return_value = ([], USERS_BY_ID)
+
+        main()
+
+        _patches.x_client.get_authenticated_user.assert_called_once()
+        _patches.db.set_meta.assert_any_call("x_authenticated_user_id", "my_id")
+        _patches.db.set_meta.assert_any_call("x_authenticated_username", "my_handle")
+        _patches.x_client.get_mentions.assert_called_once_with(
+            since_id=None,
+            max_results=50,
+            user_id="my_id",
+        )
 
     def test_bridge_closed_on_early_exit_cap_reached(self, _patches):
         """When exiting early due to cap, bridge is closed."""

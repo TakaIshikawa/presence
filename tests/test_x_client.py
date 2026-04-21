@@ -425,6 +425,15 @@ class TestGetUserTweets:
 
 
 class TestGetMentions:
+    def test_get_authenticated_user_caches_get_me(self):
+        client, mock_tweepy = make_x_client()
+        mock_get_me(mock_tweepy, user_id="99", username="testuser")
+
+        assert client.get_authenticated_user() == ("99", "testuser")
+        assert client.get_authenticated_user() == ("99", "testuser")
+
+        mock_tweepy.get_me.assert_called_once()
+
     def test_parses_mentions_and_users(self):
         client, mock_tweepy = make_x_client()
         mock_get_me(mock_tweepy, user_id="99", username="testuser")
@@ -480,6 +489,19 @@ class TestGetMentions:
         assert users_by_id["200"]["username"] == "bob"
         assert users_by_id["200"]["name"] == "Bob Builder"
         assert users_by_id["201"]["username"] == "eve"
+
+    def test_get_mentions_uses_supplied_user_id_without_get_me(self):
+        client, mock_tweepy = make_x_client()
+        response = MagicMock()
+        response.data = None
+        response.includes = None
+        mock_tweepy.get_users_mentions.return_value = response
+
+        client.get_mentions(user_id="cached-99")
+
+        mock_tweepy.get_me.assert_not_called()
+        mock_tweepy.get_users_mentions.assert_called_once()
+        assert mock_tweepy.get_users_mentions.call_args.args[0] == "cached-99"
 
     def test_passes_since_id_to_api(self):
         client, mock_tweepy = make_x_client()

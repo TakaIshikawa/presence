@@ -11,12 +11,38 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
 from output.x_client import XClient
+from output.x_api_guard import (
+    get_x_api_block_reason,
+    mark_x_api_blocked_if_needed,
+)
 from engagement.reply_drafter import ReplyDrafter
 from knowledge.embeddings import VoyageEmbeddings, deserialize_embedding, cosine_similarity
 from knowledge.store import KnowledgeStore
 from knowledge.curated_accounts import get_active_x_accounts
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_ACCOUNTS_PER_RUN = 25
+DEFAULT_TWEETS_PER_ACCOUNT = 5
+
+
+def _last_x_error(x_client) -> str | None:
+    error = getattr(x_client, "last_error", None)
+    return error if isinstance(error, str) and error else None
+
+
+def _cached_user_id(db, x_client, username: str) -> str | None:
+    """Resolve a username once and persist the mapping in meta."""
+    normalized = username.lstrip("@").lower()
+    key = f"x_user_id:{normalized}"
+    cached = db.get_meta(key)
+    if cached:
+        return cached
+
+    user_id = x_client.get_user_id(normalized)
+    if user_id:
+        db.set_meta(key, user_id)
+    return user_id
 
 
 def _is_recent(tweet: dict, max_age_hours: int) -> bool:
@@ -137,24 +163,51 @@ def _batch_score_relevance(
 
 def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
     """Run the discovery pipeline. Returns count of actions inserted."""
+    block_reason = get_x_api_block_reason(db)
+    if block_reason:
+        logger.warning(f"X API circuit breaker active; skipping discovery: {block_reason}")
+        return 0
+
     proactive = config.proactive
 
     # 1. Source: Curated timelines (config + DB-approved accounts)
     candidates = []
-    accounts = get_active_x_accounts(config, db)
+    max_accounts = getattr(proactive, "max_accounts_per_run", DEFAULT_MAX_ACCOUNTS_PER_RUN)
+    tweets_per_account = getattr(proactive, "tweets_per_account", DEFAULT_TWEETS_PER_ACCOUNT)
+    accounts = get_active_x_accounts(
+        config,
+        db,
+        limit=max_accounts,
+        cursor_key="discover_replies_x_account_cursor",
+    )
     if accounts:
+        logger.info(
+            "Fetching curated timelines for %d accounts (cap=%d, tweets/account=%d)",
+            len(accounts),
+            max_accounts,
+            tweets_per_account,
+        )
         for account in accounts:
             try:
-                user_id = x_client.get_user_id(account.identifier)
+                user_id = _cached_user_id(db, x_client, account.identifier)
                 if not user_id:
+                    if mark_x_api_blocked_if_needed(db, _last_x_error(x_client)):
+                        logger.warning("X API blocked while resolving accounts; stopping discovery")
+                        break
                     logger.warning(f"Could not resolve user ID for @{account.identifier}")
                     continue
-                tweets = x_client.get_user_tweets(user_id, count=10)
+                tweets = x_client.get_user_tweets(user_id, count=tweets_per_account)
+                if mark_x_api_blocked_if_needed(db, _last_x_error(x_client)):
+                    logger.warning("X API blocked while fetching timelines; stopping discovery")
+                    break
                 for tweet in tweets:
                     tweet["discovery_source"] = "curated_timeline"
                     tweet["author_handle"] = account.identifier
                     candidates.append(tweet)
             except Exception as e:
+                if mark_x_api_blocked_if_needed(db, e):
+                    logger.warning("X API blocked while fetching timelines; stopping discovery")
+                    break
                 logger.warning(f"Failed to fetch timeline for @{account.identifier}: {e}")
 
     # 2. Source: Search (if enabled)
@@ -162,6 +215,9 @@ def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
         for kw in proactive.search_keywords:
             try:
                 results = x_client.search_tweets(kw, max_results=20)
+                if mark_x_api_blocked_if_needed(db, _last_x_error(x_client)):
+                    logger.warning("X API blocked while searching; stopping search")
+                    break
                 for tweet in results:
                     tweet["discovery_source"] = "search"
                     tweet["author_handle"] = tweet.get("author_username", "")
@@ -172,7 +228,12 @@ def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
     logger.info(f"Sourced {len(candidates)} candidate tweets")
 
     # 3. Filter
-    my_handle = x_client.username
+    try:
+        my_handle = x_client.username
+    except Exception as e:
+        mark_x_api_blocked_if_needed(db, e)
+        logger.warning(f"Could not fetch authenticated X username; skipping discovery: {e}")
+        return 0
     filtered = []
     for c in candidates:
         tweet_id = c.get("id", "")
