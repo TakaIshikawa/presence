@@ -122,6 +122,8 @@ class Database:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN sample_count INTEGER DEFAULT 0")
                 if "reviewed_at" not in cs_cols:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN reviewed_at TEXT")
+                if "feed_url" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_url TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_curated_sources_status ON curated_sources(status)")
             # Migrate: create bluesky_engagement table if missing
             self.conn.execute("""
@@ -782,7 +784,8 @@ class Database:
         """Upsert config-driven sources into curated_sources table.
 
         Args:
-            sources: List of dicts with 'identifier', 'name', 'license' keys
+            sources: List of dicts with 'identifier', 'name', 'license', optional
+                'feed_url' keys
             source_type: e.g. 'x_account', 'blog'
 
         Returns:
@@ -791,13 +794,14 @@ class Database:
         for src in sources:
             self.conn.execute(
                 """INSERT INTO curated_sources
-                   (source_type, identifier, name, license, status, discovery_source)
-                   VALUES (?, ?, ?, ?, 'active', 'config')
+                   (source_type, identifier, name, license, feed_url, status, discovery_source)
+                   VALUES (?, ?, ?, ?, ?, 'active', 'config')
                    ON CONFLICT(source_type, identifier) DO UPDATE SET
                    name = excluded.name,
-                   license = excluded.license""",
+                   license = excluded.license,
+                   feed_url = excluded.feed_url""",
                 (source_type, src["identifier"], src.get("name", ""),
-                 src.get("license", "attribution_required")),
+                 src.get("license", "attribution_required"), src.get("feed_url")),
             )
         self.conn.commit()
         return len(sources)

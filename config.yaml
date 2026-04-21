@@ -73,6 +73,7 @@ embeddings:
 curated_sources:
   max_x_accounts_per_run: 25
   x_tweets_per_account: 5
+  rss_entries_per_source: 5
   x_accounts:
     # AI/ML builders and researchers
     - username: "karpathy"
@@ -88,6 +89,7 @@ curated_sources:
   blogs:
     - domain: "simonwillison.net"
       name: "Simon Willison's Blog"
+      feed_url: "https://simonwillison.net/atom/everything/"
       license: "attribution_required"
 
 # Posting schedule optimization

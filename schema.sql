@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS curated_sources (
     identifier TEXT NOT NULL,   -- @username or domain
     name TEXT,
     license TEXT DEFAULT 'attribution_required',  -- 'open', 'attribution_required', 'restricted'
+    feed_url TEXT,
     notes TEXT,
     active INTEGER DEFAULT 1,
     status TEXT DEFAULT 'active',         -- 'candidate', 'active', 'rejected', 'paused'
