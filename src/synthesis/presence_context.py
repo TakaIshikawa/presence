@@ -15,6 +15,7 @@ from typing import Any
 class PresenceContext:
     voice_memory: str = ""
     content_mix: str = ""
+    campaign_context: str = ""
     outcome_learning: str = ""
 
     def render(self) -> str:
@@ -23,6 +24,7 @@ class PresenceContext:
             for section in (
                 self.voice_memory,
                 self.content_mix,
+                self.campaign_context,
                 self.outcome_learning,
             )
             if section and section.strip()
@@ -65,6 +67,7 @@ class PresenceContextBuilder:
         return PresenceContext(
             voice_memory=self.build_voice_memory(content_type),
             content_mix=self.build_content_mix(content_type),
+            campaign_context=self.build_campaign_context(),
             outcome_learning=self.build_outcome_learning(content_type),
         )
 
@@ -156,6 +159,47 @@ class PresenceContextBuilder:
         lines.append(
             "- Do not optimize every post for the same job; vary between reach, credibility, usefulness, and relationship-building."
         )
+        return "\n".join(lines)
+
+    def build_campaign_context(self) -> str:
+        campaign = self._dict("get_active_campaign")
+        planned = self._rows("get_planned_topics", status="planned")
+        next_topic = planned[0] if planned else {}
+
+        if not campaign and not next_topic:
+            return ""
+
+        lines = [
+            "CAMPAIGN CONTEXT (optional planning signal):",
+            "- Use this only when the source prompts or commits genuinely support it; never invent evidence to satisfy the campaign.",
+        ]
+
+        if campaign:
+            name = campaign.get("name")
+            goal = campaign.get("goal")
+            start = campaign.get("start_date")
+            end = campaign.get("end_date")
+            if name:
+                lines.append(f"- Active campaign: {name}.")
+            if goal:
+                lines.append(f"- Goal: {goal}.")
+            if start or end:
+                window = " to ".join(
+                    value for value in (start or "unspecified start", end or "unspecified end")
+                    if value
+                )
+                lines.append(f"- Date window: {window}.")
+
+        if next_topic:
+            topic = next_topic.get("topic")
+            angle = next_topic.get("angle") or "no explicit angle"
+            target = next_topic.get("target_date")
+            topic_line = f"- Next planned topic: {topic} ({angle})"
+            if target:
+                topic_line += f", target {target}"
+            topic_line += "."
+            lines.append(topic_line)
+
         return "\n".join(lines)
 
     def build_outcome_learning(self, content_type: str) -> str:

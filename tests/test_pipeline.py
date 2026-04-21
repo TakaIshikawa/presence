@@ -125,6 +125,52 @@ class TestContentTypeRouting:
         assert "OUTCOME LEARNING" in pattern_context
         assert result.final_content is not None
 
+    @pytest.mark.parametrize("content_type", ["x_post", "x_thread", "x_visual", "x_long_post"])
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_campaign_context_passed_to_generation_prompt(
+        self, MockFS, MockGen, MockEval, MockRefiner, content_type
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+        db.get_active_campaign.return_value = {
+            "name": "Reliability Week",
+            "goal": "turn real build work into reliability lessons",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-30",
+        }
+        db.get_planned_topics.return_value = [
+            {
+                "topic": "testing",
+                "angle": "dry-runs before risky releases",
+                "target_date": "2026-04-22",
+            }
+        ]
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Post A", "Post B", "Post C"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(best_score=9.5)
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS, content_type=content_type)
+
+        pattern_context = pipeline.generator.generate_candidates.call_args.kwargs[
+            "pattern_context"
+        ]
+        assert "CAMPAIGN CONTEXT" in pattern_context
+        assert "Reliability Week" in pattern_context
+        assert "turn real build work into reliability lessons" in pattern_context
+        assert "2026-04-01 to 2026-04-30" in pattern_context
+        assert "Next planned topic: testing (dry-runs before risky releases)" in pattern_context
+        assert "Use this only when the source prompts or commits genuinely support it" in pattern_context
+
     @patch("synthesis.pipeline.ContentRefiner")
     @patch("synthesis.pipeline.CrossModelEvaluator")
     @patch("synthesis.pipeline.ContentGenerator")

@@ -1853,13 +1853,45 @@ class Database:
 
         return sorted(gaps)
 
+    def insert_content_campaign(
+        self,
+        name: str,
+        goal: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        status: str = "active",
+    ) -> int:
+        """Create a content campaign for planned topic guidance."""
+        cursor = self.conn.execute(
+            """INSERT INTO content_campaigns (name, goal, start_date, end_date, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, goal, start_date, end_date, status),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_active_campaign(self) -> Optional[dict]:
+        """Return the active campaign whose date window contains today, if any."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        cursor = self.conn.execute(
+            """SELECT * FROM content_campaigns
+               WHERE status = 'active'
+                 AND (start_date IS NULL OR start_date <= ?)
+                 AND (end_date IS NULL OR end_date >= ?)
+               ORDER BY start_date DESC NULLS LAST, created_at DESC
+               LIMIT 1""",
+            (today, today),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def insert_planned_topic(
         self,
         topic: str,
         angle: str = None,
         target_date: str = None,
         source_material: str = None,
-        campaign_id: int = None
+        campaign_id: int = None,
     ) -> int:
         """Plan a future topic for content generation.
 

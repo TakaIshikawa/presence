@@ -307,12 +307,12 @@ CREATE INDEX IF NOT EXISTS idx_content_campaigns_dates ON content_campaigns(star
 
 CREATE TABLE IF NOT EXISTS planned_topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER REFERENCES content_campaigns(id),
     topic TEXT NOT NULL,
     angle TEXT,                    -- specific angle to cover
     source_material TEXT,          -- optional: commit SHAs or session IDs to draw from
     target_date TEXT,              -- when to aim for publication
     status TEXT DEFAULT 'planned', -- 'planned', 'generated', 'skipped'
-    campaign_id INTEGER REFERENCES content_campaigns(id), -- optional multi-post arc
     content_id INTEGER REFERENCES generated_content(id),  -- link when generated
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
