@@ -10,6 +10,9 @@ import pytest
 
 # Mock the atproto module before any imports
 sys.modules['atproto'] = MagicMock()
+sys.modules['atproto'].Client = MagicMock()
+sys.modules['atproto.exceptions'] = MagicMock()
+sys.modules['atproto.exceptions'].AtProtocolError = Exception
 
 # Add scripts/ and src/ to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -574,6 +577,90 @@ def test_main_cross_posts_to_bluesky_when_platform_all(test_db, base_time):
     assert row["published"] == 1
     assert row["published_url"] == "https://x.com/test/status/123"
     assert row["bluesky_uri"] == "at://did:plc:test/app.bsky.feed.post/abc"
+
+    x_state = test_db.get_publication_state(content_id, "x")
+    bsky_state = test_db.get_publication_state(content_id, "bluesky")
+    assert x_state["status"] == "published"
+    assert x_state["platform_post_id"] == "123"
+    assert bsky_state["status"] == "published"
+    assert bsky_state["platform_post_id"] == "at://did:plc:test/app.bsky.feed.post/abc"
+    assert bsky_state["platform_url"] == "https://bsky.app/profile/test.bsky.social/post/abc"
+
+
+def test_main_bluesky_failure_preserves_x_success(test_db, base_time):
+    """X success and Bluesky failure are recorded independently."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Test post for both", "x_post", 7.0, 0)
+    ).lastrowid
+
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="all")
+
+    mock_config = MagicMock()
+    mock_config.x.api_key = "test_key"
+    mock_config.x.api_secret = "test_secret"
+    mock_config.x.access_token = "test_token"
+    mock_config.x.access_token_secret = "test_token_secret"
+    mock_config.bluesky.enabled = True
+    mock_config.bluesky.handle = "test.bsky.social"
+    mock_config.bluesky.app_password = "test_password"
+
+    @dataclass
+    class PostResult:
+        success: bool
+        url: str = ""
+        tweet_id: str = ""
+        uri: str = ""
+        error: str = ""
+
+    mock_x_client = MagicMock()
+    mock_x_client.post.return_value = PostResult(
+        success=True,
+        url="https://x.com/test/status/123",
+        tweet_id="123",
+    )
+
+    mock_bluesky_client = MagicMock()
+    mock_bluesky_client.post.return_value = PostResult(
+        success=False,
+        error="Bluesky rate limit",
+    )
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.BlueskyClient", return_value=mock_bluesky_client), \
+         patch("publish_queue.CrossPoster") as mock_cross_poster_class, \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        mock_cross_poster = MagicMock()
+        mock_cross_poster.adapt_for_bluesky.return_value = "Adapted post"
+        mock_cross_poster_class.return_value = mock_cross_poster
+
+        from publish_queue import main
+        main()
+
+    row = test_db.conn.execute(
+        "SELECT published, published_url, bluesky_uri FROM generated_content WHERE id = ?",
+        (content_id,),
+    ).fetchone()
+    assert row["published"] == 1
+    assert row["published_url"] == "https://x.com/test/status/123"
+    assert row["bluesky_uri"] is None
+
+    x_state = test_db.get_publication_state(content_id, "x")
+    bsky_state = test_db.get_publication_state(content_id, "bluesky")
+    assert x_state["status"] == "published"
+    assert x_state["platform_post_id"] == "123"
+    assert bsky_state["status"] == "failed"
+    assert bsky_state["error"] == "Bluesky rate limit"
+    assert bsky_state["attempt_count"] == 1
 
 
 def test_queue_respects_time_boundary(test_db, base_time):

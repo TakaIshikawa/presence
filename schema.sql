@@ -84,6 +84,23 @@ CREATE TABLE IF NOT EXISTS bluesky_engagement (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Durable per-platform publication state
+CREATE TABLE IF NOT EXISTS content_publications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    platform TEXT NOT NULL,              -- 'x', 'bluesky'
+    status TEXT NOT NULL DEFAULT 'queued', -- 'queued', 'published', 'failed'
+    platform_post_id TEXT,               -- tweet ID, AT URI, or platform-native ID
+    platform_url TEXT,
+    error TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    published_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(content_id, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publications(content_id);
+CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status);
+
 -- Track engagement predictions from EngagementPredictor
 CREATE TABLE IF NOT EXISTS engagement_predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

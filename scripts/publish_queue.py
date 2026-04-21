@@ -92,6 +92,7 @@ def main() -> None:
                         logger.info(f"  Posted to X: {result.url}")
                     else:
                         logger.error(f"  X posting failed: {result.error}")
+                        db.upsert_publication_failure(content_id, "x", str(result.error))
                         db.mark_queue_failed(queue_id, f"X: {result.error}")
                         continue  # Skip Bluesky if X failed
 
@@ -106,10 +107,19 @@ def main() -> None:
                         bsky_result = bluesky_client.post(bsky_tweets[0])
 
                     if bsky_result.success:
-                        db.mark_published_bluesky(content_id, bsky_result.uri)
+                        db.mark_published_bluesky(
+                            content_id,
+                            bsky_result.uri,
+                            url=getattr(bsky_result, "url", None),
+                        )
                         logger.info(f"  Posted to Bluesky: {bsky_result.url}")
                     else:
                         logger.warning(f"  Bluesky posting failed (non-fatal): {bsky_result.error}")
+                        db.upsert_publication_failure(
+                            content_id,
+                            "bluesky",
+                            str(bsky_result.error),
+                        )
 
                 # Mark queue item as published
                 db.mark_queue_published(queue_id)

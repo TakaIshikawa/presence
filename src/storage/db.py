@@ -140,6 +140,24 @@ class Database:
             """)
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_uri ON bluesky_engagement(bluesky_uri)")
+            # Migrate: create durable per-platform publication status table.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                    platform TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    platform_post_id TEXT,
+                    platform_url TEXT,
+                    error TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    published_at TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(content_id, platform)
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publications(content_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status)")
             self.conn.commit()
         except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
             raise DatabaseError(
@@ -308,21 +326,173 @@ class Database:
 
     def mark_published(self, content_id: int, url: str, tweet_id: str = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        self.conn.execute(
+        cursor = self.conn.execute(
             """UPDATE generated_content
                SET published = 1, published_url = ?, tweet_id = ?, published_at = ?
                WHERE id = ?""",
             (url, tweet_id, now, content_id)
         )
+        if cursor.rowcount:
+            self._upsert_publication_success(
+                content_id=content_id,
+                platform="x",
+                platform_post_id=tweet_id,
+                platform_url=url,
+                published_at=now,
+                commit=False,
+            )
         self.conn.commit()
 
-    def mark_published_bluesky(self, content_id: int, uri: str) -> None:
+    def mark_published_bluesky(
+        self,
+        content_id: int,
+        uri: str,
+        url: str = None,
+    ) -> None:
         """Mark content as cross-posted to Bluesky by storing its AT URI."""
-        self.conn.execute(
+        cursor = self.conn.execute(
             "UPDATE generated_content SET bluesky_uri = ? WHERE id = ?",
             (uri, content_id)
         )
+        if cursor.rowcount:
+            self._upsert_publication_success(
+                content_id=content_id,
+                platform="bluesky",
+                platform_post_id=uri,
+                platform_url=url,
+                commit=False,
+            )
         self.conn.commit()
+
+    def _upsert_publication_success(
+        self,
+        content_id: int,
+        platform: str,
+        platform_post_id: str = None,
+        platform_url: str = None,
+        published_at: str = None,
+        commit: bool = True,
+    ) -> None:
+        published_at = published_at or datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """INSERT INTO content_publications
+               (content_id, platform, status, platform_post_id, platform_url,
+                error, attempt_count, published_at, updated_at)
+               VALUES (?, ?, 'published', ?, ?, NULL, 1, ?, ?)
+               ON CONFLICT(content_id, platform) DO UPDATE SET
+               status = 'published',
+               platform_post_id = excluded.platform_post_id,
+               platform_url = excluded.platform_url,
+               error = NULL,
+               attempt_count = content_publications.attempt_count + 1,
+               published_at = excluded.published_at,
+               updated_at = excluded.updated_at""",
+            (
+                content_id,
+                platform,
+                platform_post_id,
+                platform_url,
+                published_at,
+                published_at,
+            ),
+        )
+        if commit:
+            self.conn.commit()
+
+    def upsert_publication_success(
+        self,
+        content_id: int,
+        platform: str,
+        platform_post_id: str = None,
+        platform_url: str = None,
+        published_at: str = None,
+    ) -> None:
+        """Record a successful publish attempt for one platform."""
+        self._upsert_publication_success(
+            content_id=content_id,
+            platform=platform,
+            platform_post_id=platform_post_id,
+            platform_url=platform_url,
+            published_at=published_at,
+        )
+
+    def upsert_publication_failure(
+        self,
+        content_id: int,
+        platform: str,
+        error: str,
+    ) -> None:
+        """Record a failed publish attempt for one platform."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """INSERT INTO content_publications
+               (content_id, platform, status, error, attempt_count, updated_at)
+               VALUES (?, ?, 'failed', ?, 1, ?)
+               ON CONFLICT(content_id, platform) DO UPDATE SET
+               status = 'failed',
+               error = excluded.error,
+               attempt_count = content_publications.attempt_count + 1,
+               updated_at = excluded.updated_at""",
+            (content_id, platform, error, now),
+        )
+        self.conn.commit()
+
+    def upsert_publication_queued(self, content_id: int, platform: str) -> None:
+        """Ensure a queued publication row exists without counting an attempt."""
+        self._upsert_publication_queued(content_id, platform, commit=True)
+
+    def _upsert_publication_queued(
+        self,
+        content_id: int,
+        platform: str,
+        commit: bool = True,
+    ) -> None:
+        """Ensure a queued publication row exists without counting an attempt."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """INSERT INTO content_publications
+               (content_id, platform, status, updated_at)
+               VALUES (?, ?, 'queued', ?)
+               ON CONFLICT(content_id, platform) DO UPDATE SET
+               status = CASE
+                   WHEN content_publications.status = 'published' THEN content_publications.status
+                   ELSE 'queued'
+               END,
+               error = CASE
+                   WHEN content_publications.status = 'published' THEN content_publications.error
+                   ELSE NULL
+               END,
+               updated_at = CASE
+                   WHEN content_publications.status = 'published' THEN content_publications.updated_at
+                   ELSE excluded.updated_at
+               END""",
+            (content_id, platform, now),
+        )
+        if commit:
+            self.conn.commit()
+
+    def get_publication_state(
+        self,
+        content_id: int,
+        platform: str,
+    ) -> dict | None:
+        """Get the latest durable publication state for one content/platform."""
+        row = self.conn.execute(
+            """SELECT * FROM content_publications
+               WHERE content_id = ? AND platform = ?""",
+            (content_id, platform),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_publication_states(self, content_id: int) -> list[dict]:
+        """Get durable publication states for a content item, newest first."""
+        cursor = self.conn.execute(
+            """SELECT * FROM content_publications
+               WHERE content_id = ?
+               ORDER BY updated_at DESC, id DESC""",
+            (content_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_unpublished_content(self, content_type: str, min_score: float) -> list[dict]:
         cursor = self.conn.execute(
@@ -1739,6 +1909,13 @@ class Database:
                VALUES (?, ?, ?)""",
             (content_id, scheduled_at, platform)
         )
+        platforms = ("x", "bluesky") if platform == "all" else (platform,)
+        for target_platform in platforms:
+            self._upsert_publication_queued(
+                content_id=content_id,
+                platform=target_platform,
+                commit=False,
+            )
         self.conn.commit()
         return cursor.lastrowid
 

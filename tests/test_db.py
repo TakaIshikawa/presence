@@ -32,6 +32,7 @@ class TestSchemaInit:
             "curated_sources",
             "content_knowledge_links",
             "pipeline_runs",
+            "content_publications",
         }
         assert expected.issubset(tables)
 
@@ -55,6 +56,24 @@ class TestSchemaInit:
         }
         assert "outcome" in cols
         assert "rejection_reason" in cols
+
+    def test_content_publications_columns_exist(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(content_publications)")
+        }
+        expected = {
+            "content_id",
+            "platform",
+            "status",
+            "platform_post_id",
+            "platform_url",
+            "error",
+            "attempt_count",
+            "published_at",
+            "updated_at",
+        }
+        assert expected.issubset(cols)
 
     def test_idempotent_init(self, db, schema_path):
         # Running init_schema again should not raise
@@ -248,6 +267,38 @@ class TestInitSchemaMigrations:
             cols = {row[1] for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")}
             assert "outcome" in cols
             assert "rejection_reason" in cols
+
+    def test_migration_creates_content_publications_for_existing_schema(self, schema_path):
+        """Test that content_publications is added to an existing in-memory schema."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            tables = {
+                row[0]
+                for row in db.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "content_publications" in tables
+
+            indexes = {
+                row[1]
+                for row in db.conn.execute(
+                    "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='content_publications'"
+                ).fetchall()
+            }
+            assert "idx_content_publications_content" in indexes
+            assert "idx_content_publications_platform_status" in indexes
 
     def test_migration_does_not_re_add_existing_columns(self, schema_path):
         """Test that migration does not attempt to re-add columns that are already present."""
@@ -668,6 +719,12 @@ class TestGeneratedContent:
         assert row[2] == "tweet-001"
         assert row[3] is not None  # published_at set
 
+        publication = db.get_publication_state(content_id, "x")
+        assert publication["status"] == "published"
+        assert publication["platform_post_id"] == "tweet-001"
+        assert publication["platform_url"] == "https://x.com/post/1"
+        assert publication["attempt_count"] == 1
+
     def test_get_unpublished_respects_min_score(self, db):
         self._insert_content(db, content="High score", eval_score=9.0)
         self._insert_content(db, content="Low score", eval_score=5.0)
@@ -709,6 +766,52 @@ class TestGeneratedContent:
             (content_id,),
         ).fetchone()
         assert row[0] == -1
+
+    def test_publication_failure_is_per_platform(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_publication_success(
+            content_id,
+            "x",
+            platform_post_id="tweet-001",
+            platform_url="https://x.com/post/1",
+        )
+        db.upsert_publication_failure(
+            content_id,
+            "bluesky",
+            "Authentication failed",
+        )
+
+        x_state = db.get_publication_state(content_id, "x")
+        bsky_state = db.get_publication_state(content_id, "bluesky")
+
+        assert x_state["status"] == "published"
+        assert x_state["error"] is None
+        assert bsky_state["status"] == "failed"
+        assert bsky_state["error"] == "Authentication failed"
+        assert bsky_state["attempt_count"] == 1
+
+    def test_publication_failure_retry_increments_attempt_count(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_publication_failure(content_id, "bluesky", "temporary error")
+        db.upsert_publication_failure(content_id, "bluesky", "rate limit")
+
+        state = db.get_publication_state(content_id, "bluesky")
+        assert state["status"] == "failed"
+        assert state["error"] == "rate limit"
+        assert state["attempt_count"] == 2
+
+    def test_queue_for_publishing_seeds_platform_states(self, db):
+        content_id = self._insert_content(db)
+        db.queue_for_publishing(content_id, "2026-04-17T12:00:00+00:00", platform="all")
+
+        states = {
+            row["platform"]: row
+            for row in db.get_latest_publication_states(content_id)
+        }
+        assert states["x"]["status"] == "queued"
+        assert states["bluesky"]["status"] == "queued"
+        assert states["x"]["attempt_count"] == 0
+        assert states["bluesky"]["attempt_count"] == 0
 
 
 # --- Poll state ---
@@ -1427,6 +1530,10 @@ class TestMarkPublished:
     def test_mark_published_nonexistent_id_is_noop(self, db):
         """Updating a nonexistent row should not raise."""
         db.mark_published(9999, "https://example.com")  # no error
+        count = db.conn.execute(
+            "SELECT COUNT(*) FROM content_publications WHERE content_id = 9999"
+        ).fetchone()[0]
+        assert count == 0
 
     def test_mark_published_bluesky_sets_uri(self, db, sample_content):
         """Test marking content as published to Bluesky."""
@@ -1441,6 +1548,10 @@ class TestMarkPublished:
     def test_mark_published_bluesky_nonexistent_id_is_noop(self, db):
         """Updating a nonexistent row should not raise."""
         db.mark_published_bluesky(9999, "at://did:plc:xyz/app.bsky.feed.post/abc")
+        count = db.conn.execute(
+            "SELECT COUNT(*) FROM content_publications WHERE content_id = 9999"
+        ).fetchone()[0]
+        assert count == 0
 
 
 # ---------------------------------------------------------------------------
