@@ -1,5 +1,6 @@
 """Newsletter assembly and Buttondown delivery."""
 
+import logging
 import re
 import requests
 from dataclasses import dataclass, field
@@ -7,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from storage.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -206,8 +209,8 @@ class ButtondownClient:
             )
             if response.status_code == 200:
                 return response.json().get("count", 0)
-        except requests.RequestException:
-            pass
+        except requests.RequestException as e:
+            logger.debug(f"Subscriber count fetch failed: {e}")
         return 0
 
     def get_email_analytics(self, issue_id: str) -> Optional[NewsletterMetrics]:
