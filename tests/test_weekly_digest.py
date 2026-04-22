@@ -197,7 +197,13 @@ class TestMainPublishesWhenPassesThreshold:
 
         MockPipeline.return_value.run.assert_called_once()
         assert MockPipeline.return_value.run.call_args[1]["content_type"] == "blog_post"
-        MockBlogWriter.return_value.write_post.assert_called_once_with(result.final_content)
+        MockBlogWriter.return_value.write_post.assert_called_once_with(
+            result.final_content,
+            source_commits=["def456"],
+            source_sessions=["uuid-456"],
+            generated_content_id=42,
+            canonical_social_post_url=None,
+        )
         MockBlogWriter.return_value.commit_and_push.assert_called_once_with("Weekly Recap")
         db.mark_published.assert_called_once_with(42, "https://blog.example.com/weekly")
 

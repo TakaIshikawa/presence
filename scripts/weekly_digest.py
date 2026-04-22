@@ -178,7 +178,13 @@ def main():
             logger.debug(result.final_content[:500] + "...")
         else:
             logger.info("Writing blog post...")
-            write_result = blog_writer.write_post(result.final_content)
+            write_result = blog_writer.write_post(
+                result.final_content,
+                source_commits=[c["sha"] for c in commit_dicts if c.get("sha")],
+                source_sessions=[p.message_uuid for p in prompts],
+                generated_content_id=content_id,
+                canonical_social_post_url=None,
+            )
 
             if write_result.success:
                 logger.info(f"Blog post written: {write_result.file_path}")

@@ -172,6 +172,41 @@ class TestWritePost:
         assert "<h1>My Test Post</h1>" in html
         assert '<span class="date">' in html
 
+    def test_html_contains_structured_frontmatter(self, tmp_path):
+        site = _setup_site(tmp_path)
+        writer = BlogWriter(str(site))
+
+        content = "TITLE: My Test Post\n\nTesting the publishing workflow."
+        writer.write_post(
+            content,
+            source_commits=["abc123"],
+            source_sessions=["session-1"],
+            generated_content_id=42,
+            canonical_social_post_url="https://x.com/taka/status/123",
+            tags=["Testing"],
+            summary="Custom summary.",
+        )
+
+        html = (site / "blog" / "my-test-post.html").read_text()
+        assert html.startswith("---\n")
+        assert 'title: "My Test Post"' in html
+        assert 'summary: "Custom summary."' in html
+        assert 'source_commits: ["abc123"]' in html
+        assert 'source_sessions: ["session-1"]' in html
+        assert "generated_content_id: 42" in html
+        assert 'canonical_social_post_url: "https://x.com/taka/status/123"' in html
+        assert 'tags: ["testing"]' in html
+
+    def test_derives_tags_from_topic_keywords(self, tmp_path):
+        site = _setup_site(tmp_path)
+        writer = BlogWriter(str(site))
+
+        content = "TITLE: Topic Tags\n\nPytest fixtures improved coverage for integration tests."
+        writer.write_post(content)
+
+        html = (site / "blog" / "topic-tags.html").read_text()
+        assert 'tags: ["testing"]' in html
+
     def test_html_contains_converted_content(self, tmp_path):
         site = _setup_site(tmp_path)
         writer = BlogWriter(str(site))

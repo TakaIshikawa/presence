@@ -188,6 +188,26 @@ class TestWritePost:
         html = (site / "blog" / "meta.html").read_text()
         assert 'content="Description paragraph."' in html
 
+    def test_frontmatter_includes_provenance_and_summary(self, writer, site):
+        content = "TITLE: Provenance\n\nDescription paragraph."
+        writer.write_post(
+            content,
+            source_commits=["sha1", "sha2"],
+            source_sessions=["msg1"],
+            generated_content_id=99,
+            canonical_social_post_url=None,
+            topics=[("architecture", "module boundaries", 0.9)],
+        )
+
+        html = (site / "blog" / "provenance.html").read_text()
+        assert html.startswith("---\n")
+        assert 'source_commits: ["sha1", "sha2"]' in html
+        assert 'source_sessions: ["msg1"]' in html
+        assert "generated_content_id: 99" in html
+        assert "canonical_social_post_url: null" in html
+        assert 'tags: ["architecture"]' in html
+        assert 'summary: "Description paragraph."' in html
+
 
 # ---------------------------------------------------------------------------
 # _update_index
