@@ -90,11 +90,13 @@ class ReplyDrafter:
         timeout: float = 300.0,
         knowledge_store: Optional["KnowledgeStore"] = None,
         restricted_prompt_behavior: str = KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
+        freshness_half_life_days: Optional[float] = None,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.knowledge_store = knowledge_store
         self.restricted_prompt_behavior = restricted_prompt_behavior
+        self.freshness_half_life_days = freshness_half_life_days
 
     def draft(
         self,
@@ -203,6 +205,7 @@ class ReplyDrafter:
                     source_types=["own_post", "own_conversation", "curated_x"],
                     limit=3,
                     min_similarity=0.40,
+                    freshness_half_life_days=self.freshness_half_life_days,
                 )
         knowledge_items = KnowledgeStore.filter_prompt_safe(
             knowledge_items,

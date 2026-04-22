@@ -77,6 +77,7 @@ class EmbeddingsConfig:
     model: str
     api_key: str
     semantic_dedup_threshold: float = 0.82
+    freshness_half_life_days: Optional[float] = None
 
 
 @dataclass
@@ -96,6 +97,7 @@ class CuratedSourcesConfig:
     max_x_accounts_per_run: int = 25
     x_tweets_per_account: int = 5
     rss_entries_per_source: int = 5
+    freshness_half_life_days: Optional[float] = None
 
 
 @dataclass
@@ -281,6 +283,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             model=data["embeddings"]["model"],
             api_key=_resolve_env_var(data["embeddings"]["api_key"]),
             semantic_dedup_threshold=data["embeddings"].get("semantic_dedup_threshold", 0.82),
+            freshness_half_life_days=data["embeddings"].get("freshness_half_life_days"),
         )
 
     # Parse curated sources if present
@@ -323,6 +326,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_x_accounts_per_run=data["curated_sources"].get("max_x_accounts_per_run", 25),
             x_tweets_per_account=data["curated_sources"].get("x_tweets_per_account", 5),
             rss_entries_per_source=data["curated_sources"].get("rss_entries_per_source", 5),
+            freshness_half_life_days=data["curated_sources"].get("freshness_half_life_days"),
         )
 
     # Parse newsletter config if present

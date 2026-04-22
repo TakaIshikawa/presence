@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 from typing import Optional, Any
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .embeddings import (
     EmbeddingProvider,
@@ -51,14 +52,48 @@ class KnowledgeItem:
         }
 
 
+@dataclass(frozen=True)
+class KnowledgeSearchResult:
+    """Search result with tuple-compatible unpacking.
+
+    Iteration yields (item, adjusted_score) so existing callers that unpack
+    ``for item, score in results`` keep working while newer callers can inspect
+    both the raw embedding similarity and freshness-adjusted score.
+    """
+
+    item: KnowledgeItem
+    raw_similarity: float
+    adjusted_score: float
+
+    def __iter__(self):
+        yield self.item
+        yield self.adjusted_score
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int):
+        if index == 0:
+            return self.item
+        if index == 1:
+            return self.adjusted_score
+        raise IndexError(index)
+
+
 class KnowledgeStore:
     STRICT_LICENSE_BEHAVIOR = "strict"
     PERMISSIVE_LICENSE_BEHAVIOR = "permissive"
     RESTRICTED_LICENSE = "restricted"
 
-    def __init__(self, conn: sqlite3.Connection, embedder: EmbeddingProvider) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        embedder: EmbeddingProvider,
+        freshness_half_life_days: Optional[float] = None,
+    ) -> None:
         self.conn = conn
         self.embedder = embedder
+        self.freshness_half_life_days = freshness_half_life_days
 
     @staticmethod
     def is_prompt_allowed(
@@ -81,14 +116,14 @@ class KnowledgeStore:
 
     @staticmethod
     def filter_prompt_safe(
-        items: list[tuple[KnowledgeItem, float]],
+        items: list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
         restricted_behavior: str = STRICT_LICENSE_BEHAVIOR,
-    ) -> list[tuple[KnowledgeItem, float]]:
+    ) -> list[tuple[KnowledgeItem, float] | KnowledgeSearchResult]:
         """Filter search results down to knowledge allowed in prompt context."""
         return [
-            (item, score)
-            for item, score in items
-            if KnowledgeStore.is_prompt_allowed(item, restricted_behavior)
+            result
+            for result in items
+            if KnowledgeStore.is_prompt_allowed(result[0], restricted_behavior)
         ]
 
     @staticmethod
@@ -96,6 +131,41 @@ class KnowledgeStore:
         if "license" in row.keys():
             return row["license"] or "attribution_required"
         return "attribution_required"
+
+    @staticmethod
+    def _parse_created_at(value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _freshness_adjusted_score(
+        similarity: float,
+        created_at: Any,
+        half_life_days: Optional[float],
+    ) -> float:
+        if half_life_days is None:
+            return similarity
+        if half_life_days <= 0:
+            raise ValueError("freshness_half_life_days must be positive when set")
+
+        created = KnowledgeStore._parse_created_at(created_at)
+        if created is None:
+            return similarity
+
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        age_days = max((now - created.astimezone(timezone.utc)).total_seconds(), 0) / 86400
+        freshness_weight = math.pow(0.5, age_days / half_life_days)
+        return similarity * freshness_weight
 
     def add_item(self, item: KnowledgeItem) -> int:
         """Add a knowledge item with embedding.
@@ -150,8 +220,9 @@ class KnowledgeStore:
         source_types: Optional[list[str]] = None,
         limit: int = 5,
         min_similarity: float = 0.5,
-        approved_only: bool = True
-    ) -> list[tuple[KnowledgeItem, float]]:
+        approved_only: bool = True,
+        freshness_half_life_days: Optional[float] = None,
+    ) -> list[KnowledgeSearchResult]:
         """Search for similar knowledge items.
 
         Raises:
@@ -176,6 +247,12 @@ class KnowledgeStore:
 
         cursor = self.conn.execute(sql, params)
 
+        effective_half_life_days = (
+            freshness_half_life_days
+            if freshness_half_life_days is not None
+            else self.freshness_half_life_days
+        )
+
         # Calculate similarities
         results = []
         for row in cursor.fetchall():
@@ -197,10 +274,20 @@ class KnowledgeStore:
                     created_at=row["created_at"],
                     license=self._row_license(row),
                 )
-                results.append((item, similarity))
+                adjusted_score = self._freshness_adjusted_score(
+                    similarity,
+                    row["created_at"],
+                    effective_half_life_days,
+                )
+                results.append(KnowledgeSearchResult(
+                    item=item,
+                    raw_similarity=similarity,
+                    adjusted_score=adjusted_score,
+                ))
 
-        # Sort by similarity and limit
-        results.sort(key=lambda x: x[1], reverse=True)
+        # Sort by adjusted score and limit. With freshness disabled, this is
+        # identical to sorting by raw embedding similarity.
+        results.sort(key=lambda x: x.adjusted_score, reverse=True)
         final_results = results[:limit]
         logger.debug("Found %d similar items (min_similarity=%.2f)", len(final_results), min_similarity)
         return final_results

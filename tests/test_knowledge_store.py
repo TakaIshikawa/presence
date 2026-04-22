@@ -1,6 +1,7 @@
 """Tests for knowledge store and embedding utilities."""
 
 import math
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,6 +34,16 @@ class FakeEmbedder(EmbeddingProvider):
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [self.embed(t) for t in texts]
+
+
+class FixedQueryEmbedder(EmbeddingProvider):
+    """Embedder for tests that need predictable similarity ordering."""
+
+    def embed(self, text: str) -> list[float]:
+        return [1.0, 0.0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
 
 
 def _make_item(
@@ -344,6 +355,68 @@ class TestSearchSimilar:
         # Verify descending similarity order
         sims = [sim for _, sim in results]
         assert sims == sorted(sims, reverse=True)
+
+    def test_result_exposes_raw_similarity_and_adjusted_score(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        store.add_item(_make_item(source_id="item", embedding=[0.9, 0.1]))
+
+        result = store.search_similar("query", min_similarity=-1.0)[0]
+
+        assert result.item.source_id == "item"
+        assert result.raw_similarity == pytest.approx(result.adjusted_score)
+        item, score = result
+        assert item.source_id == "item"
+        assert score == pytest.approx(result.adjusted_score)
+
+    def test_order_without_freshness_uses_raw_similarity(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        old_high = _make_item(source_id="old-high", embedding=[0.98, 0.02])
+        fresh_lower = _make_item(source_id="fresh-lower", embedding=[0.86, 0.14])
+        store.add_item(old_high)
+        store.add_item(fresh_lower)
+        now = datetime.now(timezone.utc)
+        store.conn.execute(
+            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            ((now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds"), "old-high"),
+        )
+        store.conn.execute(
+            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            (now.isoformat(sep=" ", timespec="seconds"), "fresh-lower"),
+        )
+        store.conn.commit()
+
+        results = store.search_similar("query", min_similarity=-1.0)
+
+        assert [result.item.source_id for result in results] == ["old-high", "fresh-lower"]
+        assert results[0].adjusted_score == pytest.approx(results[0].raw_similarity)
+
+    def test_order_with_freshness_half_life_uses_adjusted_score(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        old_high = _make_item(source_id="old-high", embedding=[0.98, 0.02])
+        fresh_lower = _make_item(source_id="fresh-lower", embedding=[0.86, 0.14])
+        store.add_item(old_high)
+        store.add_item(fresh_lower)
+        now = datetime.now(timezone.utc)
+        store.conn.execute(
+            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            ((now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds"), "old-high"),
+        )
+        store.conn.execute(
+            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            (now.isoformat(sep=" ", timespec="seconds"), "fresh-lower"),
+        )
+        store.conn.commit()
+
+        results = store.search_similar(
+            "query",
+            min_similarity=-1.0,
+            freshness_half_life_days=7,
+        )
+
+        assert [result.item.source_id for result in results] == ["fresh-lower", "old-high"]
+        old_result = next(result for result in results if result.item.source_id == "old-high")
+        assert old_result.adjusted_score < old_result.raw_similarity
+        assert results[0].raw_similarity < old_result.raw_similarity
 
     def test_min_similarity_filter(self, store):
         self._add_items(store)
