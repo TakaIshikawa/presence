@@ -518,6 +518,135 @@ def test_main_defers_due_items_during_embargo(test_db, base_time):
     mock_x_client.post.assert_not_called()
 
 
+def test_main_defers_single_platform_when_daily_cap_reached(test_db, base_time):
+    """A capped platform is rescheduled for the next non-embargoed daily slot."""
+    published_content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Already published today", "x_post", 7.0, 1),
+    ).lastrowid
+    test_db.upsert_publication_success(
+        published_content_id,
+        "x",
+        platform_post_id="tw-existing",
+        platform_url="https://x.com/status/existing",
+        published_at=base_time.replace(hour=1).isoformat(),
+    )
+
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Capped post", "x_post", 7.0, 0),
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(
+        content_id,
+        base_time.isoformat(),
+        platform="x",
+    )
+
+    mock_config = make_config(bluesky_enabled=False)
+    mock_config.publishing.daily_platform_limits = {"x": 1}
+    mock_config.publishing.embargo_windows = [
+        {"timezone": "UTC", "date": "2026-04-18", "start": "12:00", "end": "13:00"},
+    ]
+    mock_x_client = MagicMock()
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    row = test_db.conn.execute(
+        "SELECT status, scheduled_at FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+
+    assert row["status"] == "queued"
+    assert row["scheduled_at"] == datetime(2026, 4, 18, 13, 0, tzinfo=timezone.utc).isoformat()
+    mock_x_client.post.assert_not_called()
+
+
+def test_main_all_platform_item_publishes_remaining_platform_when_x_capped(test_db, base_time):
+    """Daily caps are applied per platform without blocking remaining targets."""
+    published_content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Already published today", "x_post", 7.0, 1),
+    ).lastrowid
+    test_db.upsert_publication_success(
+        published_content_id,
+        "x",
+        platform_post_id="tw-existing",
+        platform_url="https://x.com/status/existing",
+        published_at=base_time.replace(hour=1).isoformat(),
+    )
+
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Cross-post with X capped", "x_post", 7.0, 0),
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(
+        content_id,
+        base_time.isoformat(),
+        platform="all",
+    )
+
+    mock_config = make_config(bluesky_enabled=True)
+    mock_config.publishing.daily_platform_limits = {"x": 1}
+    mock_config.publishing.embargo_windows = []
+    mock_x_client = MagicMock()
+    mock_bluesky_client = MagicMock()
+    mock_bluesky_client.post.return_value = FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/abc",
+        url="https://bsky.app/profile/test/post/abc",
+    )
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.BlueskyClient", return_value=mock_bluesky_client), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    queue_row = test_db.conn.execute(
+        "SELECT status, scheduled_at FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    content_row = test_db.conn.execute(
+        "SELECT published, bluesky_uri FROM generated_content WHERE id = ?",
+        (content_id,),
+    ).fetchone()
+
+    assert queue_row["status"] == "queued"
+    assert queue_row["scheduled_at"] == datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc).isoformat()
+    assert content_row["published"] == 0
+    assert content_row["bluesky_uri"] == "at://did:plc:test/app.bsky.feed.post/abc"
+    mock_x_client.post.assert_not_called()
+    mock_bluesky_client.post.assert_called_once_with("bsky:Cross-post with X capped")
+
+
 def test_main_handles_empty_queue(test_db, base_time):
     """Test that main() handles empty queue gracefully."""
     mock_config = MagicMock()

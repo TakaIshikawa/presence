@@ -6,7 +6,7 @@ import sys
 import logging
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 WATCHDOG_TIMEOUT = 300  # 5 minutes
 DEFAULT_MAX_RETRY_DELAY_MINUTES = 360
@@ -90,6 +90,52 @@ def _copy_parts(content: str, content_type: str) -> list[str]:
     return [content]
 
 
+def _daily_platform_limits(config) -> dict[str, int]:
+    publishing_config = getattr(config, "publishing", None)
+    value = getattr(publishing_config, "daily_platform_limits", None)
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(platform): int(limit)
+        for platform, limit in value.items()
+        if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0
+    }
+
+
+def _platform_limit_reached(
+    db,
+    platform: str,
+    limits: dict[str, int],
+    counts: dict[str, int],
+    day_start_iso: str,
+) -> bool:
+    if platform not in limits:
+        return False
+    if platform not in counts:
+        counts[platform] = db.count_platform_publications_since(platform, day_start_iso)
+    return counts[platform] >= limits[platform]
+
+
+def _next_daily_slot(
+    scheduled_at: str,
+    now: datetime,
+    embargo_windows: list,
+) -> datetime:
+    try:
+        base = datetime.fromisoformat(scheduled_at)
+    except (TypeError, ValueError):
+        base = now
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    next_slot = base + timedelta(days=1)
+    while next_slot <= now:
+        next_slot += timedelta(days=1)
+    return next_allowed_slot(next_slot, embargo_windows)
+
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -156,8 +202,11 @@ def main() -> None:
         # Get current time
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
+        day_start_iso = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         max_retry_delay_minutes = _max_retry_delay_minutes(config)
         embargo_windows = embargo_windows_from_config(config)
+        daily_limits = _daily_platform_limits(config)
+        daily_counts = {}
 
         # Get due queue items
         due_items = db.get_due_queue_items(now_iso)
@@ -218,38 +267,51 @@ def main() -> None:
                 x_parts = _copy_parts(x_content, content_type)
 
                 platform_errors = []
+                deferred_platforms = []
 
                 # Publish to X if needed
                 if 'x' in pending_platforms:
-                    if content_type == 'x_thread':
-                        result = x_client.post_thread(x_parts)
-                    elif image_path:
-                        result = x_client.post_with_media(
-                            text=x_content,
-                            media_path=image_path,
-                            alt_text=image_alt_text,
-                        )
+                    if _platform_limit_reached(
+                        db, "x", daily_limits, daily_counts, day_start_iso
+                    ):
+                        deferred_platforms.append("x")
+                        logger.info("  X daily publish cap reached; deferring")
                     else:
-                        result = x_client.post(x_content)
+                        if content_type == 'x_thread':
+                            result = x_client.post_thread(x_parts)
+                        elif image_path:
+                            result = x_client.post_with_media(
+                                text=x_content,
+                                media_path=image_path,
+                                alt_text=image_alt_text,
+                            )
+                        else:
+                            result = x_client.post(x_content)
 
-                    if result.success:
-                        db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
-                        logger.info(f"  Posted to X: {result.url}")
-                    else:
-                        category = _result_error_category(result, "x")
-                        logger.error(f"  X posting failed: {result.error}")
-                        db.upsert_publication_failure(
-                            content_id,
-                            "x",
-                            str(result.error),
-                            max_retry_delay_minutes=max_retry_delay_minutes,
-                            error_category=category,
-                        )
-                        platform_errors.append((f"X: {result.error}", category))
+                        if result.success:
+                            db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
+                            daily_counts["x"] = daily_counts.get("x", 0) + 1
+                            logger.info(f"  Posted to X: {result.url}")
+                        else:
+                            category = _result_error_category(result, "x")
+                            logger.error(f"  X posting failed: {result.error}")
+                            db.upsert_publication_failure(
+                                content_id,
+                                "x",
+                                str(result.error),
+                                max_retry_delay_minutes=max_retry_delay_minutes,
+                                error_category=category,
+                            )
+                            platform_errors.append((f"X: {result.error}", category))
 
                 # Cross-post to Bluesky if needed and configured
                 if 'bluesky' in pending_platforms:
-                    if bluesky_client:
+                    if _platform_limit_reached(
+                        db, "bluesky", daily_limits, daily_counts, day_start_iso
+                    ):
+                        deferred_platforms.append("bluesky")
+                        logger.info("  Bluesky daily publish cap reached; deferring")
+                    elif bluesky_client:
                         bsky_copy = db.get_content_variant_or_original(
                             content_id,
                             "bluesky",
@@ -283,6 +345,7 @@ def main() -> None:
                                 bsky_result.uri,
                                 url=getattr(bsky_result, "url", None),
                             )
+                            daily_counts["bluesky"] = daily_counts.get("bluesky", 0) + 1
                             logger.info(f"  Posted to Bluesky: {bsky_result.url}")
                         else:
                             category = _result_error_category(bsky_result, "bluesky")
@@ -315,6 +378,14 @@ def main() -> None:
                         error_category=_queue_error_category(platform_errors),
                     )
                     logger.info(f"  Queue item {queue_id} failed for: {error_text}")
+                elif deferred_platforms:
+                    next_slot = _next_daily_slot(scheduled_at, now, embargo_windows)
+                    next_slot_iso = next_slot.isoformat()
+                    _defer_queue_item(db, queue_id, next_slot_iso)
+                    logger.info(
+                        f"  Queue item {queue_id} deferred to {next_slot_iso} "
+                        f"for daily caps: {', '.join(deferred_platforms)}"
+                    )
                 else:
                     # Mark queue item as published
                     db.mark_queue_published(queue_id)

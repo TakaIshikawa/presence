@@ -1294,6 +1294,30 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    def count_platform_publications_since(self, platform: str, since: str) -> int:
+        """Count published rows for one platform at or after an ISO timestamp."""
+        row = self.conn.execute(
+            """SELECT COUNT(*) AS count
+               FROM content_publications
+               WHERE platform = ?
+                 AND status = 'published'
+                 AND published_at IS NOT NULL
+                 AND published_at >= ?""",
+            (platform, since),
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def count_platform_publications_today(
+        self,
+        platform: str,
+        now: datetime | None = None,
+    ) -> int:
+        """Count platform publications since the start of the UTC day."""
+        now = now or datetime.now(timezone.utc)
+        utc_now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        day_start = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return self.count_platform_publications_since(platform, day_start.isoformat())
+
     def get_latest_publication_states(self, content_id: int) -> list[dict]:
         """Get durable publication states for a content item, newest first."""
         cursor = self.conn.execute(

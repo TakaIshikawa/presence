@@ -1208,6 +1208,37 @@ class TestGeneratedContent:
         assert states["x"]["attempt_count"] == 0
         assert states["bluesky"]["attempt_count"] == 0
 
+    def test_count_platform_publications_today_uses_utc_day_start(self, db):
+        content_today = self._insert_content(db, content="Today")
+        content_yesterday = self._insert_content(db, content="Yesterday")
+        content_other_platform = self._insert_content(db, content="Other")
+
+        db.upsert_publication_success(
+            content_today,
+            "x",
+            platform_post_id="tw-today",
+            published_at="2026-04-17T01:00:00+00:00",
+        )
+        db.upsert_publication_success(
+            content_yesterday,
+            "x",
+            platform_post_id="tw-yesterday",
+            published_at="2026-04-16T23:59:00+00:00",
+        )
+        db.upsert_publication_success(
+            content_other_platform,
+            "bluesky",
+            platform_post_id="at://bsky",
+            published_at="2026-04-17T02:00:00+00:00",
+        )
+
+        count = db.count_platform_publications_today(
+            "x",
+            now=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+        )
+
+        assert count == 1
+
     def test_insert_content_variant(self, db):
         content_id = self._insert_content(db)
 

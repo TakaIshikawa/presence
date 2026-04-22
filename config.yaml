@@ -132,6 +132,7 @@ publish_queue:
 # window's local timezone.
 publishing:
   embargo_windows: []
+  daily_platform_limits: {}
   # Examples:
   # - timezone: "Asia/Tokyo"
   #   start: "22:00"

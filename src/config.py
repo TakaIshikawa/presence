@@ -170,6 +170,7 @@ class PublishQueueConfig:
 @dataclass
 class PublishingConfig:
     embargo_windows: list[dict] = field(default_factory=list)
+    daily_platform_limits: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -474,8 +475,19 @@ def load_config(config_path: Optional[str] = None) -> Config:
 
     publishing_config = PublishingConfig()
     if "publishing" in data:
+        publishing_data = data["publishing"]
+        daily_platform_limits = publishing_data.get("daily_platform_limits", {})
+        if not isinstance(daily_platform_limits, dict):
+            daily_platform_limits = {}
         publishing_config = PublishingConfig(
-            embargo_windows=data["publishing"].get("embargo_windows", []),
+            embargo_windows=publishing_data.get("embargo_windows", []),
+            daily_platform_limits={
+                str(platform): int(limit)
+                for platform, limit in daily_platform_limits.items()
+                if isinstance(limit, int)
+                and not isinstance(limit, bool)
+                and limit >= 0
+            },
         )
 
     rate_limits_config = RateLimitsConfig()

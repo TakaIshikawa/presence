@@ -478,6 +478,7 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert isinstance(cfg.publishing, PublishingConfig)
         assert cfg.publishing.embargo_windows == []
+        assert cfg.publishing.daily_platform_limits == {}
 
     def test_publishing_embargo_windows_override(self, tmp_path):
         windows = [
@@ -489,6 +490,13 @@ class TestDefaults:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.publishing.embargo_windows == windows
+
+    def test_publishing_daily_platform_limits_override(self, tmp_path):
+        data = _minimal_config_dict(
+            publishing={"daily_platform_limits": {"x": 3, "bluesky": 2}}
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.publishing.daily_platform_limits == {"x": 3, "bluesky": 2}
 
     def test_rate_limits_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
