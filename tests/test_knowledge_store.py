@@ -458,6 +458,51 @@ class TestSearchSimilar:
         results = store.search_similar("content", limit=2, min_similarity=-1.0)
         assert len(results) <= 2
 
+    def test_max_per_author_diversifies_results_after_sorting(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        items = [
+            _make_item(source_id="alice-1", author="alice", embedding=[0.99, 0.01]),
+            _make_item(source_id="alice-2", author="alice", embedding=[0.98, 0.02]),
+            _make_item(source_id="bob-1", author="bob", embedding=[0.97, 0.03]),
+        ]
+        for item in items:
+            store.add_item(item)
+
+        results = store.search_similar(
+            "query",
+            limit=3,
+            min_similarity=-1.0,
+            max_per_author=1,
+        )
+
+        assert [result.item.source_id for result in results] == ["alice-1", "bob-1"]
+
+    def test_max_per_source_type_diversifies_results_after_sorting(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        items = [
+            _make_item(source_type="curated_x", source_id="x-1", embedding=[0.99, 0.01]),
+            _make_item(source_type="curated_x", source_id="x-2", embedding=[0.98, 0.02]),
+            _make_item(source_type="curated_article", source_id="article-1", embedding=[0.97, 0.03]),
+        ]
+        for item in items:
+            store.add_item(item)
+
+        results = store.search_similar(
+            "query",
+            limit=3,
+            min_similarity=-1.0,
+            max_per_source_type=1,
+        )
+
+        assert [result.item.source_id for result in results] == ["x-1", "article-1"]
+
+    def test_diversity_caps_reject_non_positive_values(self, store):
+        with pytest.raises(ValueError, match="max_per_author"):
+            store.search_similar("query", max_per_author=0)
+
+        with pytest.raises(ValueError, match="max_per_source_type"):
+            store.search_similar("query", max_per_source_type=0)
+
     def test_empty_database(self, store):
         """Search with no stored items returns empty list."""
         results = store.search_similar("anything", min_similarity=-1.0)

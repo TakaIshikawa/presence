@@ -127,6 +127,50 @@ class KnowledgeStore:
         ]
 
     @staticmethod
+    def apply_diversity_caps(
+        items: list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
+        limit: Optional[int] = None,
+        max_per_author: Optional[int] = None,
+        max_per_source_type: Optional[int] = None,
+    ) -> list[tuple[KnowledgeItem, float] | KnowledgeSearchResult]:
+        """Select results while limiting dominance by author or source type."""
+        if max_per_author is not None and max_per_author <= 0:
+            raise ValueError("max_per_author must be positive when set")
+        if max_per_source_type is not None and max_per_source_type <= 0:
+            raise ValueError("max_per_source_type must be positive when set")
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
+
+        selected = []
+        author_counts: dict[str, int] = {}
+        source_type_counts: dict[str, int] = {}
+
+        for result in items:
+            item = result[0]
+            author_key = (item.author or "").strip().lower()
+            source_type_key = item.source_type
+
+            if (
+                max_per_author is not None
+                and author_counts.get(author_key, 0) >= max_per_author
+            ):
+                continue
+            if (
+                max_per_source_type is not None
+                and source_type_counts.get(source_type_key, 0) >= max_per_source_type
+            ):
+                continue
+
+            selected.append(result)
+            author_counts[author_key] = author_counts.get(author_key, 0) + 1
+            source_type_counts[source_type_key] = source_type_counts.get(source_type_key, 0) + 1
+
+            if limit is not None and len(selected) >= limit:
+                break
+
+        return selected
+
+    @staticmethod
     def _row_license(row: sqlite3.Row) -> str:
         if "license" in row.keys():
             return row["license"] or "attribution_required"
@@ -222,6 +266,8 @@ class KnowledgeStore:
         min_similarity: float = 0.5,
         approved_only: bool = True,
         freshness_half_life_days: Optional[float] = None,
+        max_per_author: Optional[int] = None,
+        max_per_source_type: Optional[int] = None,
     ) -> list[KnowledgeSearchResult]:
         """Search for similar knowledge items.
 
@@ -288,7 +334,12 @@ class KnowledgeStore:
         # Sort by adjusted score and limit. With freshness disabled, this is
         # identical to sorting by raw embedding similarity.
         results.sort(key=lambda x: x.adjusted_score, reverse=True)
-        final_results = results[:limit]
+        final_results = self.apply_diversity_caps(
+            results,
+            limit=limit,
+            max_per_author=max_per_author,
+            max_per_source_type=max_per_source_type,
+        )
         logger.debug("Found %d similar items (min_similarity=%.2f)", len(final_results), min_similarity)
         return final_results
 

@@ -85,6 +85,9 @@ curated_sources:
   max_x_accounts_per_run: 25
   x_tweets_per_account: 5
   rss_entries_per_source: 5
+  knowledge_context:
+    max_per_author: 2       # cap prompt snippets from the same author
+    max_per_source_type: 3  # cap prompt snippets from the same source type
   x_accounts:
     # AI/ML builders and researchers
     - username: "karpathy"

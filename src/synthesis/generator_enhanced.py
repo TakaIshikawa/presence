@@ -33,6 +33,8 @@ class EnhancedContentGenerator:
         timeout: float = 300.0,
         restricted_prompt_behavior: str = KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
         freshness_half_life_days: Optional[float] = None,
+        max_knowledge_per_author: Optional[int] = None,
+        max_knowledge_per_source_type: Optional[int] = None,
         db=None,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
@@ -40,6 +42,8 @@ class EnhancedContentGenerator:
         self.knowledge_store = knowledge_store
         self.restricted_prompt_behavior = restricted_prompt_behavior
         self.freshness_half_life_days = freshness_half_life_days
+        self.max_knowledge_per_author = max_knowledge_per_author
+        self.max_knowledge_per_source_type = max_knowledge_per_source_type
         self.db = db
         self.prompt_versions: dict[str, dict] = {}
         self.loaded_prompt_types: dict[str, str] = {}
@@ -85,7 +89,9 @@ class EnhancedContentGenerator:
             query,
             source_types=["own_post", "own_conversation"],
             limit=limit_own,
-            min_similarity=0.4
+            min_similarity=0.4,
+            max_per_author=self.max_knowledge_per_author,
+            max_per_source_type=self.max_knowledge_per_source_type,
         )
 
         # Get external insights
@@ -95,15 +101,39 @@ class EnhancedContentGenerator:
             limit=limit_external,
             min_similarity=0.5,
             freshness_half_life_days=self.freshness_half_life_days,
+            max_per_author=self.max_knowledge_per_author,
+            max_per_source_type=self.max_knowledge_per_source_type,
         )
 
+        prompt_safe_own = KnowledgeStore.filter_prompt_safe(
+            own_insights, self.restricted_prompt_behavior
+        )
+        prompt_safe_external = KnowledgeStore.filter_prompt_safe(
+            external_insights, self.restricted_prompt_behavior
+        )
+
+        return self._apply_prompt_diversity(prompt_safe_own, prompt_safe_external)
+
+    def _apply_prompt_diversity(
+        self,
+        own_insights: list[tuple[KnowledgeItem, float]],
+        external_insights: list[tuple[KnowledgeItem, float]],
+    ) -> tuple[list[tuple[KnowledgeItem, float]], list[tuple[KnowledgeItem, float]]]:
+        if (
+            self.max_knowledge_per_author is None
+            and self.max_knowledge_per_source_type is None
+        ):
+            return own_insights, external_insights
+
+        allowed = KnowledgeStore.apply_diversity_caps(
+            own_insights + external_insights,
+            max_per_author=self.max_knowledge_per_author,
+            max_per_source_type=self.max_knowledge_per_source_type,
+        )
+        allowed_ids = {id(result) for result in allowed}
         return (
-            KnowledgeStore.filter_prompt_safe(
-                own_insights, self.restricted_prompt_behavior
-            ),
-            KnowledgeStore.filter_prompt_safe(
-                external_insights, self.restricted_prompt_behavior
-            ),
+            [result for result in own_insights if id(result) in allowed_ids],
+            [result for result in external_insights if id(result) in allowed_ids],
         )
 
     def _format_insights(

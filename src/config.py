@@ -89,6 +89,12 @@ class CuratedSource:
 
 
 @dataclass
+class KnowledgeContextConfig:
+    max_per_author: Optional[int] = None
+    max_per_source_type: Optional[int] = None
+
+
+@dataclass
 class CuratedSourcesConfig:
     x_accounts: list[CuratedSource]
     blogs: list[CuratedSource]
@@ -98,6 +104,7 @@ class CuratedSourcesConfig:
     x_tweets_per_account: int = 5
     rss_entries_per_source: int = 5
     freshness_half_life_days: Optional[float] = None
+    knowledge_context: KnowledgeContextConfig = field(default_factory=KnowledgeContextConfig)
 
 
 @dataclass
@@ -297,6 +304,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     # Parse curated sources if present
     curated_sources_config = None
     if "curated_sources" in data:
+        curated_sources_data = data["curated_sources"]
         x_accounts = [
             CuratedSource(
                 identifier=acc.get("username", ""),
@@ -304,7 +312,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 license=acc.get("license", "attribution_required"),
                 feed_url=acc.get("feed_url"),
             )
-            for acc in data["curated_sources"].get("x_accounts", [])
+            for acc in curated_sources_data.get("x_accounts", [])
         ]
         blogs = [
             CuratedSource(
@@ -313,7 +321,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 license=blog.get("license", "attribution_required"),
                 feed_url=blog.get("feed_url"),
             )
-            for blog in data["curated_sources"].get("blogs", [])
+            for blog in curated_sources_data.get("blogs", [])
         ]
         newsletters = [
             CuratedSource(
@@ -322,19 +330,24 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 license=newsletter.get("license", "attribution_required"),
                 feed_url=newsletter.get("feed_url"),
             )
-            for newsletter in data["curated_sources"].get("newsletters", [])
+            for newsletter in curated_sources_data.get("newsletters", [])
         ]
+        knowledge_context_data = curated_sources_data.get("knowledge_context", {})
         curated_sources_config = CuratedSourcesConfig(
             x_accounts=x_accounts,
             blogs=blogs,
             newsletters=newsletters,
-            restricted_prompt_behavior=data["curated_sources"].get(
+            restricted_prompt_behavior=curated_sources_data.get(
                 "restricted_prompt_behavior", "strict"
             ),
-            max_x_accounts_per_run=data["curated_sources"].get("max_x_accounts_per_run", 25),
-            x_tweets_per_account=data["curated_sources"].get("x_tweets_per_account", 5),
-            rss_entries_per_source=data["curated_sources"].get("rss_entries_per_source", 5),
-            freshness_half_life_days=data["curated_sources"].get("freshness_half_life_days"),
+            max_x_accounts_per_run=curated_sources_data.get("max_x_accounts_per_run", 25),
+            x_tweets_per_account=curated_sources_data.get("x_tweets_per_account", 5),
+            rss_entries_per_source=curated_sources_data.get("rss_entries_per_source", 5),
+            freshness_half_life_days=curated_sources_data.get("freshness_half_life_days"),
+            knowledge_context=KnowledgeContextConfig(
+                max_per_author=knowledge_context_data.get("max_per_author"),
+                max_per_source_type=knowledge_context_data.get("max_per_source_type"),
+            ),
         )
 
     # Parse newsletter config if present

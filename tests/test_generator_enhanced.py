@@ -169,6 +169,45 @@ class TestRetrieveKnowledge:
         assert calls[1][1]["limit"] == 2
         assert calls[1][1]["min_similarity"] == 0.5
 
+    def test_passes_knowledge_diversity_caps_to_search(self, mock_anthropic, mock_knowledge_store):
+        _, _ = mock_anthropic
+        gen = EnhancedContentGenerator(
+            api_key="test-key",
+            knowledge_store=mock_knowledge_store,
+            model="test-model",
+            max_knowledge_per_author=1,
+            max_knowledge_per_source_type=2,
+        )
+
+        gen._retrieve_knowledge("test query")
+
+        for call in mock_knowledge_store.search_similar.call_args_list:
+            assert call[1]["max_per_author"] == 1
+            assert call[1]["max_per_source_type"] == 2
+
+    def test_applies_diversity_caps_across_combined_prompt_context(
+        self, mock_anthropic, mock_knowledge_store
+    ):
+        _, _ = mock_anthropic
+        gen = EnhancedContentGenerator(
+            api_key="test-key",
+            knowledge_store=mock_knowledge_store,
+            model="test-model",
+            max_knowledge_per_author=1,
+        )
+        own_item = _make_knowledge_item("own_post", "Own", "alice")
+        external_item = _make_knowledge_item("curated_x", "External", "alice")
+        other_external_item = _make_knowledge_item("curated_x", "Other", "bob")
+        mock_knowledge_store.search_similar.side_effect = [
+            [(own_item, 0.9)],
+            [(external_item, 0.8), (other_external_item, 0.7)],
+        ]
+
+        own, external = gen._retrieve_knowledge("test query")
+
+        assert own == [(own_item, 0.9)]
+        assert external == [(other_external_item, 0.7)]
+
     def test_returns_both_insight_types(self, generator_with_store):
         own_item = _make_knowledge_item("own_post", "My post", "me")
         external_item = _make_knowledge_item("curated_x", "Tweet", "alice")

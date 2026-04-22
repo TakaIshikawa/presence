@@ -204,6 +204,8 @@ class TestDataclassParsing:
         assert isinstance(cfg.curated_sources, CuratedSourcesConfig)
         assert cfg.curated_sources.restricted_prompt_behavior == "strict"
         assert cfg.curated_sources.rss_entries_per_source == 3
+        assert cfg.curated_sources.knowledge_context.max_per_author is None
+        assert cfg.curated_sources.knowledge_context.max_per_source_type is None
 
         assert len(cfg.curated_sources.x_accounts) == 1
         src = cfg.curated_sources.x_accounts[0]
@@ -640,6 +642,22 @@ class TestEdgeCases:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.curated_sources.restricted_prompt_behavior == "permissive"
+
+    def test_curated_sources_knowledge_context_caps(self, tmp_path):
+        data = _minimal_config_dict(
+            curated_sources={
+                "knowledge_context": {
+                    "max_per_author": 2,
+                    "max_per_source_type": 3,
+                },
+                "x_accounts": [],
+                "blogs": [],
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        assert cfg.curated_sources.knowledge_context.max_per_author == 2
+        assert cfg.curated_sources.knowledge_context.max_per_source_type == 3
 
     def test_missing_required_section_raises(self, tmp_path):
         """Omitting a required top-level section raises ValueError."""
