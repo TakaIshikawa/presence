@@ -2070,6 +2070,134 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_pending_reply_sla(
+        self,
+        max_age_hours: Optional[int] = None,
+        platform: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get pending replies with computed age for SLA reporting."""
+        if max_age_hours is not None and max_age_hours <= 0:
+            raise ValueError("max_age_hours must be positive")
+
+        now = now or datetime.now(timezone.utc)
+        params: list[object] = []
+        filters = ["status = 'pending'"]
+        if platform:
+            filters.append("platform = ?")
+            params.append(platform)
+
+        cursor = self.conn.execute(
+            f"""SELECT * FROM reply_queue
+                WHERE {' AND '.join(filters)}
+                ORDER BY
+                  CASE priority
+                    WHEN 'high' THEN 0
+                    WHEN 'normal' THEN 1
+                    WHEN 'low' THEN 2
+                    ELSE 3
+                  END,
+                  datetime(detected_at) ASC,
+                  id ASC""",
+            params,
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["age_hours"] = self._reply_age_hours(item.get("detected_at"), now)
+            if max_age_hours is not None and item["age_hours"] > max_age_hours:
+                continue
+            rows.append(item)
+        rows.sort(
+            key=lambda r: (
+                {"high": 0, "normal": 1, "low": 2}.get(r.get("priority"), 3),
+                -r["age_hours"],
+                r["id"],
+            )
+        )
+        return rows
+
+    def dismiss_stale_low_priority_replies(
+        self,
+        max_age_hours: int,
+        reason: str = "stale_low_priority_sla",
+        platform: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Dismiss old low-priority pending replies and record the reason."""
+        if max_age_hours <= 0:
+            raise ValueError("max_age_hours must be positive")
+
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=max_age_hours)
+        params: list[object] = [cutoff.isoformat()]
+        filters = [
+            "status = 'pending'",
+            "priority = 'low'",
+            "detected_at IS NOT NULL",
+            "datetime(detected_at) <= datetime(?)",
+        ]
+        if platform:
+            filters.append("platform = ?")
+            params.append(platform)
+
+        cursor = self.conn.execute(
+            f"""SELECT id, quality_flags FROM reply_queue
+                WHERE {' AND '.join(filters)}""",
+            params,
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return 0
+
+        reviewed_at = now.isoformat()
+        flag = f"dismissed:{reason}"
+        for row in rows:
+            flags = self._append_reply_quality_flag(row["quality_flags"], flag)
+            self.conn.execute(
+                """UPDATE reply_queue
+                   SET status = 'dismissed',
+                       reviewed_at = ?,
+                       quality_flags = ?
+                   WHERE id = ?""",
+                (reviewed_at, flags, row["id"]),
+            )
+        self.conn.commit()
+        return len(rows)
+
+    @staticmethod
+    def _reply_age_hours(detected_at: Optional[str], now: datetime) -> float:
+        """Compute reply age in hours from stored SQLite/ISO timestamps."""
+        if not detected_at:
+            return 0.0
+        try:
+            detected = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                detected = datetime.strptime(detected_at, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return 0.0
+        if detected.tzinfo is None:
+            detected = detected.replace(tzinfo=timezone.utc)
+        now_utc = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        age = (now_utc - detected.astimezone(timezone.utc)).total_seconds() / 3600
+        return max(age, 0.0)
+
+    @staticmethod
+    def _append_reply_quality_flag(flags_json: Optional[str], flag: str) -> str:
+        """Append a quality flag while tolerating legacy malformed JSON."""
+        flags = []
+        if flags_json:
+            try:
+                parsed = json.loads(flags_json)
+                if isinstance(parsed, list):
+                    flags = [str(item) for item in parsed]
+            except (json.JSONDecodeError, TypeError):
+                flags = [str(flags_json)]
+        if flag not in flags:
+            flags.append(flag)
+        return json.dumps(flags)
+
     def get_expired_reply_drafts(
         self,
         draft_ttl_hours: int,
