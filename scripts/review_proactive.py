@@ -24,6 +24,19 @@ _VALID_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet", "follow"}
 _COOLDOWN_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet"}
 
 
+def _parse_platform_metadata(platform_metadata: str | dict | None) -> dict:
+    """Parse stored platform metadata for optional re-drafting context."""
+    if isinstance(platform_metadata, dict):
+        return platform_metadata
+    if not platform_metadata:
+        return {}
+    try:
+        parsed = json.loads(platform_metadata)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _normalize_presence_action(row: dict) -> dict:
     """Normalize a presence proactive_actions row into review format."""
     return {
@@ -37,6 +50,7 @@ def _normalize_presence_action(row: dict) -> dict:
         "relevance_score": row.get("relevance_score"),
         "discovery_source": row.get("discovery_source"),
         "relationship_context": row.get("relationship_context"),
+        "platform_metadata": row.get("platform_metadata"),
     }
 
 
@@ -61,6 +75,7 @@ def _normalize_cultivate_action(action) -> dict:
         "relevance_score": None,
         "discovery_source": "cultivate",
         "relationship_context": action.person_context.to_json() if action.person_context else None,
+        "platform_metadata": None,
         "_cultivate_action": action,  # keep original for status updates
     }
 
@@ -343,6 +358,9 @@ def main():
                             their_tweet=tweet_text or "",
                             their_handle=action["target_handle"],
                             self_handle=my_handle,
+                            conversation_context=_parse_platform_metadata(
+                                action.get("platform_metadata")
+                            ),
                         )
                         draft = result.reply_text
                     except Exception as e:

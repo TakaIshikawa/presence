@@ -23,6 +23,7 @@ from review_proactive import (
     _publish_text_action,
     _account_cooldown_block_reason,
     _account_cooldown_hours,
+    _parse_platform_metadata,
 )
 
 
@@ -100,6 +101,7 @@ class TestNormalizePresenceAction:
         assert norm["draft_text"] == "We've seen similar patterns in our work."
         assert norm["relevance_score"] == 0.78
         assert norm["discovery_source"] == "curated_timeline"
+        assert norm["platform_metadata"] is None
 
     def test_handles_missing_optional_fields(self):
         row = _make_presence_row(
@@ -111,6 +113,21 @@ class TestNormalizePresenceAction:
         assert norm["relationship_context"] is None
         assert norm["relevance_score"] is None
         assert norm["draft_text"] is None
+
+
+class TestPlatformMetadata:
+    def test_parse_platform_metadata_dict_passthrough(self):
+        assert _parse_platform_metadata({"parent_post_text": "ctx"}) == {
+            "parent_post_text": "ctx"
+        }
+
+    def test_parse_platform_metadata_json(self):
+        assert _parse_platform_metadata('{"parent_post_text": "ctx"}') == {
+            "parent_post_text": "ctx"
+        }
+
+    def test_parse_platform_metadata_malformed(self):
+        assert _parse_platform_metadata("not-json") == {}
 
 
 class TestNormalizeCultivateAction:

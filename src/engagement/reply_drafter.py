@@ -201,6 +201,7 @@ class ReplyDrafter:
         self_handle: str,
         person_context: Optional["PersonContext"] = None,
         knowledge_items: Optional[list] = None,
+        conversation_context: Optional[dict] = None,
     ) -> ReplyDraft:
         """Draft a proactive reply to someone else's tweet.
 
@@ -236,12 +237,18 @@ class ReplyDrafter:
         if knowledge_items:
             knowledge_section = self._build_knowledge_section(knowledge_items)
 
+        conversation_section = self._build_conversation_context_section(
+            conversation_context
+        )
+
         prompt = (
             f"I am @{self_handle}. I want to reply to this tweet.\n\n"
             f"@{their_handle}'s tweet: \"{their_tweet}\"\n\n"
         )
         if context_section:
             prompt += f"{context_section}\n\n"
+        if conversation_section:
+            prompt += f"{conversation_section}\n\n"
         if knowledge_section:
             prompt += f"{knowledge_section}\n\n"
         prompt += (

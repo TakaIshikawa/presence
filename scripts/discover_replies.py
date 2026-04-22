@@ -58,6 +58,24 @@ def _is_recent(tweet: dict, max_age_hours: int) -> bool:
         return False
 
 
+def _conversation_context_metadata(context: dict | None) -> dict:
+    """Return compact platform metadata fields for stored review context."""
+    if not isinstance(context, dict) or not context:
+        return {}
+    metadata = {}
+    for key in (
+        "parent_post_id",
+        "parent_post_text",
+        "quoted_tweet_id",
+        "quoted_text",
+        "sibling_replies",
+    ):
+        value = context.get(key)
+        if value:
+            metadata[key] = value
+    return metadata
+
+
 def _batch_score_relevance(
     candidates: list[dict],
     knowledge_store: KnowledgeStore,
@@ -300,16 +318,41 @@ def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
                 logger.debug(f"Failed to get person context for @{c['author_handle']}: {e}")
 
         try:
+            conversation_context = x_client.get_conversation_context(
+                tweet_id=c["id"],
+                conversation_id=c.get("conversation_id"),
+                parent_tweet_id=c.get("parent_tweet_id"),
+            )
+            if not isinstance(conversation_context, dict):
+                conversation_context = {}
+        except Exception as e:
+            logger.debug(
+                "Failed to fetch conversation context for tweet %s: %s",
+                c["id"],
+                e,
+            )
+            conversation_context = {}
+
+        try:
             draft = drafter.draft_proactive(
                 their_tweet=c["text"],
                 their_handle=c["author_handle"],
                 self_handle=my_handle,
                 person_context=person_ctx,
                 knowledge_items=c.get("knowledge_context"),
+                conversation_context=conversation_context,
             )
         except Exception as e:
             logger.warning(f"  Draft failed for tweet {c['id']}: {e}")
             continue
+
+        platform_metadata = {
+            "conversation_id": c.get("conversation_id"),
+            "parent_tweet_id": c.get("parent_tweet_id"),
+            "quoted_tweet_id": c.get("quoted_tweet_id"),
+            "created_at": c.get("created_at"),
+        }
+        platform_metadata.update(_conversation_context_metadata(conversation_context))
 
         db.insert_proactive_action(
             action_type="reply",
@@ -322,6 +365,9 @@ def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
             draft_text=draft.reply_text,
             relationship_context=person_ctx.to_json() if person_ctx else None,
             knowledge_ids=json.dumps(draft.knowledge_ids) if draft.knowledge_ids else None,
+            platform_metadata=json.dumps(
+                {k: v for k, v in platform_metadata.items() if v is not None}
+            ),
         )
         inserted += 1
         logger.info(

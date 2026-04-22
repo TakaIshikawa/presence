@@ -191,6 +191,10 @@ class Database:
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_platform ON reply_queue(platform, inbound_tweet_id)")
             if {"status", "detected_at"}.issubset(rq_cols):
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_pending_age ON reply_queue(status, detected_at)")
+            # Migrate proactive_actions for platform/thread metadata.
+            pa_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(proactive_actions)")}
+            if pa_cols and "platform_metadata" not in pa_cols:
+                self.conn.execute("ALTER TABLE proactive_actions ADD COLUMN platform_metadata TEXT")
             # Migrate pipeline_runs for outcome tracking
             pr_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pipeline_runs)")}
             if pr_cols and "outcome" not in pr_cols:
@@ -1964,6 +1968,7 @@ class Database:
         draft_text: Optional[str] = None,
         relationship_context: Optional[str] = None,
         knowledge_ids: Optional[str] = None,
+        platform_metadata: Optional[str] = None,
     ) -> int:
         """Insert a proactive engagement action (reply/like/quote opportunity)."""
         try:
@@ -1971,11 +1976,13 @@ class Database:
                 """INSERT INTO proactive_actions
                    (action_type, target_tweet_id, target_tweet_text,
                     target_author_handle, target_author_id, discovery_source,
-                    relevance_score, draft_text, relationship_context, knowledge_ids)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    relevance_score, draft_text, relationship_context,
+                    knowledge_ids, platform_metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (action_type, target_tweet_id, target_tweet_text,
                  target_author_handle, target_author_id, discovery_source,
-                 relevance_score, draft_text, relationship_context, knowledge_ids),
+                 relevance_score, draft_text, relationship_context,
+                 knowledge_ids, platform_metadata),
             )
             self.conn.commit()
             return cursor.lastrowid

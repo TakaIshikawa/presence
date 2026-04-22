@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -91,3 +92,43 @@ class TestGetUserTweetsLogging:
 
             call_args = mock_logger.debug.call_args[0][0]
             assert "user789" in call_args
+
+
+class TestThreadContextParsing:
+    def test_get_user_tweets_includes_reply_and_quote_refs(self):
+        client, mock_tweepy = make_x_client()
+        tweet = SimpleNamespace(
+            id=100,
+            text="Replying with a quote",
+            created_at=None,
+            public_metrics={},
+            reply_settings="everyone",
+            author_id=200,
+            conversation_id=300,
+            referenced_tweets=[
+                SimpleNamespace(type="replied_to", id=250),
+                SimpleNamespace(type="quoted", id=400),
+            ],
+        )
+        mock_tweepy.get_users_tweets.return_value = SimpleNamespace(data=[tweet])
+
+        result = client.get_user_tweets("user123", count=5)
+
+        assert result[0]["conversation_id"] == "300"
+        assert result[0]["parent_tweet_id"] == "250"
+        assert result[0]["quoted_tweet_id"] == "400"
+
+    def test_context_falls_back_when_parent_fetch_fails(self):
+        import tweepy
+
+        client, mock_tweepy = make_x_client()
+        mock_tweepy.get_tweet.side_effect = tweepy.TweepyException("Forbidden")
+        mock_tweepy.search_recent_tweets.return_value = SimpleNamespace(data=None)
+
+        context = client.get_conversation_context(
+            tweet_id="100",
+            conversation_id="300",
+            parent_tweet_id="250",
+        )
+
+        assert context == {}

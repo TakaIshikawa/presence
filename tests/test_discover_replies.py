@@ -183,6 +183,42 @@ class TestDiscoverFiltering:
         assert pending[0]["draft_text"] == "Interesting take!"
         assert pending[0]["discovery_source"] == "curated_timeline"
 
+    def test_fetches_and_stores_conversation_context(self, db):
+        tweet = _make_tweet("t1", "Replying into a larger thread")
+        tweet["conversation_id"] = "root1"
+        tweet["parent_tweet_id"] = "parent1"
+        config, x_client, ks, drafter, rel, pt = self._setup_mocks(db, [tweet])
+        x_client.get_conversation_context.return_value = {
+            "parent_post_id": "parent1",
+            "parent_post_text": "Parent post context",
+            "quoted_tweet_id": "quote1",
+            "quoted_text": "Quoted post context",
+        }
+
+        inserted = self._discover_with_batch_patch(
+            config, db, x_client, ks, drafter, rel, pt
+        )
+
+        assert inserted == 1
+        x_client.get_conversation_context.assert_called_once_with(
+            tweet_id="t1",
+            conversation_id="root1",
+            parent_tweet_id="parent1",
+        )
+        drafter.draft_proactive.assert_called_once()
+        assert drafter.draft_proactive.call_args.kwargs["conversation_context"] == {
+            "parent_post_id": "parent1",
+            "parent_post_text": "Parent post context",
+            "quoted_tweet_id": "quote1",
+            "quoted_text": "Quoted post context",
+        }
+
+        pending = db.get_pending_proactive_actions()
+        metadata = json.loads(pending[0]["platform_metadata"])
+        assert metadata["conversation_id"] == "root1"
+        assert metadata["parent_tweet_id"] == "parent1"
+        assert metadata["parent_post_text"] == "Parent post context"
+
     def test_per_account_weekly_cap(self, db):
         tweets = [
             _make_tweet("t1", "Tweet 1", author="karpathy"),

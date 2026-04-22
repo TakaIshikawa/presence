@@ -195,9 +195,9 @@ class XClient:
                 max_results=max_results,
                 tweet_fields=[
                     "created_at", "public_metrics", "reply_settings",
-                    "author_id", "conversation_id",
+                    "author_id", "conversation_id", "referenced_tweets",
                 ],
-                expansions=["author_id"],
+                expansions=["author_id", "referenced_tweets.id"],
                 user_auth=True,
             )
             self._clear_error()
@@ -223,6 +223,13 @@ class XClient:
                     "author_username": users_by_id.get(
                         str(t.author_id), ""
                     ),
+                    "conversation_id": (
+                        str(t.conversation_id) if t.conversation_id else None
+                    ),
+                    "parent_tweet_id": self._referenced_tweet_id(
+                        t, "replied_to"
+                    ),
+                    "quoted_tweet_id": self._referenced_tweet_id(t, "quoted"),
                 }
                 for t in response.data
             ]
@@ -288,8 +295,9 @@ class XClient:
                     quoted_tweet_id = self._referenced_tweet_id(parent, "quoted")
 
                     tweets_by_id = {}
-                    if response.includes and "tweets" in response.includes:
-                        for tweet in response.includes["tweets"]:
+                    includes = getattr(response, "includes", None) or {}
+                    if "tweets" in includes:
+                        for tweet in includes["tweets"]:
                             tweets_by_id[str(tweet.id)] = tweet
                     if quoted_tweet_id and quoted_tweet_id in tweets_by_id:
                         context["quoted_tweet_id"] = quoted_tweet_id
@@ -319,8 +327,9 @@ class XClient:
                 return context
 
             users_by_id = {}
-            if response.includes and "users" in response.includes:
-                for user in response.includes["users"]:
+            includes = getattr(response, "includes", None) or {}
+            if "users" in includes:
+                for user in includes["users"]:
                     users_by_id[str(user.id)] = user.username
 
             sibling_replies = []
@@ -500,8 +509,10 @@ class XClient:
                 id=user_id,
                 max_results=min(max(count, 5), 100),
                 tweet_fields=[
-                    "created_at", "text", "public_metrics", "reply_settings"
+                    "created_at", "text", "public_metrics", "reply_settings",
+                    "author_id", "conversation_id", "referenced_tweets",
                 ],
+                expansions=["referenced_tweets.id"],
                 user_auth=True,
             )
             self._clear_error()
@@ -516,6 +527,18 @@ class XClient:
                     ),
                     "public_metrics": getattr(t, "public_metrics", {}) or {},
                     "reply_settings": getattr(t, "reply_settings", "everyone"),
+                    "author_id": (
+                        str(t.author_id) if getattr(t, "author_id", None) else ""
+                    ),
+                    "conversation_id": (
+                        str(t.conversation_id)
+                        if getattr(t, "conversation_id", None)
+                        else None
+                    ),
+                    "parent_tweet_id": self._referenced_tweet_id(
+                        t, "replied_to"
+                    ),
+                    "quoted_tweet_id": self._referenced_tweet_id(t, "quoted"),
                 }
                 for t in response.data[:count]
             ]

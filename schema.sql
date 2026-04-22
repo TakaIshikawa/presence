@@ -576,6 +576,7 @@ CREATE TABLE IF NOT EXISTS proactive_actions (
     status TEXT DEFAULT 'pending',        -- 'pending', 'approved', 'posted', 'dismissed'
     relationship_context TEXT,            -- JSON PersonContext
     knowledge_ids TEXT,                   -- JSON list of (knowledge_id, relevance) tuples
+    platform_metadata TEXT,               -- JSON platform-specific context
     posted_tweet_id TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     reviewed_at TEXT,

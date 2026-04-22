@@ -293,6 +293,30 @@ class TestReplyDrafterWithKnowledge:
             prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
             assert "## Your Relevant Past Insights" not in prompt
 
+    def test_draft_proactive_includes_conversation_context(self):
+        with patch("engagement.reply_drafter.anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="Reply text")]
+            mock_client.messages.create.return_value = mock_response
+
+            drafter = ReplyDrafter(api_key="sk-test", model="test-model")
+            drafter.draft_proactive(
+                "their tweet",
+                "them",
+                "me",
+                conversation_context={
+                    "parent_post_text": "parent context",
+                    "quoted_text": "quoted context",
+                },
+            )
+
+            prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
+            assert "## Available Conversation Context" in prompt
+            assert "Parent post text: parent context" in prompt
+            assert "Quoted post text: quoted context" in prompt
+
 
 # --- Database integration ---
 
