@@ -43,8 +43,10 @@ def ingest_github_activity(
     username: str,
     since: datetime,
     repositories: list[str | dict] | None = None,
+    include_discussions: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
+    redaction_patterns: list[str | dict] | None = None,
 ) -> list:
     return poll_new_activity(
         token=token,
@@ -52,8 +54,10 @@ def ingest_github_activity(
         since=since,
         db=db,
         repositories=repositories,
+        include_discussions=include_discussions,
         dry_run=dry_run,
         timeout=timeout,
+        redaction_patterns=redaction_patterns,
     )
 
 
@@ -87,10 +91,13 @@ def main(argv: list[str] | None = None) -> int:
         since = determine_since(db, parse_since(args.since), args.lookback_minutes)
         current_poll_time = datetime.now(timezone.utc)
         repositories = getattr(config.github, "repositories", None) or None
+        include_discussions = getattr(config.github, "include_discussions", False)
 
         logger.info("Polling GitHub issues/PRs/releases since %s", since.isoformat())
         if repositories:
             logger.info("Using %d configured repositories", len(repositories))
+        if include_discussions:
+            logger.info("Including GitHub Discussions")
 
         activity = ingest_github_activity(
             db=db,
@@ -98,8 +105,10 @@ def main(argv: list[str] | None = None) -> int:
             username=config.github.username,
             since=since,
             repositories=repositories,
+            include_discussions=include_discussions,
             dry_run=args.dry_run,
             timeout=config.timeouts.github_seconds,
+            redaction_patterns=config.privacy.redaction_patterns,
         )
 
         for item in activity:

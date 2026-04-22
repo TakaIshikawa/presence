@@ -112,6 +112,15 @@ class TestDataclassParsing:
         assert isinstance(cfg.github, GitHubConfig)
         assert cfg.github.username == "testuser"
         assert cfg.github.token == "ghp_test"
+        assert cfg.github.include_discussions is False
+
+    def test_github_config_include_discussions(self, tmp_path):
+        data = _minimal_config_dict()
+        data["github"]["include_discussions"] = True
+
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        assert cfg.github.include_discussions is True
 
     def test_x_config(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

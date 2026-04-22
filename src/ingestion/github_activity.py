@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterator, Optional
+from typing import Iterable, Iterator, Optional
 
 import requests
 
@@ -14,6 +14,7 @@ from ingestion.github_commits import (
     GitHubNotFoundError,
     GitHubRateLimitError,
 )
+from ingestion.redaction import Redactor
 
 
 @dataclass
@@ -64,14 +65,26 @@ def _parse_github_datetime(value: str | None) -> Optional[datetime]:
 
 class GitHubActivityClient:
     BASE_URL = "https://api.github.com"
+    GRAPHQL_URL = "https://api.github.com/graphql"
 
-    def __init__(self, token: str, username: str, timeout: int = 30):
+    def __init__(
+        self,
+        token: str,
+        username: str,
+        timeout: int = 30,
+        redaction_patterns: Optional[Iterable[str | dict]] = None,
+    ):
         self.token = token
         self.username = username
         self.timeout = timeout
+        self.redactor = Redactor(redaction_patterns)
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github.v3+json",
+        }
+        self.graphql_headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
         }
 
     def _get(self, path: str, params: dict) -> list[dict]:
@@ -94,6 +107,35 @@ class GitHubActivityClient:
                 raise GitHubNotFoundError(f"Resource not found: {e}") from e
             raise GitHubClientError(f"HTTP error: {e}") from e
         return response.json()
+
+    def _post_graphql(self, query: str, variables: dict) -> dict:
+        try:
+            response = requests.post(
+                self.GRAPHQL_URL,
+                headers=self.graphql_headers,
+                json={"query": query, "variables": variables},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except requests.exceptions.ConnectionError as e:
+            raise GitHubClientError(f"Connection error: {e}") from e
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise GitHubAuthError(f"Authentication failed: {e}") from e
+            if e.response.status_code == 403:
+                raise GitHubRateLimitError(f"Rate limit exceeded: {e}") from e
+            if e.response.status_code == 404:
+                raise GitHubNotFoundError(f"Resource not found: {e}") from e
+            raise GitHubClientError(f"HTTP error: {e}") from e
+
+        payload = response.json()
+        errors = payload.get("errors") or []
+        if errors:
+            messages = "; ".join(error.get("message", "") for error in errors)
+            if "discussions" in messages.lower() and "repository" in messages.lower():
+                return {"data": {"repository": {"discussions": {"nodes": [], "pageInfo": {}}}}}
+            raise GitHubClientError(f"GraphQL error: {messages}")
+        return payload
 
     def get_configured_repos(
         self,
@@ -247,14 +289,88 @@ class GitHubActivityClient:
                     break
             page += 1
 
+    def get_repo_discussions(
+        self,
+        owner: str,
+        repo: str,
+        repo_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recently updated repository discussions via GitHub GraphQL."""
+        query = """
+        query RecentDiscussions($owner: String!, $name: String!, $first: Int!, $after: String) {
+          repository(owner: $owner, name: $name) {
+            discussions(first: $first, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+              nodes {
+                number
+                title
+                bodyText
+                url
+                createdAt
+                updatedAt
+                answerChosenAt
+                answerChosenBy { login }
+                author { login }
+                category { name slug emoji }
+                comments { totalCount }
+                answer {
+                  url
+                  bodyText
+                  author { login }
+                  createdAt
+                  updatedAt
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        }
+        """
+        yielded = 0
+        cursor = None
+        while yielded < limit:
+            payload = self._post_graphql(
+                query,
+                {
+                    "owner": owner,
+                    "name": repo,
+                    "first": min(100, limit - yielded),
+                    "after": cursor,
+                },
+            )
+            repository = (payload.get("data") or {}).get("repository") or {}
+            discussions = repository.get("discussions") or {}
+            nodes = discussions.get("nodes") or []
+            if not nodes:
+                break
+
+            for item in nodes:
+                updated_at = _parse_github_datetime(item.get("updatedAt"))
+                if since and updated_at and updated_at < since:
+                    return
+                yield self._discussion_to_activity(item, repo_name or repo)
+                yielded += 1
+                if yielded >= limit:
+                    break
+
+            page_info = discussions.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+
     def get_all_recent_activity(
         self,
         since: Optional[datetime] = None,
         repositories: Optional[list[str | dict]] = None,
         include_forks: bool = False,
         limit_per_repo: int = 100,
+        include_discussions: bool = False,
     ) -> Iterator[GitHubActivity]:
-        """Yield recent issues, pull requests, and releases from configured repositories."""
+        """Yield recent issues, pull requests, releases, and optionally discussions."""
         for repo in self.get_configured_repos(repositories, include_forks=include_forks):
             try:
                 yield from self.get_repo_issues(
@@ -278,6 +394,14 @@ class GitHubActivityClient:
                     since=since,
                     limit=limit_per_repo,
                 )
+                if include_discussions:
+                    yield from self.get_repo_discussions(
+                        repo["owner"],
+                        repo["name"],
+                        repo_name=repo["repo_name"],
+                        since=since,
+                        limit=limit_per_repo,
+                    )
             except (GitHubRateLimitError, GitHubNotFoundError):
                 pass
 
@@ -286,13 +410,13 @@ class GitHubActivityClient:
             repo_name=repo_name,
             activity_type="issue",
             number=item["number"],
-            title=item.get("title", ""),
+            title=self.redactor.redact(item.get("title", "")),
             state=item.get("state", ""),
             author=(item.get("user") or {}).get("login", ""),
             url=item.get("html_url", ""),
             updated_at=_parse_github_datetime(item.get("updated_at")),
             created_at=_parse_github_datetime(item.get("created_at")),
-            body=item.get("body") or "",
+            body=self.redactor.redact(item.get("body") or ""),
             closed_at=_parse_github_datetime(item.get("closed_at")),
             labels=[label.get("name", "") for label in item.get("labels", [])],
         )
@@ -323,13 +447,13 @@ class GitHubActivityClient:
             repo_name=repo_name,
             activity_type="release",
             number=item["id"],
-            title=name,
+            title=self.redactor.redact(name),
             state=state,
             author=(item.get("author") or {}).get("login", ""),
             url=item.get("html_url", ""),
             updated_at=published_at or created_at,
             created_at=created_at,
-            body=item.get("body") or "",
+            body=self.redactor.redact(item.get("body") or ""),
             metadata=metadata,
         )
 
@@ -338,16 +462,54 @@ class GitHubActivityClient:
             repo_name=repo_name,
             activity_type="pull_request",
             number=item["number"],
-            title=item.get("title", ""),
+            title=self.redactor.redact(item.get("title", "")),
             state=item.get("state", ""),
             author=(item.get("user") or {}).get("login", ""),
             url=item.get("html_url", ""),
             updated_at=_parse_github_datetime(item.get("updated_at")),
             created_at=_parse_github_datetime(item.get("created_at")),
-            body=item.get("body") or "",
+            body=self.redactor.redact(item.get("body") or ""),
             closed_at=_parse_github_datetime(item.get("closed_at")),
             merged_at=_parse_github_datetime(item.get("merged_at")),
             labels=[label.get("name", "") for label in item.get("labels", [])],
+        )
+
+    def _discussion_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        category = item.get("category") or {}
+        answer = item.get("answer") or {}
+        answer_chosen_at = _parse_github_datetime(item.get("answerChosenAt"))
+        answer_created_at = _parse_github_datetime(answer.get("createdAt"))
+        answer_updated_at = _parse_github_datetime(answer.get("updatedAt"))
+        metadata = {
+            "category": {
+                "name": category.get("name"),
+                "slug": category.get("slug"),
+                "emoji": category.get("emoji"),
+            },
+            "comments_count": (item.get("comments") or {}).get("totalCount", 0),
+            "answer": {
+                "chosen_at": answer_chosen_at.isoformat() if answer_chosen_at else None,
+                "chosen_by": (item.get("answerChosenBy") or {}).get("login"),
+                "url": answer.get("url"),
+                "author": (answer.get("author") or {}).get("login"),
+                "created_at": answer_created_at.isoformat() if answer_created_at else None,
+                "updated_at": answer_updated_at.isoformat() if answer_updated_at else None,
+                "body": self.redactor.redact(answer.get("bodyText") or ""),
+            },
+        }
+
+        return GitHubActivity(
+            repo_name=repo_name,
+            activity_type="discussion",
+            number=item["number"],
+            title=self.redactor.redact(item.get("title", "")),
+            state="answered" if answer_chosen_at else "open",
+            author=(item.get("author") or {}).get("login", ""),
+            url=item.get("url", ""),
+            updated_at=_parse_github_datetime(item.get("updatedAt")),
+            created_at=_parse_github_datetime(item.get("createdAt")),
+            body=self.redactor.redact(item.get("bodyText") or ""),
+            metadata=metadata,
         )
 
 
@@ -357,16 +519,24 @@ def poll_new_activity(
     since: datetime,
     db,
     repositories: Optional[list[str | dict]] = None,
+    include_discussions: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
+    redaction_patterns: Optional[Iterable[str | dict]] = None,
 ) -> list[GitHubActivity]:
     """Poll for recently updated GitHub issues/PRs and optionally persist them."""
-    client = GitHubActivityClient(token, username, timeout=timeout)
+    client = GitHubActivityClient(
+        token,
+        username,
+        timeout=timeout,
+        redaction_patterns=redaction_patterns,
+    )
     new_activity = []
 
     for activity in client.get_all_recent_activity(
         since=since,
         repositories=repositories,
+        include_discussions=include_discussions,
     ):
         if db.is_github_activity_processed(
             activity.repo_name,

@@ -83,6 +83,29 @@ def _release_payload(release_id: int = 101, tag: str = "v1.0.0") -> dict:
     }
 
 
+def _discussion_payload(number: int = 4, title: str = "Discussion") -> dict:
+    return {
+        "number": number,
+        "title": title,
+        "bodyText": "Discussion body with secret ticket-1234",
+        "url": f"https://github.com/taka/repo/discussions/{number}",
+        "createdAt": "2026-04-01T10:00:00Z",
+        "updatedAt": "2026-04-01T12:00:00Z",
+        "answerChosenAt": "2026-04-01T12:30:00Z",
+        "answerChosenBy": {"login": "taka"},
+        "author": {"login": "octo"},
+        "category": {"name": "Q&A", "slug": "q-a", "emoji": ":bulb:"},
+        "comments": {"totalCount": 3},
+        "answer": {
+            "url": f"https://github.com/taka/repo/discussions/{number}#discussioncomment-1",
+            "bodyText": "Answer body with ticket-1234",
+            "author": {"login": "taka"},
+            "createdAt": "2026-04-01T12:20:00Z",
+            "updatedAt": "2026-04-01T12:25:00Z",
+        },
+    }
+
+
 class TestGitHubActivityModel:
     def test_to_dict_serializes_datetimes_and_labels(self):
         activity = GitHubActivity(
@@ -173,6 +196,48 @@ class TestGitHubActivityClient:
             "prerelease": True,
         }
 
+    @patch("requests.post", create=True)
+    def test_get_repo_discussions_normalizes_graphql_metadata_and_redacts(self, mock_post):
+        mock_post.return_value = _mock_response(
+            json_data={
+                "data": {
+                    "repository": {
+                        "discussions": {
+                            "nodes": [_discussion_payload()],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            }
+        )
+
+        client = GitHubActivityClient(
+            "tok",
+            "taka",
+            redaction_patterns=[
+                {"name": "ticket", "pattern": r"ticket-\d+", "placeholder": "[REDACTED_TICKET]"}
+            ],
+        )
+        discussions = list(client.get_repo_discussions("taka", "repo", repo_name="taka/repo"))
+
+        assert len(discussions) == 1
+        discussion = discussions[0]
+        assert discussion.activity_type == "discussion"
+        assert discussion.number == 4
+        assert discussion.title == "Discussion"
+        assert discussion.state == "answered"
+        assert discussion.author == "octo"
+        assert discussion.body == "Discussion body with secret [REDACTED_TICKET]"
+        assert discussion.metadata["category"] == {
+            "name": "Q&A",
+            "slug": "q-a",
+            "emoji": ":bulb:",
+        }
+        assert discussion.metadata["comments_count"] == 3
+        assert discussion.metadata["answer"]["chosen_by"] == "taka"
+        assert discussion.metadata["answer"]["body"] == "Answer body with [REDACTED_TICKET]"
+        assert mock_post.call_args.kwargs["json"]["variables"]["owner"] == "taka"
+
     @patch("requests.get", create=True)
     def test_auth_error_maps_to_shared_exception(self, mock_get):
         mock_get.return_value = _mock_response(status_code=401)
@@ -184,9 +249,10 @@ class TestGitHubActivityClient:
     @patch.object(GitHubActivityClient, "get_repo_pull_requests")
     @patch.object(GitHubActivityClient, "get_repo_releases")
     @patch.object(GitHubActivityClient, "get_repo_issues")
+    @patch.object(GitHubActivityClient, "get_repo_discussions")
     @patch.object(GitHubActivityClient, "get_configured_repos")
     def test_get_all_recent_activity_skips_not_found_repos(
-        self, mock_repos, mock_issues, mock_releases, mock_pulls
+        self, mock_repos, mock_discussions, mock_issues, mock_releases, mock_pulls
     ):
         mock_repos.return_value = [
             {"owner": "taka", "name": "missing", "repo_name": "missing"},
@@ -212,11 +278,13 @@ class TestGitHubActivityClient:
         mock_issues.side_effect = issue_side_effect
         mock_pulls.return_value = iter([])
         mock_releases.return_value = iter([])
+        mock_discussions.return_value = iter([])
 
         client = GitHubActivityClient("tok", "taka")
-        results = list(client.get_all_recent_activity())
+        results = list(client.get_all_recent_activity(include_discussions=True))
 
         assert results == [activity]
+        assert mock_discussions.call_count == 1
 
 
 class TestPollNewActivity:
@@ -248,10 +316,12 @@ class TestPollNewActivity:
         db = MagicMock()
         db.is_github_activity_processed.side_effect = [False, True]
 
-        result = poll_new_activity("tok", "taka", TIMESTAMP, db)
+        result = poll_new_activity("tok", "taka", TIMESTAMP, db, include_discussions=True)
 
         assert result == [new]
         db.upsert_github_activity.assert_called_once()
+        mock_activity.assert_called_once()
+        assert mock_activity.call_args.kwargs["include_discussions"] is True
 
     @patch.object(GitHubActivityClient, "get_all_recent_activity")
     def test_dry_run_does_not_persist(self, mock_activity):

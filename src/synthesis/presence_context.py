@@ -309,7 +309,7 @@ class PresenceContextBuilder:
             return ""
 
         lines = [
-            "GITHUB ACTIVITY CONTEXT (issues, PRs, and releases):",
+            "GITHUB ACTIVITY CONTEXT (issues, PRs, releases, and discussions):",
             "- Use this as source context only when it connects to the commits/prompts; do not imply unresolved work is finished.",
         ]
 
@@ -470,4 +470,6 @@ class PresenceContextBuilder:
             return "PR"
         if activity_type == "issue":
             return "issue"
+        if activity_type == "discussion":
+            return "discussion"
         return str(activity_type or "activity")

@@ -186,14 +186,27 @@ def test_github_activity_context_includes_recent_and_unresolved_activity(db):
         url="https://github.com/taka/presence/pull/13",
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
+    db.upsert_github_activity(
+        repo_name="presence",
+        activity_type="discussion",
+        number=14,
+        title="Should activity context include discussions?",
+        state="answered",
+        author="taka",
+        url="https://github.com/taka/presence/discussions/14",
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        metadata={"category": {"name": "Q&A", "slug": "q-a"}},
+    )
 
     section = PresenceContextBuilder(db).build_github_activity_context()
 
     assert "GITHUB ACTIVITY CONTEXT" in section
+    assert "issues, PRs, releases, and discussions" in section
     assert "presence issue #12" in section
     assert "unresolved" in section
     assert "content, provenance" in section
     assert "presence PR #13" in section
+    assert "presence discussion #14" in section
 
 
 def test_outcome_learning_includes_real_metrics(db):

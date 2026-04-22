@@ -5,6 +5,7 @@ github:
   username: "TakaIshikawa"
   token: "${GITHUB_TOKEN}"  # or paste directly in config.local.yaml
   repositories: []  # optional: ["owner/repo"]; empty means all owned repos
+  include_discussions: false
 
 x:
   api_key: "${X_API_KEY}"
