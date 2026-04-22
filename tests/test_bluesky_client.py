@@ -396,6 +396,72 @@ class TestGetNotifications:
         ]
 
 
+class TestGetConversationContext:
+    def test_fetches_parent_quote_and_sibling_excerpts(self):
+        client, mock_client = make_bluesky_client()
+
+        parent_uri = "at://did:plc:me/app.bsky.feed.post/root"
+        inbound_uri = "at://did:plc:alice/app.bsky.feed.post/inbound"
+        sibling_uri = "at://did:plc:bob/app.bsky.feed.post/sibling"
+
+        quoted_record = SimpleNamespace(value=SimpleNamespace(text="Quoted post"))
+        parent_record = SimpleNamespace(
+            text="Parent post",
+            embed=SimpleNamespace(record=quoted_record),
+        )
+        parent_post = SimpleNamespace(
+            uri=parent_uri,
+            cid="root-cid",
+            author=SimpleNamespace(handle="me.bsky.social"),
+            record=parent_record,
+        )
+        inbound_post = SimpleNamespace(
+            uri=inbound_uri,
+            cid="inbound-cid",
+            author=SimpleNamespace(handle="alice.bsky.social"),
+            record=SimpleNamespace(
+                text="Inbound reply",
+                reply=SimpleNamespace(parent=SimpleNamespace(uri=parent_uri)),
+            ),
+        )
+        sibling_post = SimpleNamespace(
+            uri=sibling_uri,
+            cid="sibling-cid",
+            author=SimpleNamespace(handle="bob.bsky.social"),
+            record=SimpleNamespace(
+                text="Sibling reply",
+                reply=SimpleNamespace(parent=SimpleNamespace(uri=parent_uri)),
+            ),
+        )
+        mock_client.get_post_thread.return_value = SimpleNamespace(
+            thread=SimpleNamespace(
+                post=parent_post,
+                replies=[
+                    SimpleNamespace(post=inbound_post, replies=[]),
+                    SimpleNamespace(post=sibling_post, replies=[]),
+                ],
+            )
+        )
+
+        context = client.get_conversation_context(
+            root_uri=parent_uri,
+            parent_uri=parent_uri,
+            inbound_uri=inbound_uri,
+        )
+
+        assert context["parent_post_uri"] == parent_uri
+        assert context["parent_post_text"] == "Parent post"
+        assert context["quoted_text"] == "Quoted post"
+        assert context["sibling_replies"] == [
+            {
+                "uri": sibling_uri,
+                "cid": "sibling-cid",
+                "text": "Sibling reply",
+                "author_handle": "bob.bsky.social",
+            }
+        ]
+
+
 # --- BlueskyClient.__init__() ---
 
 

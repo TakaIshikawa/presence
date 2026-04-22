@@ -513,6 +513,8 @@ class TestBlueskyNotifications:
         metadata = json.loads(kwargs["platform_metadata"])
         assert metadata["reason"] == "reply"
         assert metadata["reply_refs"] == ["at://did:plc:me/app.bsky.feed.post/root1"]
+        assert metadata["parent_post_uri"] == "at://did:plc:me/app.bsky.feed.post/root1"
+        assert metadata["parent_post_text"] == "Here is our Bluesky post text."
 
         _patches.drafter.draft_with_lineage.assert_called_once_with(
             our_post="Here is our Bluesky post text.",
@@ -520,6 +522,10 @@ class TestBlueskyNotifications:
             their_handle="alice.bsky.social",
             self_handle="me.bsky.social",
             person_context=None,
+            conversation_context={
+                "parent_post_uri": "at://did:plc:me/app.bsky.feed.post/root1",
+                "parent_post_text": "Here is our Bluesky post text.",
+            },
         )
 
     def test_bluesky_low_value_can_be_queued_dismissed_before_drafting(self, _patches):
@@ -874,6 +880,12 @@ class TestInsertReplyDraft:
             relationship_context=None,
             quality_score=None,
             quality_flags=None,
+            platform_metadata=(
+                '{"conversation_id": "conv_1", '
+                '"created_at": "2026-04-06T12:00:00Z", '
+                '"parent_post_id": "conv_1", '
+                '"parent_post_text": "Here is our original post text."}'
+            ),
             intent="other",
             priority="low",
         )
@@ -893,6 +905,10 @@ class TestInsertReplyDraft:
             their_handle="alice",
             self_handle="my_handle",
             person_context=None,
+            conversation_context={
+                "parent_post_id": "conv_1",
+                "parent_post_text": "Here is our original post text.",
+            },
         )
 
 

@@ -196,6 +196,116 @@ class XClient:
             logger.warning(f"Search failed: {e}")
             return []
 
+    @staticmethod
+    def _referenced_tweet_id(tweet, ref_type: str) -> Optional[str]:
+        refs = getattr(tweet, "referenced_tweets", None)
+        if not isinstance(refs, (list, tuple)):
+            return None
+        for ref in refs:
+            if getattr(ref, "type", None) == ref_type:
+                return str(getattr(ref, "id", ""))
+            if isinstance(ref, dict) and ref.get("type") == ref_type:
+                return str(ref.get("id", ""))
+        return None
+
+    @staticmethod
+    def _tweet_to_excerpt(tweet, users_by_id: dict[str, str] | None = None) -> dict:
+        author_id = str(getattr(tweet, "author_id", "") or "")
+        return {
+            "id": str(tweet.id),
+            "text": (getattr(tweet, "text", None) or "")[:280],
+            "author_id": author_id,
+            "author_username": (users_by_id or {}).get(author_id, ""),
+        }
+
+    def get_conversation_context(
+        self,
+        *,
+        tweet_id: str,
+        conversation_id: Optional[str] = None,
+        parent_tweet_id: Optional[str] = None,
+        max_siblings: int = 3,
+    ) -> dict:
+        """Fetch bounded context around an inbound reply.
+
+        Returns best-effort metadata with parent_post_text, quoted_text, and
+        sibling_replies when available. API failures return partial context.
+        """
+        context: dict = {}
+        quoted_tweet_id = None
+
+        try:
+            if parent_tweet_id:
+                response = self.client.get_tweet(
+                    parent_tweet_id,
+                    tweet_fields=[
+                        "author_id", "conversation_id", "created_at",
+                        "referenced_tweets",
+                    ],
+                    expansions=["referenced_tweets.id"],
+                    user_auth=True,
+                )
+                self._clear_error()
+                parent = response.data if response else None
+                if parent:
+                    context["parent_post_id"] = str(parent.id)
+                    context["parent_post_text"] = parent.text or ""
+                    quoted_tweet_id = self._referenced_tweet_id(parent, "quoted")
+
+                    tweets_by_id = {}
+                    if response.includes and "tweets" in response.includes:
+                        for tweet in response.includes["tweets"]:
+                            tweets_by_id[str(tweet.id)] = tweet
+                    if quoted_tweet_id and quoted_tweet_id in tweets_by_id:
+                        context["quoted_tweet_id"] = quoted_tweet_id
+                        context["quoted_text"] = (
+                            tweets_by_id[quoted_tweet_id].text or ""
+                        )
+        except tweepy.TweepyException as e:
+            self._record_error(e)
+            logger.debug(f"Failed to fetch parent tweet {parent_tweet_id}: {e}")
+
+        if not conversation_id or max_siblings <= 0:
+            return context
+
+        try:
+            response = self.client.search_recent_tweets(
+                query=f"conversation_id:{conversation_id}",
+                max_results=10,
+                tweet_fields=[
+                    "author_id", "conversation_id", "created_at",
+                    "referenced_tweets",
+                ],
+                expansions=["author_id"],
+                user_auth=True,
+            )
+            self._clear_error()
+            if not response.data:
+                return context
+
+            users_by_id = {}
+            if response.includes and "users" in response.includes:
+                for user in response.includes["users"]:
+                    users_by_id[str(user.id)] = user.username
+
+            sibling_replies = []
+            excluded_ids = {str(tweet_id), str(conversation_id)}
+            if parent_tweet_id:
+                excluded_ids.add(str(parent_tweet_id))
+            for tweet in response.data:
+                if str(tweet.id) in excluded_ids:
+                    continue
+                sibling_replies.append(self._tweet_to_excerpt(tweet, users_by_id))
+                if len(sibling_replies) >= max_siblings:
+                    break
+            if sibling_replies:
+                context["sibling_replies"] = sibling_replies
+        except tweepy.TweepyException as e:
+            self._record_error(e)
+            logger.debug(f"Failed to fetch conversation siblings {conversation_id}: {e}")
+
+        return context
+
     def get_following(self, max_results: int = 200) -> list[dict]:
         """Fetch the list of accounts the authenticated user follows.
 
@@ -397,7 +507,8 @@ class XClient:
             since_id=since_id,
             max_results=min(max_results, 100),
             tweet_fields=["author_id", "conversation_id",
-                          "in_reply_to_user_id", "created_at"],
+                          "in_reply_to_user_id", "created_at",
+                          "referenced_tweets"],
             expansions=["author_id"],
             user_auth=True,
         )
@@ -416,12 +527,16 @@ class XClient:
 
         if response.data:
             for tweet in response.data:
+                parent_tweet_id = self._referenced_tweet_id(tweet, "replied_to")
+                quoted_tweet_id = self._referenced_tweet_id(tweet, "quoted")
                 mentions.append({
                     "id": str(tweet.id),
                     "text": tweet.text,
                     "author_id": str(tweet.author_id),
                     "conversation_id": str(tweet.conversation_id) if tweet.conversation_id else None,
                     "in_reply_to_user_id": str(tweet.in_reply_to_user_id) if tweet.in_reply_to_user_id else None,
+                    "parent_tweet_id": parent_tweet_id,
+                    "quoted_tweet_id": quoted_tweet_id,
                     "created_at": str(tweet.created_at) if tweet.created_at else None,
                 })
 

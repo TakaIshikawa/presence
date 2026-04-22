@@ -32,6 +32,7 @@ Your replies must NOT:
 - Sound like a corporate account
 - Use em-dashes for dramatic pivots
 - Start with "I" too often
+- Invent conversation details that were not provided
 - Plug or reference your own posts/projects
 - Simply agree — add something new
 
@@ -105,6 +106,7 @@ class ReplyDrafter:
         their_handle: str,
         self_handle: str,
         person_context: Optional["PersonContext"] = None,
+        conversation_context: Optional[dict] = None,
     ) -> str:
         """Draft a contextual reply, optionally enriched with relationship context.
 
@@ -117,6 +119,7 @@ class ReplyDrafter:
             their_handle=their_handle,
             self_handle=self_handle,
             person_context=person_context,
+            conversation_context=conversation_context,
         )
         return result.reply_text
 
@@ -127,6 +130,7 @@ class ReplyDrafter:
         their_handle: str,
         self_handle: str,
         person_context: Optional["PersonContext"] = None,
+        conversation_context: Optional[dict] = None,
     ) -> ReplyDraft:
         """Draft a contextual reply with knowledge lineage tracking."""
         context_section = ""
@@ -142,6 +146,10 @@ class ReplyDrafter:
         if knowledge_items:
             knowledge_section = self._build_knowledge_section(knowledge_items)
 
+        conversation_section = self._build_conversation_context_section(
+            conversation_context
+        )
+
         prompt = (
             f"I am @{self_handle}. Someone replied to my post.\n\n"
             f"My original post: \"{our_post}\"\n\n"
@@ -149,6 +157,8 @@ class ReplyDrafter:
         )
         if context_section:
             prompt += f"{context_section}\n\n"
+        if conversation_section:
+            prompt += f"{conversation_section}\n\n"
         if knowledge_section:
             prompt += f"{knowledge_section}\n\n"
         prompt += (
@@ -302,6 +312,38 @@ class ReplyDrafter:
             lines.append(f"- {text}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_conversation_context_section(context: Optional[dict]) -> str:
+        """Format bounded platform conversation context for the prompt."""
+        if not context:
+            return ""
+
+        lines = [
+            "## Available Conversation Context",
+            "Use only these supplied conversation details; do not infer missing posts.",
+        ]
+        parent_text = context.get("parent_post_text")
+        if parent_text:
+            lines.append(f"Parent post text: {parent_text}")
+        quoted_text = context.get("quoted_text")
+        if quoted_text:
+            lines.append(f"Quoted post text: {quoted_text}")
+
+        siblings = context.get("sibling_replies") or []
+        if siblings:
+            lines.append("Recent sibling replies:")
+            for sibling in siblings[:3]:
+                handle = (
+                    sibling.get("author_username")
+                    or sibling.get("author_handle")
+                    or "unknown"
+                )
+                text = (sibling.get("text") or "")[:180]
+                if text:
+                    lines.append(f"  - @{handle}: {text}")
+
+        return "\n".join(lines) if len(lines) > 2 else ""
 
     @staticmethod
     def _build_context_section(ctx: "PersonContext") -> str:

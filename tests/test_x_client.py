@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -512,6 +513,9 @@ class TestGetMentions:
         tweet1.author_id = 200
         tweet1.conversation_id = 3000
         tweet1.in_reply_to_user_id = 99
+        tweet1.referenced_tweets = [
+            SimpleNamespace(type="replied_to", id=3000),
+        ]
         tweet1.created_at = "2026-04-05T10:00:00Z"
 
         tweet2 = MagicMock()
@@ -520,6 +524,7 @@ class TestGetMentions:
         tweet2.author_id = 201
         tweet2.conversation_id = None
         tweet2.in_reply_to_user_id = None
+        tweet2.referenced_tweets = None
         tweet2.created_at = None
 
         # Build mock user objects
@@ -546,6 +551,7 @@ class TestGetMentions:
         assert mentions[0]["author_id"] == "200"
         assert mentions[0]["conversation_id"] == "3000"
         assert mentions[0]["in_reply_to_user_id"] == "99"
+        assert mentions[0]["parent_tweet_id"] == "3000"
         assert mentions[0]["created_at"] == "2026-04-05T10:00:00Z"
 
         assert mentions[1]["id"] == "1002"
@@ -583,6 +589,7 @@ class TestGetMentions:
 
         _, kwargs = mock_tweepy.get_users_mentions.call_args
         assert kwargs["since_id"] == "5000"
+        assert "referenced_tweets" in kwargs["tweet_fields"]
 
     def test_caps_max_results_at_100(self):
         client, mock_tweepy = make_x_client()
@@ -622,6 +629,7 @@ class TestGetMentions:
         tweet.author_id = 200
         tweet.conversation_id = None
         tweet.in_reply_to_user_id = None
+        tweet.referenced_tweets = None
         tweet.created_at = None
 
         response = MagicMock()
@@ -633,6 +641,68 @@ class TestGetMentions:
 
         assert len(mentions) == 1
         assert users_by_id == {}
+
+
+class TestGetConversationContext:
+    def test_fetches_parent_quote_and_sibling_excerpts(self):
+        client, mock_tweepy = make_x_client()
+
+        parent = SimpleNamespace(
+            id=3000,
+            text="Parent post",
+            referenced_tweets=[SimpleNamespace(type="quoted", id=4000)],
+        )
+        quoted = SimpleNamespace(id=4000, text="Quoted post")
+        parent_response = MagicMock()
+        parent_response.data = parent
+        parent_response.includes = {"tweets": [quoted]}
+        mock_tweepy.get_tweet.return_value = parent_response
+
+        sibling = SimpleNamespace(
+            id=5000,
+            text="Sibling reply",
+            author_id=700,
+        )
+        root = SimpleNamespace(id=3000, text="Root", author_id=99)
+        inbound = SimpleNamespace(id=6000, text="Inbound", author_id=701)
+        search_response = MagicMock()
+        search_response.data = [root, inbound, sibling]
+        search_response.includes = {
+            "users": [SimpleNamespace(id=700, username="sibling_author")]
+        }
+        mock_tweepy.search_recent_tweets.return_value = search_response
+
+        context = client.get_conversation_context(
+            tweet_id="6000",
+            conversation_id="3000",
+            parent_tweet_id="3000",
+        )
+
+        assert context["parent_post_id"] == "3000"
+        assert context["parent_post_text"] == "Parent post"
+        assert context["quoted_tweet_id"] == "4000"
+        assert context["quoted_text"] == "Quoted post"
+        assert context["sibling_replies"] == [
+            {
+                "id": "5000",
+                "text": "Sibling reply",
+                "author_id": "700",
+                "author_username": "sibling_author",
+            }
+        ]
+
+    def test_context_returns_partial_on_parent_error(self):
+        import tweepy
+
+        client, mock_tweepy = make_x_client()
+        mock_tweepy.get_tweet.side_effect = tweepy.TweepyException("missing")
+        mock_tweepy.search_recent_tweets.return_value = SimpleNamespace(data=None)
+
+        assert client.get_conversation_context(
+            tweet_id="1",
+            conversation_id="root",
+            parent_tweet_id="parent",
+        ) == {}
 
 
 # --- XClient.username property ---

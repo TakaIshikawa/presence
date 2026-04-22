@@ -176,6 +176,94 @@ class BlueskyClient:
         return notifications, getattr(response, "cursor", None)
 
     @staticmethod
+    def _post_to_excerpt(post) -> dict:
+        author = getattr(post, "author", None)
+        record = getattr(post, "record", None)
+        return {
+            "uri": getattr(post, "uri", None),
+            "cid": getattr(post, "cid", None),
+            "text": (getattr(record, "text", "") if record else "")[:300],
+            "author_handle": getattr(author, "handle", None),
+        }
+
+    @staticmethod
+    def _quoted_text_from_record(record) -> Optional[str]:
+        embed = getattr(record, "embed", None)
+        quoted = getattr(embed, "record", None) if embed else None
+        quoted_value = getattr(quoted, "value", None) if quoted else None
+        text = getattr(quoted_value, "text", None) if quoted_value else None
+        return text or None
+
+    def get_conversation_context(
+        self,
+        *,
+        root_uri: str,
+        parent_uri: Optional[str] = None,
+        inbound_uri: Optional[str] = None,
+        max_siblings: int = 3,
+    ) -> dict:
+        """Fetch bounded context around a Bluesky reply thread."""
+        self._ensure_login()
+        context: dict = {}
+        try:
+            response = self.client.get_post_thread(uri=root_uri)
+        except AtProtocolError as e:
+            logger.warning("Failed to fetch Bluesky conversation context: %s", e)
+            return context
+
+        thread = getattr(response, "thread", None)
+        if not thread:
+            return context
+
+        parent_uri = parent_uri or root_uri
+
+        def walk(node):
+            if not node:
+                return
+            post = getattr(node, "post", None)
+            if post:
+                yield node
+            for reply in getattr(node, "replies", None) or []:
+                yield from walk(reply)
+
+        nodes = list(walk(thread))
+        posts_by_uri = {
+            getattr(node.post, "uri", None): node.post
+            for node in nodes
+            if getattr(node, "post", None)
+        }
+
+        parent_post = posts_by_uri.get(parent_uri)
+        if parent_post:
+            record = getattr(parent_post, "record", None)
+            context["parent_post_uri"] = parent_uri
+            context["parent_post_text"] = (
+                getattr(record, "text", "") if record else ""
+            )
+            quoted_text = self._quoted_text_from_record(record)
+            if quoted_text:
+                context["quoted_text"] = quoted_text
+
+        sibling_replies = []
+        for node in nodes:
+            post = node.post
+            post_uri = getattr(post, "uri", None)
+            if post_uri in {root_uri, parent_uri, inbound_uri}:
+                continue
+            record = getattr(post, "record", None)
+            reply = getattr(record, "reply", None) if record else None
+            reply_parent = getattr(reply, "parent", None) if reply else None
+            if getattr(reply_parent, "uri", None) != parent_uri:
+                continue
+            sibling_replies.append(self._post_to_excerpt(post))
+            if len(sibling_replies) >= max_siblings:
+                break
+        if sibling_replies:
+            context["sibling_replies"] = sibling_replies
+
+        return context
+
+    @staticmethod
     def _notification_to_dict(notification) -> dict:
         """Convert an atproto notification model to plain Python data."""
         author = getattr(notification, "author", None)

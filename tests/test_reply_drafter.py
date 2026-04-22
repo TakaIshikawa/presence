@@ -266,6 +266,36 @@ class TestContextSection:
             prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
             assert "Relationship Context" not in prompt
 
+    def test_draft_includes_conversation_context(self):
+        with patch("engagement.reply_drafter.anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.content = [MagicMock(text="Nice insight")]
+            mock_client.messages.create.return_value = mock_response
+
+            drafter = ReplyDrafter(api_key="sk-test", model="test-model")
+            drafter.draft(
+                "my post",
+                "their reply",
+                "them",
+                "me",
+                conversation_context={
+                    "parent_post_text": "parent text",
+                    "quoted_text": "quoted text",
+                    "sibling_replies": [
+                        {"author_username": "alice", "text": "sibling text"}
+                    ],
+                },
+            )
+
+            prompt = mock_client.messages.create.call_args[1]["messages"][0]["content"]
+            assert "Available Conversation Context" in prompt
+            assert "Use only these supplied conversation details" in prompt
+            assert "Parent post text: parent text" in prompt
+            assert "Quoted post text: quoted text" in prompt
+            assert "@alice: sibling text" in prompt
+
 
 # --- Proactive system prompt ---
 

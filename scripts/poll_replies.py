@@ -73,6 +73,48 @@ def _bluesky_reply_refs(notification: dict) -> list[str]:
     return refs
 
 
+def _bluesky_parent_uri(notification: dict) -> str | None:
+    record = notification.get("record") or {}
+    reply = record.get("reply") or {}
+    parent = reply.get("parent") or {}
+    return parent.get("uri")
+
+
+def _conversation_context_metadata(context: dict | None) -> dict:
+    if not isinstance(context, dict) or not context:
+        return {}
+    metadata = {}
+    for key in (
+        "parent_post_id",
+        "parent_post_uri",
+        "parent_post_text",
+        "quoted_tweet_id",
+        "quoted_text",
+        "sibling_replies",
+    ):
+        value = context.get(key)
+        if value:
+            metadata[key] = value
+    return metadata
+
+
+def _x_platform_metadata(
+    mention: dict,
+    conversation_context: dict | None = None,
+    classification_reason: str | None = None,
+) -> str:
+    metadata = {
+        "conversation_id": mention.get("conversation_id"),
+        "parent_tweet_id": mention.get("parent_tweet_id"),
+        "quoted_tweet_id": mention.get("quoted_tweet_id"),
+        "created_at": mention.get("created_at"),
+    }
+    metadata.update(_conversation_context_metadata(conversation_context))
+    if classification_reason:
+        metadata["classification_reason"] = classification_reason
+    return json.dumps({k: v for k, v in metadata.items() if v is not None})
+
+
 def _reply_config_value(config, name: str, default):
     replies_config = getattr(config, "replies", None)
     return getattr(replies_config, name, default) if replies_config else default
@@ -214,6 +256,19 @@ def _poll_bluesky_replies(
 
         record = notification.get("record") or {}
         inbound_text = record.get("text") or ""
+        parent_uri = _bluesky_parent_uri(notification) or our_uri
+        root_uri = ((record.get("reply") or {}).get("root") or {}).get("uri") or our_uri
+        conversation_context = client.get_conversation_context(
+            root_uri=root_uri,
+            parent_uri=parent_uri,
+            inbound_uri=inbound_uri,
+        )
+        if not isinstance(conversation_context, dict):
+            conversation_context = {}
+        if parent_uri == our_uri and "parent_post_text" not in conversation_context:
+            conversation_context["parent_post_uri"] = our_uri
+            conversation_context["parent_post_text"] = our_content["content"]
+
         classification = classifier.classify(
             inbound_text,
             our_post=our_content["content"],
@@ -231,6 +286,7 @@ def _poll_bluesky_replies(
                 "reply_refs": _bluesky_reply_refs(notification),
                 "classification_reason": classification.reason,
             }
+            metadata.update(_conversation_context_metadata(conversation_context))
             _queue_classified_without_draft(
                 db,
                 classification=classification,
@@ -260,6 +316,7 @@ def _poll_bluesky_replies(
                 their_handle=author_handle,
                 self_handle=bluesky_config.handle,
                 person_context=None,
+                conversation_context=conversation_context,
             )
             draft = draft_result.reply_text
             knowledge_ids = draft_result.knowledge_ids
@@ -274,6 +331,7 @@ def _poll_bluesky_replies(
             "record_created_at": record.get("created_at"),
             "reply_refs": _bluesky_reply_refs(notification),
         }
+        metadata.update(_conversation_context_metadata(conversation_context))
         reply_queue_id = db.insert_reply_draft(
             inbound_tweet_id=inbound_uri,
             inbound_author_handle=author_handle,
@@ -524,6 +582,21 @@ def main() -> None:
                 if author_id in users_by_id:
                     author_handle = users_by_id[author_id]["username"]
 
+                parent_tweet_id = mention.get("parent_tweet_id") or our_tweet_id
+                conversation_context = x_client.get_conversation_context(
+                    tweet_id=tweet_id,
+                    conversation_id=mention.get("conversation_id"),
+                    parent_tweet_id=parent_tweet_id,
+                )
+                if not isinstance(conversation_context, dict):
+                    conversation_context = {}
+                if (
+                    parent_tweet_id == our_tweet_id
+                    and "parent_post_text" not in conversation_context
+                ):
+                    conversation_context["parent_post_id"] = our_tweet_id
+                    conversation_context["parent_post_text"] = our_content["content"]
+
                 # Cultivate: look up relationship context
                 person_context = None
                 if bridge and config.cultivate.enrich_replies:
@@ -566,6 +639,11 @@ def main() -> None:
                         our_tweet_id=our_tweet_id,
                         our_content_id=our_content["id"],
                         our_post_text=our_content["content"],
+                        platform_metadata=_x_platform_metadata(
+                            mention,
+                            conversation_context,
+                            classification.reason,
+                        ),
                     )
                     skipped += 1
                     continue
@@ -578,6 +656,7 @@ def main() -> None:
                         their_handle=author_handle,
                         self_handle=my_handle,
                         person_context=person_context,
+                        conversation_context=conversation_context,
                     )
                     draft = draft_result.reply_text
                     knowledge_ids = draft_result.knowledge_ids
@@ -621,6 +700,10 @@ def main() -> None:
                     relationship_context=relationship_context,
                     quality_score=quality_score,
                     quality_flags=quality_flags,
+                    platform_metadata=_x_platform_metadata(
+                        mention,
+                        conversation_context,
+                    ),
                     intent=classification.intent,
                     priority="low" if action == "low_priority" else classification.priority,
                 )
