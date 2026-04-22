@@ -1,4 +1,4 @@
-"""Unit tests for GitHub issue and pull request ingestion."""
+"""Unit tests for GitHub issue, pull request, and release ingestion."""
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -67,6 +67,22 @@ def _pull_payload(number: int = 2, title: str = "PR") -> dict:
     }
 
 
+def _release_payload(release_id: int = 101, tag: str = "v1.0.0") -> dict:
+    return {
+        "id": release_id,
+        "tag_name": tag,
+        "target_commitish": "main",
+        "name": "Release 1.0.0",
+        "body": "Release notes",
+        "draft": False,
+        "prerelease": True,
+        "author": {"login": "taka"},
+        "html_url": f"https://github.com/taka/repo/releases/tag/{tag}",
+        "published_at": "2026-04-01T12:00:00Z",
+        "created_at": "2026-04-01T10:00:00Z",
+    }
+
+
 class TestGitHubActivityModel:
     def test_to_dict_serializes_datetimes_and_labels(self):
         activity = GitHubActivity(
@@ -85,6 +101,7 @@ class TestGitHubActivityModel:
         assert activity.activity_id == "repo#1:issue"
         assert activity.to_dict()["updated_at"] == "2026-04-01T12:00:00+00:00"
         assert activity.to_dict()["labels"] == ["bug"]
+        assert activity.to_dict()["metadata"] == {}
 
 
 class TestGitHubActivityClient:
@@ -129,6 +146,34 @@ class TestGitHubActivityClient:
         assert pulls[0].merged_at.isoformat() == "2026-04-01T12:20:00+00:00"
 
     @patch("requests.get", create=True)
+    def test_get_repo_releases_normalizes_metadata(self, mock_get):
+        old = _release_payload(102, "v0.9.0")
+        old["published_at"] = "2026-03-01T12:00:00Z"
+        mock_get.return_value = _mock_response(json_data=[_release_payload(), old])
+
+        client = GitHubActivityClient("tok", "taka")
+        releases = list(client.get_repo_releases("taka", "repo", since=TIMESTAMP))
+
+        assert len(releases) == 1
+        release = releases[0]
+        assert release.activity_type == "release"
+        assert release.number == 101
+        assert release.title == "Release 1.0.0"
+        assert release.state == "prerelease"
+        assert release.author == "taka"
+        assert release.updated_at.isoformat() == "2026-04-01T12:00:00+00:00"
+        assert release.created_at.isoformat() == "2026-04-01T10:00:00+00:00"
+        assert release.metadata == {
+            "release_id": 101,
+            "tag_name": "v1.0.0",
+            "target_commitish": "main",
+            "published_at": "2026-04-01T12:00:00+00:00",
+            "created_at": "2026-04-01T10:00:00+00:00",
+            "draft": False,
+            "prerelease": True,
+        }
+
+    @patch("requests.get", create=True)
     def test_auth_error_maps_to_shared_exception(self, mock_get):
         mock_get.return_value = _mock_response(status_code=401)
         client = GitHubActivityClient("bad", "taka")
@@ -137,10 +182,11 @@ class TestGitHubActivityClient:
             list(client.get_repo_issues("taka", "repo"))
 
     @patch.object(GitHubActivityClient, "get_repo_pull_requests")
+    @patch.object(GitHubActivityClient, "get_repo_releases")
     @patch.object(GitHubActivityClient, "get_repo_issues")
     @patch.object(GitHubActivityClient, "get_configured_repos")
     def test_get_all_recent_activity_skips_not_found_repos(
-        self, mock_repos, mock_issues, mock_pulls
+        self, mock_repos, mock_issues, mock_releases, mock_pulls
     ):
         mock_repos.return_value = [
             {"owner": "taka", "name": "missing", "repo_name": "missing"},
@@ -165,6 +211,7 @@ class TestGitHubActivityClient:
 
         mock_issues.side_effect = issue_side_effect
         mock_pulls.return_value = iter([])
+        mock_releases.return_value = iter([])
 
         client = GitHubActivityClient("tok", "taka")
         results = list(client.get_all_recent_activity())

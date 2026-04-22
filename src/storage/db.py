@@ -640,7 +640,7 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    # GitHub issues and pull requests
+    # GitHub issues, pull requests, and releases
     def is_github_activity_processed(
         self,
         repo_name: str,
@@ -648,7 +648,7 @@ class Database:
         number: int,
         updated_at: str | None = None,
     ) -> bool:
-        """Return True when an issue/PR version has already been ingested."""
+        """Return True when a GitHub activity version has already been ingested."""
         cursor = self.conn.execute(
             """SELECT updated_at FROM github_activity
                WHERE repo_name = ? AND activity_type = ? AND number = ?""",
@@ -678,7 +678,7 @@ class Database:
         labels: list[str] | str | None = None,
         metadata: dict | str | None = None,
     ) -> int:
-        """Insert or update a GitHub issue/PR activity record."""
+        """Insert or update a GitHub activity record."""
         labels_json = labels if isinstance(labels, str) else json.dumps(labels or [])
         if isinstance(metadata, str) or metadata is None:
             metadata_json = metadata
@@ -759,7 +759,7 @@ class Database:
         now: datetime | None = None,
         activity_type: str | None = None,
     ) -> list[dict]:
-        """Return recently updated GitHub issues/PRs, newest first."""
+        """Return recently updated GitHub activity, newest first."""
         if days <= 0 or limit <= 0:
             return []
         now = now or datetime.now(timezone.utc)

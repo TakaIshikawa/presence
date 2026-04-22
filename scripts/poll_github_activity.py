@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll GitHub issues and pull requests without running publishing."""
+"""Poll GitHub issues, pull requests, and releases without running publishing."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def ingest_github_activity(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Poll recently updated GitHub issues and pull requests."
+        description="Poll recently updated GitHub issues, pull requests, and releases."
     )
     parser.add_argument(
         "--dry-run",
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         current_poll_time = datetime.now(timezone.utc)
         repositories = getattr(config.github, "repositories", None) or None
 
-        logger.info("Polling GitHub issues/PRs since %s", since.isoformat())
+        logger.info("Polling GitHub issues/PRs/releases since %s", since.isoformat())
         if repositories:
             logger.info("Using %d configured repositories", len(repositories))
 

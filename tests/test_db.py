@@ -830,6 +830,41 @@ class TestGitHubActivity:
         assert rows[0]["metadata"] == {"source": "test"}
         assert rows[0]["activity_id"] == "repo#1:issue"
 
+    def test_release_activity_uses_existing_activity_queries(self, db):
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="release",
+            number=101,
+            title="Release 1.0.0",
+            state="published",
+            author="taka",
+            url="https://github.com/taka/repo/releases/tag/v1.0.0",
+            updated_at="2026-04-01T12:00:00+00:00",
+            created_at="2026-04-01T10:00:00+00:00",
+            body="Release notes",
+            metadata={
+                "tag_name": "v1.0.0",
+                "draft": False,
+                "prerelease": False,
+                "published_at": "2026-04-01T12:00:00+00:00",
+            },
+        )
+
+        rows = db.get_github_activity_in_range(
+            datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc),
+            activity_type="release",
+        )
+        recent = db.get_recent_github_activity(
+            days=7,
+            now=datetime(2026, 4, 3, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert rows[0]["activity_id"] == "repo#101:release"
+        assert rows[0]["metadata"]["tag_name"] == "v1.0.0"
+        assert rows[0]["metadata"]["draft"] is False
+        assert [row["activity_id"] for row in recent] == ["repo#101:release"]
+
     def test_github_activity_recent_and_unresolved_helpers(self, db):
         db.upsert_github_activity(
             repo_name="repo",

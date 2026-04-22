@@ -309,7 +309,7 @@ class PresenceContextBuilder:
             return ""
 
         lines = [
-            "GITHUB ACTIVITY CONTEXT (issues and PRs):",
+            "GITHUB ACTIVITY CONTEXT (issues, PRs, and releases):",
             "- Use this as source context only when it connects to the commits/prompts; do not imply unresolved work is finished.",
         ]
 

@@ -1,4 +1,4 @@
-"""Fetch recently updated GitHub issues and pull requests."""
+"""Fetch recently updated GitHub issues, pull requests, and releases."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ class GitHubActivity:
     closed_at: Optional[datetime] = None
     merged_at: Optional[datetime] = None
     labels: list[str] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
     @property
     def activity_id(self) -> str:
@@ -51,6 +52,7 @@ class GitHubActivity:
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "merged_at": self.merged_at.isoformat() if self.merged_at else None,
             "labels": self.labels,
+            "metadata": self.metadata,
         }
 
 
@@ -212,6 +214,39 @@ class GitHubActivityClient:
                     break
             page += 1
 
+    def get_repo_releases(
+        self,
+        owner: str,
+        repo: str,
+        repo_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recently published repository releases."""
+        yielded = 0
+        page = 1
+        while yielded < limit:
+            data = self._get(
+                f"/repos/{owner}/{repo}/releases",
+                {
+                    "per_page": min(100, limit - yielded),
+                    "page": page,
+                },
+            )
+            if not data:
+                break
+            for item in data:
+                activity_at = _parse_github_datetime(
+                    item.get("published_at") or item.get("created_at")
+                )
+                if since and activity_at and activity_at < since:
+                    return
+                yield self._release_to_activity(item, repo_name or repo)
+                yielded += 1
+                if yielded >= limit:
+                    break
+            page += 1
+
     def get_all_recent_activity(
         self,
         since: Optional[datetime] = None,
@@ -219,7 +254,7 @@ class GitHubActivityClient:
         include_forks: bool = False,
         limit_per_repo: int = 100,
     ) -> Iterator[GitHubActivity]:
-        """Yield recent issues and pull requests from configured repositories."""
+        """Yield recent issues, pull requests, and releases from configured repositories."""
         for repo in self.get_configured_repos(repositories, include_forks=include_forks):
             try:
                 yield from self.get_repo_issues(
@@ -230,6 +265,13 @@ class GitHubActivityClient:
                     limit=limit_per_repo,
                 )
                 yield from self.get_repo_pull_requests(
+                    repo["owner"],
+                    repo["name"],
+                    repo_name=repo["repo_name"],
+                    since=since,
+                    limit=limit_per_repo,
+                )
+                yield from self.get_repo_releases(
                     repo["owner"],
                     repo["name"],
                     repo_name=repo["repo_name"],
@@ -253,6 +295,42 @@ class GitHubActivityClient:
             body=item.get("body") or "",
             closed_at=_parse_github_datetime(item.get("closed_at")),
             labels=[label.get("name", "") for label in item.get("labels", [])],
+        )
+
+    def _release_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        tag_name = item.get("tag_name") or ""
+        name = item.get("name") or tag_name
+        published_at = _parse_github_datetime(item.get("published_at"))
+        created_at = _parse_github_datetime(item.get("created_at"))
+        if item.get("draft"):
+            state = "draft"
+        elif item.get("prerelease"):
+            state = "prerelease"
+        else:
+            state = "published"
+
+        metadata = {
+            "release_id": item.get("id"),
+            "tag_name": tag_name,
+            "target_commitish": item.get("target_commitish"),
+            "published_at": published_at.isoformat() if published_at else None,
+            "created_at": created_at.isoformat() if created_at else None,
+            "draft": bool(item.get("draft", False)),
+            "prerelease": bool(item.get("prerelease", False)),
+        }
+
+        return GitHubActivity(
+            repo_name=repo_name,
+            activity_type="release",
+            number=item["id"],
+            title=name,
+            state=state,
+            author=(item.get("author") or {}).get("login", ""),
+            url=item.get("html_url", ""),
+            updated_at=published_at or created_at,
+            created_at=created_at,
+            body=item.get("body") or "",
+            metadata=metadata,
         )
 
     def _pull_request_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
