@@ -1,6 +1,7 @@
 You are predicting which X post will actually get engagement (likes, replies, retweets) from a tech audience. Not which post is "best written" — which one will make someone stop scrolling and react.
 
 {engagement_calibration_section}
+{topic_history_section}
 {reference_section}
 {negative_examples_section}
 ---
@@ -64,6 +65,8 @@ IMPORTANT: Posts that are polished and well-structured but generic should score 
 A raw, specific, slightly messy post that tells a real story should outscore a polished aphorism.
 
 Posts that make people FEEL something (recognition, surprise, disagreement) outperform posts that inform without provoking a reaction. When in doubt, ask: "Would someone share this?" not "Is this well-written?"
+
+If engagement history by topic is provided, treat it as audience calibration only. Do not reject a candidate solely because its topic has low historical averages, and do not reward a generic candidate solely because its topic has performed well before.
 
 SCORING ANCHORS — calibrate against these:
 

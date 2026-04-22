@@ -796,6 +796,41 @@ class TestPipelineResult:
 
         assert result.filter_stats["repetition_rejected"] == 1
 
+    @patch("synthesis.pipeline.TopicPerformanceAnalyzer")
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_topic_history_context_passed_to_evaluator(
+        self, MockFS, MockGen, MockEval, MockRefiner, MockTopicPerformance
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+        db.get_engagement_calibration_stats.return_value = {}
+        MockTopicPerformance.return_value.build_evaluation_context.return_value = (
+            "ENGAGEMENT HISTORY BY TOPIC\n- testing: n=3"
+        )
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Testing post A", "Testing post B", "Testing post C"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5, ranking=[0, 1, 2], improvement=None
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS, content_type="x_post")
+
+        MockTopicPerformance.return_value.build_evaluation_context.assert_called_once()
+        eval_kwargs = pipeline.evaluator.evaluate.call_args.kwargs
+        assert eval_kwargs["topic_history_context"] == (
+            "ENGAGEMENT HISTORY BY TOPIC\n- testing: n=3"
+        )
+
     @patch("synthesis.pipeline.ContentRefiner")
     @patch("synthesis.pipeline.CrossModelEvaluator")
     @patch("synthesis.pipeline.ContentGenerator")

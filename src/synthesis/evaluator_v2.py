@@ -164,6 +164,13 @@ class CrossModelEvaluator:
 
         return "\n\n".join(parts)
 
+    @staticmethod
+    def _build_topic_history_section(topic_history_context: str = None) -> str:
+        """Normalize optional topic engagement history for prompt injection."""
+        if not topic_history_context:
+            return ""
+        return topic_history_context.strip()
+
     def evaluate(
         self,
         candidates: list[str],
@@ -174,6 +181,7 @@ class CrossModelEvaluator:
         calibration_resonated: list[dict] = None,
         calibration_low_resonance: list[dict] = None,
         engagement_stats: dict = None,
+        topic_history_context: str = None,
     ) -> ComparisonResult:
         """Evaluate multiple candidates comparatively and return ranking with feedback."""
         template = self._load_prompt()
@@ -197,6 +205,9 @@ class CrossModelEvaluator:
         engagement_calibration_section = self._build_calibration_section(
             calibration_resonated, calibration_low_resonance, engagement_stats
         )
+        topic_history_section = self._build_topic_history_section(
+            topic_history_context
+        )
 
         filled = template.format(
             candidates=candidates_text,
@@ -205,6 +216,7 @@ class CrossModelEvaluator:
             reference_section=reference_section,
             negative_examples_section=negative_examples_section,
             engagement_calibration_section=engagement_calibration_section,
+            topic_history_section=topic_history_section,
         )
 
         try:

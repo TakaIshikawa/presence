@@ -19,6 +19,7 @@ from synthesis.presence_context import PresenceContextBuilder
 from synthesis.stale_patterns import STALE_PATTERNS
 from synthesis.claim_checker import ClaimChecker, ClaimCheckResult
 from synthesis.thread_validator import validate_thread
+from evaluation.topic_performance import TopicPerformanceAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -752,6 +753,27 @@ class SynthesisPipeline:
             logger.debug(f"Calibration context generation failed (non-fatal): {e}")
             return ""
 
+    def _build_topic_history_context(
+        self,
+        source_prompts: list[str],
+        source_commits: list[str],
+        candidates: list[str],
+        content_type: str,
+        platform: str,
+    ) -> str:
+        """Build optional topic engagement history for comparative evaluation."""
+        try:
+            analyzer = TopicPerformanceAnalyzer(self.db)
+            return analyzer.build_evaluation_context(
+                source_texts=source_prompts + source_commits,
+                candidate_texts=candidates,
+                content_type=content_type,
+                platform=platform,
+            )
+        except Exception as e:
+            logger.debug(f"Topic history context unavailable (non-fatal): {e}")
+            return ""
+
     def run(
         self,
         prompts: list[str],
@@ -952,7 +974,14 @@ class SynthesisPipeline:
                 planned_topic_id=planned_topic_id,
             )
 
-        # Stage 3: Cross-model evaluation with engagement calibration
+        # Stage 3: Cross-model evaluation with engagement and topic calibration
+        topic_history_context = self._build_topic_history_context(
+            source_prompts=prompts,
+            source_commits=source_commit_messages,
+            candidates=candidate_texts,
+            content_type=content_type,
+            platform=platform,
+        )
         comparison = self.evaluator.evaluate(
             candidates=candidate_texts,
             source_prompts=prompts,
@@ -962,6 +991,7 @@ class SynthesisPipeline:
             calibration_resonated=resonated_posts or None,
             calibration_low_resonance=low_resonance_posts or None,
             engagement_stats=engagement_stats,
+            topic_history_context=topic_history_context or None,
         )
 
         best_idx = comparison.ranking[0] if comparison.ranking else 0

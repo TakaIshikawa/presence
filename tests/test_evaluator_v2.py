@@ -440,3 +440,51 @@ class TestBuildNegativeSection:
         evaluator.STATIC_NEGATIVE_EXAMPLES = []
         result = evaluator._build_negative_section([])
         assert result == ""
+
+
+class TestTopicHistorySection:
+    @pytest.fixture
+    def evaluator(self):
+        with patch("synthesis.evaluator_v2.anthropic.Anthropic"):
+            return CrossModelEvaluator(api_key="test-key")
+
+    def test_empty_topic_history_section_is_optional(self, evaluator):
+        assert evaluator._build_topic_history_section(None) == ""
+        assert evaluator._build_topic_history_section("") == ""
+
+    def test_topic_history_section_strips_context(self, evaluator):
+        result = evaluator._build_topic_history_section(
+            "\nENGAGEMENT HISTORY BY TOPIC\n"
+        )
+        assert result == "ENGAGEMENT HISTORY BY TOPIC"
+
+    def test_evaluate_injects_topic_history_context(self):
+        response_text = """
+RANKING: A
+ENGAGEMENT_POTENTIAL: 7
+GROUNDEDNESS: 8
+NARRATIVE_SPECIFICITY: 7
+RAWNESS: 7
+VOICE: 7
+BEST_FEEDBACK: Strong.
+IMPROVEMENT: none
+REJECT_REASON: none
+"""
+        with patch("synthesis.evaluator_v2.anthropic.Anthropic") as MockAnthropic:
+            mock_client = MockAnthropic.return_value
+            mock_client.messages.create.return_value.content = [
+                type("Block", (), {"text": response_text})()
+            ]
+            evaluator = CrossModelEvaluator(api_key="test-key")
+
+            evaluator.evaluate(
+                candidates=["Post A"],
+                source_prompts=["prompt"],
+                source_commits=["commit"],
+                topic_history_context="ENGAGEMENT HISTORY BY TOPIC\n- testing: n=3",
+            )
+
+        prompt = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "ENGAGEMENT HISTORY BY TOPIC" in prompt
+        assert "- testing: n=3" in prompt
+        assert "calibration only" in prompt
