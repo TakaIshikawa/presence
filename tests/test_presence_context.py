@@ -122,6 +122,48 @@ def test_idea_inbox_includes_high_priority_open_ideas_only(db):
     assert "Dismissed idea" not in section
 
 
+def test_feedback_memory_includes_recent_rejections_and_revisions(db):
+    rejected_id = _published_content(
+        db,
+        "AI breakthroughs are changing everything about developer productivity.",
+    )
+    revised_id = _published_content(
+        db,
+        "Everyone says agents are magic, but the secret is better prompts.",
+    )
+    preferred_id = _published_content(
+        db,
+        "A plain note about retry state.",
+    )
+    db.add_content_feedback(
+        rejected_id,
+        "reject",
+        "sounds like generic AI thought leadership",
+    )
+    db.add_content_feedback(
+        revised_id,
+        "revise",
+        "avoid secret/trick framing",
+        "The retry state mattered more than the prompt wording.",
+    )
+    db.add_content_feedback(
+        preferred_id,
+        "prefer",
+        "keep the concrete builder friction",
+        "Retry state is invisible until the publish path fails.",
+    )
+
+    section = PresenceContextBuilder(db).build_feedback_memory("x_post")
+
+    assert "FEEDBACK MEMORY" in section
+    assert "Avoid:" in section
+    assert "generic AI thought leadership" in section
+    assert "secret/trick framing" in section
+    assert "AI breakthroughs" in section
+    assert "Prefer:" in section
+    assert "Retry state is invisible" in section
+
+
 def test_github_activity_context_includes_recent_and_unresolved_activity(db):
     db.upsert_github_activity(
         repo_name="presence",

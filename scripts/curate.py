@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from runner import script_context
 
 VALID_FLAGS = ("good", "too_specific")
+VALID_FEEDBACK = ("reject", "revise", "prefer")
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,41 @@ def cmd_clear(db, content_id: int):
     logger.info(f"Cleared curation flag for [{content_id}]")
 
 
+def cmd_feedback(
+    db,
+    content_id: int,
+    feedback_type: str,
+    notes: str = "",
+    replacement_text: str | None = None,
+):
+    """Record durable user feedback about generated content."""
+    if feedback_type not in VALID_FEEDBACK:
+        logger.error(
+            f"Invalid feedback '{feedback_type}'. Use: {', '.join(VALID_FEEDBACK)}"
+        )
+        sys.exit(1)
+
+    row = db.conn.execute(
+        "SELECT id, content FROM generated_content WHERE id = ?", (content_id,)
+    ).fetchone()
+    if not row:
+        logger.error(f"No content found with id {content_id}")
+        sys.exit(1)
+
+    feedback_id = db.add_content_feedback(
+        content_id=content_id,
+        feedback_type=feedback_type,
+        notes=notes,
+        replacement_text=replacement_text,
+    )
+    preview = row["content"][:80].replace("\n", " ")
+    suffix = f" replacement: {replacement_text[:80]}" if replacement_text else ""
+    logger.info(
+        f"Recorded feedback [{feedback_id}] {feedback_type} for [{content_id}]: "
+        f"{notes}{suffix} ({preview}...)"
+    )
+
+
 def cmd_stats(db):
     """Show curation statistics."""
     # Manual curation
@@ -102,10 +138,11 @@ def main():
     )
 
     if len(sys.argv) < 2:
-        logger.error("Usage: curate.py {list|flag|clear|stats}")
+        logger.error("Usage: curate.py {list|flag|clear|feedback|stats}")
         logger.error("  list              Show recent published posts")
         logger.error("  flag <id> <qual>  Flag a post (good, too_specific)")
         logger.error("  clear <id>       Clear curation flag")
+        logger.error("  feedback <id> <reject|revise|prefer> <notes> [replacement]")
         logger.error("  stats            Show curation statistics")
         sys.exit(1)
 
@@ -123,6 +160,20 @@ def main():
                 logger.error("Usage: curate.py clear <id>")
                 sys.exit(1)
             cmd_clear(db, int(sys.argv[2]))
+        elif cmd == "feedback":
+            if len(sys.argv) < 5:
+                logger.error(
+                    "Usage: curate.py feedback <id> <reject|revise|prefer> <notes> [replacement]"
+                )
+                sys.exit(1)
+            replacement_text = sys.argv[5] if len(sys.argv) > 5 else None
+            cmd_feedback(
+                db,
+                int(sys.argv[2]),
+                sys.argv[3],
+                sys.argv[4],
+                replacement_text,
+            )
         elif cmd == "stats":
             cmd_stats(db)
         else:

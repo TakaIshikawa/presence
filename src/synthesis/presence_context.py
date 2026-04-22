@@ -18,6 +18,7 @@ class PresenceContext:
     campaign_context: str = ""
     github_activity: str = ""
     idea_inbox: str = ""
+    feedback_memory: str = ""
     outcome_learning: str = ""
 
     def render(self) -> str:
@@ -29,6 +30,7 @@ class PresenceContext:
                 self.campaign_context,
                 self.github_activity,
                 self.idea_inbox,
+                self.feedback_memory,
                 self.outcome_learning,
             )
             if section and section.strip()
@@ -74,6 +76,7 @@ class PresenceContextBuilder:
             campaign_context=self.build_campaign_context(),
             github_activity=self.build_github_activity_context(),
             idea_inbox=self.build_idea_inbox(),
+            feedback_memory=self.build_feedback_memory(content_type),
             outcome_learning=self.build_outcome_learning(content_type),
         )
 
@@ -234,6 +237,62 @@ class PresenceContextBuilder:
             if source:
                 detail += f" (source: {source})"
             lines.append(f"- {detail}")
+        return "\n".join(lines)
+
+    def build_feedback_memory(self, content_type: str) -> str:
+        feedback = self._rows(
+            "get_recent_content_feedback",
+            content_type=content_type,
+            feedback_types=["reject", "revise", "prefer"],
+            limit=6,
+        )
+        if not feedback and content_type not in ("x_post", "x_thread"):
+            feedback = self._rows(
+                "get_recent_content_feedback",
+                content_type="x_post",
+                feedback_types=["reject", "revise", "prefer"],
+                limit=6,
+            )
+        if not feedback:
+            return ""
+
+        lines = [
+            "FEEDBACK MEMORY (explicit user edits and rejections):",
+            "- Treat rejected and revised examples as durable negative signal; do not reuse their phrasing or topic framing unless new source material clearly changes the point.",
+        ]
+
+        negative = [
+            row for row in feedback
+            if row.get("feedback_type") in {"reject", "revise"}
+        ]
+        if negative:
+            lines.append("Avoid:")
+            for row in negative[:4]:
+                note = self._snippet(row.get("notes", ""), max_len=100)
+                original = self._snippet(row.get("content", ""), max_len=120)
+                if note:
+                    lines.append(
+                        f"- {row.get('feedback_type')}: {note}. Original: {original}"
+                    )
+                else:
+                    lines.append(f"- {row.get('feedback_type')}: {original}")
+
+        preferred = [
+            row for row in feedback
+            if row.get("feedback_type") == "prefer" or row.get("replacement_text")
+        ]
+        if preferred:
+            lines.append("Prefer:")
+            for row in preferred[:3]:
+                replacement = self._snippet(row.get("replacement_text", ""), max_len=140)
+                note = self._snippet(row.get("notes", ""), max_len=100)
+                if replacement and note:
+                    lines.append(f"- {note}. Better phrasing: {replacement}")
+                elif replacement:
+                    lines.append(f"- Better phrasing: {replacement}")
+                elif note:
+                    lines.append(f"- {note}")
+
         return "\n".join(lines)
 
     def build_github_activity_context(self) -> str:

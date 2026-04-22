@@ -10,7 +10,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from curate import VALID_FLAGS, cmd_clear, cmd_flag, cmd_list, cmd_stats
+from curate import (
+    VALID_FEEDBACK,
+    VALID_FLAGS,
+    cmd_clear,
+    cmd_feedback,
+    cmd_flag,
+    cmd_list,
+    cmd_stats,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -130,6 +138,46 @@ class TestCmdClear:
             (ids[0],),
         ).fetchone()
         assert row["curation_quality"] is None
+
+
+# --- cmd_feedback ---
+
+
+class TestCmdFeedback:
+    def test_records_feedback_with_replacement(self, db, caplog):
+        ids = _seed_published_posts(db, count=1)
+        cmd_feedback(
+            db,
+            ids[0],
+            "revise",
+            "too generic and broad",
+            "Retry state is the product surface nobody notices until it breaks.",
+        )
+        output = caplog.text
+        assert "Recorded feedback" in output
+        assert "revise" in output
+
+        row = db.conn.execute(
+            """SELECT content_id, feedback_type, notes, replacement_text
+               FROM content_feedback WHERE content_id = ?""",
+            (ids[0],),
+        ).fetchone()
+        assert row["content_id"] == ids[0]
+        assert row["feedback_type"] == "revise"
+        assert row["notes"] == "too generic and broad"
+        assert "Retry state" in row["replacement_text"]
+
+    def test_invalid_feedback_type(self, db, caplog):
+        ids = _seed_published_posts(db, count=1)
+        with pytest.raises(SystemExit):
+            cmd_feedback(db, ids[0], "maybe", "unclear")
+        assert "Invalid feedback" in caplog.text
+        assert "reject" in VALID_FEEDBACK
+
+    def test_nonexistent_content_id(self, db, caplog):
+        with pytest.raises(SystemExit):
+            cmd_feedback(db, 9999, "reject", "not right")
+        assert "No content found" in caplog.text
 
 
 # --- cmd_stats ---

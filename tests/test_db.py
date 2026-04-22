@@ -2077,6 +2077,60 @@ class TestInitSchema:
         db.init_schema(schema_path=schema_path)  # second call must not raise
 
 
+class TestContentFeedback:
+    def test_table_created(self, db):
+        tables = {
+            row[0]
+            for row in db.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "content_feedback" in tables
+
+    def test_add_content_feedback(self, db, sample_content):
+        cid = db.insert_generated_content(**sample_content)
+        feedback_id = db.add_content_feedback(
+            cid,
+            "reject",
+            "too vague",
+            "Make the failure mode concrete.",
+        )
+        row = db.conn.execute(
+            """SELECT content_id, feedback_type, notes, replacement_text
+               FROM content_feedback WHERE id = ?""",
+            (feedback_id,),
+        ).fetchone()
+
+        assert row["content_id"] == cid
+        assert row["feedback_type"] == "reject"
+        assert row["notes"] == "too vague"
+        assert row["replacement_text"] == "Make the failure mode concrete."
+
+    def test_add_content_feedback_rejects_invalid_type(self, db, sample_content):
+        cid = db.insert_generated_content(**sample_content)
+        with pytest.raises(ValueError):
+            db.add_content_feedback(cid, "unclear", "bad label")
+
+    def test_get_recent_content_feedback_filters_by_type_and_content_type(
+        self, db, sample_content
+    ):
+        post_id = db.insert_generated_content(**sample_content)
+        thread_id = db.insert_generated_content(
+            **{**sample_content, "content_type": "x_thread", "content": "thread"}
+        )
+        db.add_content_feedback(post_id, "reject", "avoid abstract framing")
+        db.add_content_feedback(thread_id, "prefer", "thread worked")
+
+        rows = db.get_recent_content_feedback(
+            content_type="x_post",
+            feedback_types=["reject"],
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["content_id"] == post_id
+        assert rows[0]["content"] == sample_content["content"]
+
+
 # ---------------------------------------------------------------------------
 # Claude messages
 # ---------------------------------------------------------------------------

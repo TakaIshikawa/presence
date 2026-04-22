@@ -118,6 +118,22 @@ class Database:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_path TEXT")
             if "image_prompt" not in cols:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_prompt TEXT")
+            # Migrate: create durable user feedback memory for generated content.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                    feedback_type TEXT NOT NULL CHECK (feedback_type IN ('reject', 'revise', 'prefer')),
+                    notes TEXT,
+                    replacement_text TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_feedback_content ON content_feedback(content_id)")
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_feedback_type_created "
+                "ON content_feedback(feedback_type, created_at)"
+            )
             # Migrate knowledge licensing for prompt-safety filtering
             k_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(knowledge)")}
             if k_cols and "license" not in k_cols:
@@ -2027,6 +2043,56 @@ class Database:
                ORDER BY created_at DESC
                LIMIT ?""",
             (quality, content_type, limit)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def add_content_feedback(
+        self,
+        content_id: int,
+        feedback_type: str,
+        notes: str = "",
+        replacement_text: str | None = None,
+    ) -> int:
+        """Record durable user feedback for generated content."""
+        if feedback_type not in {"reject", "revise", "prefer"}:
+            raise ValueError("feedback_type must be one of: reject, revise, prefer")
+        cursor = self.conn.execute(
+            """INSERT INTO content_feedback
+               (content_id, feedback_type, notes, replacement_text)
+               VALUES (?, ?, ?, ?)""",
+            (content_id, feedback_type, notes, replacement_text),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_recent_content_feedback(
+        self,
+        content_type: str | None = None,
+        feedback_types: list[str] | tuple[str, ...] | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Return recent feedback joined to the generated content it refers to."""
+        clauses = []
+        params: list = []
+        if content_type:
+            clauses.append("gc.content_type = ?")
+            params.append(content_type)
+        if feedback_types:
+            placeholders = ", ".join("?" for _ in feedback_types)
+            clauses.append(f"cf.feedback_type IN ({placeholders})")
+            params.extend(feedback_types)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT cf.id, cf.content_id, cf.feedback_type, cf.notes,
+                      cf.replacement_text, cf.created_at,
+                      gc.content, gc.content_type
+               FROM content_feedback cf
+               INNER JOIN generated_content gc ON gc.id = cf.content_id
+               {where}
+               ORDER BY cf.created_at DESC, cf.id DESC
+               LIMIT ?""",
+            params,
         )
         return [dict(row) for row in cursor.fetchall()]
 
