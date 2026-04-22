@@ -2751,6 +2751,30 @@ class TestMarkPublished:
         ).fetchone()[0]
         assert count == 0
 
+    def test_get_bluesky_publications_needing_engagement_includes_missing_id(
+        self, db, sample_content
+    ):
+        cid = db.insert_generated_content(**sample_content)
+        db.upsert_publication_success(cid, "bluesky")
+
+        rows = db.get_bluesky_publications_needing_engagement()
+
+        assert len(rows) == 1
+        assert rows[0]["content_id"] == cid
+        assert rows[0]["bluesky_post_ref"] is None
+
+    def test_get_bluesky_publications_needing_engagement_skips_recent_snapshot(
+        self, db, sample_content
+    ):
+        cid = db.insert_generated_content(**sample_content)
+        uri = "at://did:plc:xyz/app.bsky.feed.post/abc123"
+        db.upsert_publication_success(cid, "bluesky", platform_post_id=uri)
+        db.insert_bluesky_engagement(cid, uri, 1, 0, 0, 0, 1.0)
+
+        rows = db.get_bluesky_publications_needing_engagement()
+
+        assert rows == []
+
 
 # ---------------------------------------------------------------------------
 # Retry & abandon

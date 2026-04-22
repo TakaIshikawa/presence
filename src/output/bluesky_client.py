@@ -471,14 +471,24 @@ class BlueskyClient:
         """Fetch engagement metrics for a single post.
 
         Args:
-            uri: AT Protocol URI (e.g., at://did:plc:.../app.bsky.feed.post/...)
+            uri: AT Protocol URI or post rkey.
 
         Returns:
             Dict with like_count, repost_count, reply_count, quote_count
             or None if post not found or error occurred
         """
+        return self.get_post_engagement(uri)
+
+    def get_post_engagement(self, post_ref: str) -> Optional[dict]:
+        """Fetch normalized engagement counts for an AT URI or Bluesky post ID.
+
+        ``post_ref`` may be a full AT URI, a bsky.app post URL, a
+        ``did:.../app.bsky.feed.post/...`` path, or a bare post rkey for the
+        authenticated handle.
+        """
         self._ensure_login()
         try:
+            uri = self._normalize_post_ref(post_ref)
             # Get post thread to access metrics
             response = self.client.get_post_thread(uri=uri)
 
@@ -499,10 +509,33 @@ class BlueskyClient:
                 'reply_count': reply_count,
                 'quote_count': quote_count,
             }
-        except AtProtocolError as e:
+        except (AtProtocolError, ValueError, Exception) as e:
             # Post not found or other error
-            logger.warning('Failed to fetch metrics for %s: %s', uri, e)
+            logger.warning('Failed to fetch metrics for %s: %s', post_ref, e)
             return None
+
+    def _normalize_post_ref(self, post_ref: str) -> str:
+        """Normalize accepted Bluesky post references to an AT URI."""
+        ref = (post_ref or "").strip()
+        if not ref:
+            raise ValueError("Missing Bluesky post reference")
+        if ref.startswith("at://"):
+            return ref
+
+        url_match = re.search(r"bsky\.app/profile/([^/]+)/post/([^/?#]+)", ref)
+        if url_match:
+            actor, rkey = url_match.groups()
+            return f"at://{actor}/app.bsky.feed.post/{rkey}"
+
+        path_match = re.match(r"([^/]+)/app\.bsky\.feed\.post/([^/?#]+)$", ref)
+        if path_match:
+            actor, rkey = path_match.groups()
+            return f"at://{actor}/app.bsky.feed.post/{rkey}"
+
+        if "/" not in ref:
+            return f"at://{self.handle}/app.bsky.feed.post/{ref}"
+
+        raise ValueError(f"Unsupported Bluesky post reference: {post_ref}")
 
     def get_post_metrics_batch(self, uris: list[str]) -> list[dict]:
         """Fetch metrics for multiple posts with rate limiting.

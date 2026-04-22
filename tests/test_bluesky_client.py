@@ -706,6 +706,41 @@ class TestGetPostMetrics:
             'quote_count': 0,
         }
 
+    def test_accepts_bare_post_id_for_authenticated_handle(self):
+        client, mock_client = make_bluesky_client()
+        mock_post = MagicMock()
+        mock_post.like_count = 1
+        mock_post.repost_count = 2
+        mock_post.reply_count = 3
+        mock_post.quote_count = 4
+        mock_client.get_post_thread.return_value = SimpleNamespace(
+            thread=SimpleNamespace(post=mock_post)
+        )
+
+        result = client.get_post_engagement("3kjxabcdefg")
+
+        assert result["like_count"] == 1
+        mock_client.get_post_thread.assert_called_once_with(
+            uri="at://test.bsky.social/app.bsky.feed.post/3kjxabcdefg"
+        )
+
+    def test_accepts_bsky_app_post_url(self):
+        client, mock_client = make_bluesky_client()
+        mock_post = MagicMock()
+        mock_post.like_count = 1
+        mock_post.repost_count = 0
+        mock_post.reply_count = 0
+        mock_post.quote_count = 0
+        mock_client.get_post_thread.return_value = SimpleNamespace(
+            thread=SimpleNamespace(post=mock_post)
+        )
+
+        client.get_post_engagement("https://bsky.app/profile/alice.test/post/rkey123")
+
+        mock_client.get_post_thread.assert_called_once_with(
+            uri="at://alice.test/app.bsky.feed.post/rkey123"
+        )
+
     def test_returns_none_when_response_is_none(self):
         client, mock_client = make_bluesky_client()
         mock_client.get_post_thread.return_value = None

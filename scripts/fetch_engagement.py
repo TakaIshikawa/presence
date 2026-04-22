@@ -98,6 +98,96 @@ def fetch_bluesky_profile_metrics(config, db) -> bool:
         return False
 
 
+def _has_bluesky_credentials(config) -> bool:
+    bluesky = getattr(config, "bluesky", None)
+    return bool(
+        bluesky
+        and getattr(bluesky, "enabled", False) is True
+        and getattr(bluesky, "handle", None)
+        and getattr(bluesky, "app_password", None)
+    )
+
+
+def fetch_bluesky_engagement(config, db, max_age_days: int = 7) -> int:
+    """Fetch and store Bluesky engagement snapshots from publication rows."""
+    bluesky = getattr(config, "bluesky", None)
+    if not bluesky or getattr(bluesky, "enabled", False) is not True:
+        return 0
+
+    logger.info("\n--- Fetching Bluesky engagement ---")
+    if should_skip_optional_api_call(
+        config,
+        db,
+        "bluesky",
+        operation="Bluesky engagement metrics fetch",
+        logger=logger,
+    ):
+        return 0
+
+    bluesky_posts = db.get_bluesky_publications_needing_engagement(
+        max_age_days=max_age_days
+    )
+    if not bluesky_posts:
+        logger.info("No Bluesky posts need metrics fetching")
+        return 0
+
+    if not _has_bluesky_credentials(config):
+        for post in bluesky_posts:
+            logger.warning(
+                "Skipping Bluesky engagement for content_id=%s; missing Bluesky credentials",
+                post.get("content_id") or post.get("id"),
+            )
+        return 0
+
+    logger.info(f"Fetching Bluesky metrics for {len(bluesky_posts)} posts")
+
+    from output.bluesky_client import BlueskyClient
+    bluesky_client = BlueskyClient(
+        handle=bluesky.handle,
+        app_password=bluesky.app_password,
+    )
+
+    fetched = 0
+    for post in bluesky_posts:
+        post_ref = post.get("bluesky_post_ref")
+        content_id = post.get("content_id") or post.get("id")
+        if not post_ref:
+            logger.warning(
+                "Skipping Bluesky engagement for content_id=%s; missing platform_post_id",
+                content_id,
+            )
+            continue
+
+        metrics = bluesky_client.get_post_engagement(post_ref)
+        if metrics is None:
+            logger.warning(f"  Failed to fetch metrics for {post_ref}")
+            continue
+
+        score = compute_engagement_score(
+            metrics['like_count'],
+            metrics['repost_count'],
+            metrics['reply_count'],
+            metrics['quote_count']
+        )
+
+        db.insert_bluesky_engagement(
+            content_id=content_id,
+            bluesky_uri=post_ref,
+            like_count=metrics['like_count'],
+            repost_count=metrics['repost_count'],
+            reply_count=metrics['reply_count'],
+            quote_count=metrics['quote_count'],
+            engagement_score=score,
+        )
+        fetched += 1
+        logger.info(
+            f"  {post_ref}: {metrics['like_count']}L "
+            f"{metrics['repost_count']}RP {metrics['reply_count']}R "
+            f"{metrics['quote_count']}Q = {score:.1f}"
+        )
+    return fetched
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -193,61 +283,7 @@ def main() -> None:
                         f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}"
                     )
 
-        # Fetch Bluesky engagement metrics if enabled
-        bluesky_fetched = 0
-        if config.bluesky and getattr(config.bluesky, "enabled", False) is True:
-            logger.info("\n--- Fetching Bluesky engagement ---")
-            if should_skip_optional_api_call(
-                config,
-                db,
-                "bluesky",
-                operation="Bluesky engagement metrics fetch",
-                logger=logger,
-            ):
-                bluesky_posts = []
-            else:
-                bluesky_posts = db.get_content_needing_bluesky_engagement(max_age_days=7)
-
-            if bluesky_posts:
-                logger.info(f"Fetching Bluesky metrics for {len(bluesky_posts)} posts")
-
-                from output.bluesky_client import BlueskyClient
-                bluesky_client = BlueskyClient(
-                    handle=config.bluesky.handle,
-                    app_password=config.bluesky.app_password
-                )
-
-                for post in bluesky_posts:
-                    metrics = bluesky_client.get_post_metrics(post["bluesky_uri"])
-
-                    if metrics is None:
-                        logger.warning(f"  Failed to fetch metrics for {post['bluesky_uri']}")
-                        continue
-
-                    score = compute_engagement_score(
-                        metrics['like_count'],
-                        metrics['repost_count'],
-                        metrics['reply_count'],
-                        metrics['quote_count']
-                    )
-
-                    db.insert_bluesky_engagement(
-                        content_id=post["id"],
-                        bluesky_uri=post["bluesky_uri"],
-                        like_count=metrics['like_count'],
-                        repost_count=metrics['repost_count'],
-                        reply_count=metrics['reply_count'],
-                        quote_count=metrics['quote_count'],
-                        engagement_score=score,
-                    )
-                    bluesky_fetched += 1
-                    logger.info(
-                        f"  {post['bluesky_uri']}: {metrics['like_count']}L "
-                        f"{metrics['repost_count']}RP {metrics['reply_count']}R "
-                        f"{metrics['quote_count']}Q = {score:.1f}"
-                    )
-            else:
-                logger.info("No Bluesky posts need metrics fetching")
+        bluesky_fetched = fetch_bluesky_engagement(config, db)
 
         # Auto-classify posts that have settled (>= 48h old)
         classified = db.auto_classify_posts(min_age_hours=48)

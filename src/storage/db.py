@@ -5542,6 +5542,48 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_bluesky_publications_needing_engagement(
+        self,
+        max_age_days: int = 7,
+    ) -> list[dict]:
+        """Return published Bluesky publication rows needing engagement fetch.
+
+        Rows with missing post references are included so callers can log clear
+        skip reasons instead of silently filtering them out.
+        """
+        cursor = self.conn.execute(
+            """SELECT cp.id AS publication_id,
+                      cp.content_id AS id,
+                      cp.content_id,
+                      cp.platform_post_id,
+                      cp.platform_url,
+                      COALESCE(NULLIF(cp.platform_post_id, ''),
+                               NULLIF(gc.bluesky_uri, ''),
+                               NULLIF(cp.platform_url, '')) AS bluesky_post_ref,
+                      gc.bluesky_uri,
+                      gc.content,
+                      COALESCE(cp.published_at, gc.published_at, cp.updated_at)
+                          AS published_at,
+                      be.fetched_at AS last_fetched
+               FROM content_publications cp
+               JOIN generated_content gc ON gc.id = cp.content_id
+               LEFT JOIN (
+                   SELECT content_id, MAX(fetched_at) AS fetched_at
+                   FROM bluesky_engagement
+                   GROUP BY content_id
+               ) be ON be.content_id = cp.content_id
+               WHERE cp.platform = 'bluesky'
+                 AND cp.status = 'published'
+                 AND COALESCE(cp.published_at, gc.published_at, cp.updated_at)
+                     >= datetime('now', ?)
+                 AND (be.fetched_at IS NULL
+                      OR be.fetched_at < datetime('now', '-6 hours'))
+               ORDER BY COALESCE(cp.published_at, gc.published_at, cp.updated_at) DESC,
+                        cp.id DESC""",
+            (f'-{max_age_days} days',),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     def get_combined_engagement(self, content_id: int) -> dict:
         """Get unified engagement view combining X and Bluesky metrics.
 

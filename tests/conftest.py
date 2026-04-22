@@ -71,6 +71,9 @@ if importlib.util.find_spec("requests") is None:
         RequestException=RequestException,
     )
     requests_stub.Response = Response
+    requests_stub.HTTPError = HTTPError
+    requests_stub.ConnectionError = ConnectionError
+    requests_stub.RequestException = RequestException
     requests_stub.exceptions = exceptions_stub
     requests_stub.get = get
     requests_stub.post = post

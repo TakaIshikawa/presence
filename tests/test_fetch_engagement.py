@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from fetch_engagement import (
     backfill_tweet_ids,
+    fetch_bluesky_engagement,
     fetch_bluesky_profile_metrics,
     get_bearer_token,
 )
@@ -495,6 +496,98 @@ class TestFetchBlueskyProfileMetrics:
         stored = fetch_bluesky_profile_metrics(config, db)
 
         assert stored is False
+        MockBlueskyClient.assert_not_called()
+
+
+# --- TestFetchBlueskyEngagement ---
+
+
+class TestFetchBlueskyEngagement:
+    @patch("output.bluesky_client.BlueskyClient")
+    def test_fetches_from_content_publications(self, MockBlueskyClient, db):
+        config = _make_config()
+        config.bluesky.enabled = True
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Bluesky post",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.upsert_publication_success(
+            content_id,
+            "bluesky",
+            platform_post_id="at://did:plc:test/app.bsky.feed.post/abc123",
+            platform_url="https://bsky.app/profile/test.bsky.social/post/abc123",
+        )
+        MockBlueskyClient.return_value.get_post_engagement.return_value = {
+            "like_count": 4,
+            "repost_count": 2,
+            "reply_count": 1,
+            "quote_count": 1,
+        }
+
+        fetched = fetch_bluesky_engagement(config, db)
+
+        assert fetched == 1
+        engagement = db.get_bluesky_engagement(content_id)
+        assert len(engagement) == 1
+        assert engagement[0]["bluesky_uri"] == "at://did:plc:test/app.bsky.feed.post/abc123"
+        assert engagement[0]["like_count"] == 4
+        MockBlueskyClient.return_value.get_post_engagement.assert_called_once_with(
+            "at://did:plc:test/app.bsky.feed.post/abc123"
+        )
+
+    @patch("output.bluesky_client.BlueskyClient")
+    def test_logs_and_skips_missing_post_id(self, MockBlueskyClient, db, caplog):
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        config = _make_config()
+        config.bluesky.enabled = True
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Missing ID",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.upsert_publication_success(content_id, "bluesky")
+
+        fetched = fetch_bluesky_engagement(config, db)
+
+        assert fetched == 0
+        assert "missing platform_post_id" in caplog.text
+        MockBlueskyClient.return_value.get_post_engagement.assert_not_called()
+
+    @patch("output.bluesky_client.BlueskyClient")
+    def test_logs_and_skips_missing_credentials(self, MockBlueskyClient, db, caplog):
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        config = _make_config()
+        config.bluesky.enabled = True
+        config.bluesky.app_password = ""
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="No credentials",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.upsert_publication_success(
+            content_id,
+            "bluesky",
+            platform_post_id="at://did:plc:test/app.bsky.feed.post/abc123",
+        )
+
+        fetched = fetch_bluesky_engagement(config, db)
+
+        assert fetched == 0
+        assert "missing Bluesky credentials" in caplog.text
         MockBlueskyClient.assert_not_called()
 
 
