@@ -1,0 +1,305 @@
+"""Fetch recently updated GitHub issues and pull requests."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Iterator, Optional
+
+import requests
+
+from ingestion.github_commits import (
+    GitHubAuthError,
+    GitHubClientError,
+    GitHubNotFoundError,
+    GitHubRateLimitError,
+)
+
+
+@dataclass
+class GitHubActivity:
+    repo_name: str
+    activity_type: str
+    number: int
+    title: str
+    state: str
+    author: str
+    url: str
+    updated_at: datetime
+    created_at: datetime
+    body: str = ""
+    closed_at: Optional[datetime] = None
+    merged_at: Optional[datetime] = None
+    labels: list[str] = field(default_factory=list)
+
+    @property
+    def activity_id(self) -> str:
+        return f"{self.repo_name}#{self.number}:{self.activity_type}"
+
+    def to_dict(self) -> dict:
+        return {
+            "repo_name": self.repo_name,
+            "activity_type": self.activity_type,
+            "number": self.number,
+            "title": self.title,
+            "state": self.state,
+            "author": self.author,
+            "url": self.url,
+            "updated_at": self.updated_at.isoformat(),
+            "created_at": self.created_at.isoformat(),
+            "body": self.body,
+            "closed_at": self.closed_at.isoformat() if self.closed_at else None,
+            "merged_at": self.merged_at.isoformat() if self.merged_at else None,
+            "labels": self.labels,
+        }
+
+
+def _parse_github_datetime(value: str | None) -> Optional[datetime]:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+class GitHubActivityClient:
+    BASE_URL = "https://api.github.com"
+
+    def __init__(self, token: str, username: str, timeout: int = 30):
+        self.token = token
+        self.username = username
+        self.timeout = timeout
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+    def _get(self, path: str, params: dict) -> list[dict]:
+        try:
+            response = requests.get(
+                f"{self.BASE_URL}{path}",
+                headers=self.headers,
+                params=params,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except requests.exceptions.ConnectionError as e:
+            raise GitHubClientError(f"Connection error: {e}") from e
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise GitHubAuthError(f"Authentication failed: {e}") from e
+            if e.response.status_code == 403:
+                raise GitHubRateLimitError(f"Rate limit exceeded: {e}") from e
+            if e.response.status_code == 404:
+                raise GitHubNotFoundError(f"Resource not found: {e}") from e
+            raise GitHubClientError(f"HTTP error: {e}") from e
+        return response.json()
+
+    def get_configured_repos(
+        self,
+        repositories: Optional[list[str | dict]] = None,
+        include_forks: bool = False,
+    ) -> list[dict]:
+        """Return repository owner/name pairs from config or owned repositories."""
+        if repositories:
+            return [self._normalize_repo_config(repo) for repo in repositories]
+
+        repos = []
+        page = 1
+        while True:
+            data = self._get(
+                "/user/repos",
+                {
+                    "affiliation": "owner",
+                    "sort": "pushed",
+                    "per_page": 100,
+                    "page": page,
+                },
+            )
+            if not data:
+                break
+            for repo in data:
+                if not include_forks and repo.get("fork"):
+                    continue
+                repos.append(
+                    {
+                        "owner": repo.get("owner", {}).get("login", self.username),
+                        "name": repo["name"],
+                        "repo_name": repo.get("full_name") or repo["name"],
+                    }
+                )
+            page += 1
+        return repos
+
+    def _normalize_repo_config(self, repo: str | dict) -> dict:
+        if isinstance(repo, str):
+            if "/" in repo:
+                owner, name = repo.split("/", 1)
+                return {"owner": owner, "name": name, "repo_name": repo}
+            return {"owner": self.username, "name": repo, "repo_name": repo}
+
+        owner = repo.get("owner") or self.username
+        name = repo.get("name") or repo.get("repo") or repo.get("repository")
+        if not name:
+            raise ValueError("GitHub repository config requires a name")
+        repo_name = repo.get("repo_name") or repo.get("full_name") or (
+            f"{owner}/{name}" if owner != self.username else name
+        )
+        return {"owner": owner, "name": name, "repo_name": repo_name}
+
+    def get_repo_issues(
+        self,
+        owner: str,
+        repo: str,
+        repo_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recently updated issues, excluding pull requests."""
+        yielded = 0
+        page = 1
+        while yielded < limit:
+            params = {
+                "state": "all",
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": min(100, limit - yielded),
+                "page": page,
+            }
+            if since:
+                params["since"] = since.isoformat()
+            data = self._get(f"/repos/{owner}/{repo}/issues", params)
+            if not data:
+                break
+            for item in data:
+                if "pull_request" in item:
+                    continue
+                yield self._issue_to_activity(item, repo_name or repo)
+                yielded += 1
+                if yielded >= limit:
+                    break
+            page += 1
+
+    def get_repo_pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        repo_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recently updated pull requests."""
+        yielded = 0
+        page = 1
+        while yielded < limit:
+            data = self._get(
+                f"/repos/{owner}/{repo}/pulls",
+                {
+                    "state": "all",
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": min(100, limit - yielded),
+                    "page": page,
+                },
+            )
+            if not data:
+                break
+            for item in data:
+                updated_at = _parse_github_datetime(item.get("updated_at"))
+                if since and updated_at and updated_at < since:
+                    return
+                yield self._pull_request_to_activity(item, repo_name or repo)
+                yielded += 1
+                if yielded >= limit:
+                    break
+            page += 1
+
+    def get_all_recent_activity(
+        self,
+        since: Optional[datetime] = None,
+        repositories: Optional[list[str | dict]] = None,
+        include_forks: bool = False,
+        limit_per_repo: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recent issues and pull requests from configured repositories."""
+        for repo in self.get_configured_repos(repositories, include_forks=include_forks):
+            try:
+                yield from self.get_repo_issues(
+                    repo["owner"],
+                    repo["name"],
+                    repo_name=repo["repo_name"],
+                    since=since,
+                    limit=limit_per_repo,
+                )
+                yield from self.get_repo_pull_requests(
+                    repo["owner"],
+                    repo["name"],
+                    repo_name=repo["repo_name"],
+                    since=since,
+                    limit=limit_per_repo,
+                )
+            except (GitHubRateLimitError, GitHubNotFoundError):
+                pass
+
+    def _issue_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        return GitHubActivity(
+            repo_name=repo_name,
+            activity_type="issue",
+            number=item["number"],
+            title=item.get("title", ""),
+            state=item.get("state", ""),
+            author=(item.get("user") or {}).get("login", ""),
+            url=item.get("html_url", ""),
+            updated_at=_parse_github_datetime(item.get("updated_at")),
+            created_at=_parse_github_datetime(item.get("created_at")),
+            body=item.get("body") or "",
+            closed_at=_parse_github_datetime(item.get("closed_at")),
+            labels=[label.get("name", "") for label in item.get("labels", [])],
+        )
+
+    def _pull_request_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        return GitHubActivity(
+            repo_name=repo_name,
+            activity_type="pull_request",
+            number=item["number"],
+            title=item.get("title", ""),
+            state=item.get("state", ""),
+            author=(item.get("user") or {}).get("login", ""),
+            url=item.get("html_url", ""),
+            updated_at=_parse_github_datetime(item.get("updated_at")),
+            created_at=_parse_github_datetime(item.get("created_at")),
+            body=item.get("body") or "",
+            closed_at=_parse_github_datetime(item.get("closed_at")),
+            merged_at=_parse_github_datetime(item.get("merged_at")),
+            labels=[label.get("name", "") for label in item.get("labels", [])],
+        )
+
+
+def poll_new_activity(
+    token: str,
+    username: str,
+    since: datetime,
+    db,
+    repositories: Optional[list[str | dict]] = None,
+    dry_run: bool = False,
+    timeout: int = 30,
+) -> list[GitHubActivity]:
+    """Poll for recently updated GitHub issues/PRs and optionally persist them."""
+    client = GitHubActivityClient(token, username, timeout=timeout)
+    new_activity = []
+
+    for activity in client.get_all_recent_activity(
+        since=since,
+        repositories=repositories,
+    ):
+        if db.is_github_activity_processed(
+            activity.repo_name,
+            activity.activity_type,
+            activity.number,
+            activity.updated_at.isoformat(),
+        ):
+            continue
+
+        if not dry_run:
+            db.upsert_github_activity(**activity.to_dict())
+        new_activity.append(activity)
+
+    return new_activity

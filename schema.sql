@@ -22,6 +22,27 @@ CREATE TABLE IF NOT EXISTS github_commits (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Track processed GitHub issues and pull requests
+CREATE TABLE IF NOT EXISTS github_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_name TEXT NOT NULL,
+    activity_type TEXT NOT NULL,  -- 'issue' or 'pull_request'
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    state TEXT,
+    author TEXT,
+    url TEXT,
+    updated_at TEXT NOT NULL,
+    created_at_github TEXT,
+    closed_at TEXT,
+    merged_at TEXT,
+    labels TEXT,  -- JSON array of label names
+    metadata JSON,
+    ingested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repo_name, activity_type, number)
+);
+
 -- Link commits to Claude messages (same time window = same work session)
 CREATE TABLE IF NOT EXISTS commit_prompt_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,6 +255,8 @@ CREATE INDEX IF NOT EXISTS idx_claude_messages_session ON claude_messages(sessio
 CREATE INDEX IF NOT EXISTS idx_claude_messages_timestamp ON claude_messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_github_commits_repo ON github_commits(repo_name);
 CREATE INDEX IF NOT EXISTS idx_github_commits_timestamp ON github_commits(timestamp);
+CREATE INDEX IF NOT EXISTS idx_github_activity_repo_type ON github_activity(repo_name, activity_type);
+CREATE INDEX IF NOT EXISTS idx_github_activity_updated ON github_activity(updated_at);
 CREATE INDEX IF NOT EXISTS idx_generated_content_type ON generated_content(content_type);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_content ON post_engagement(content_id);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_tweet ON post_engagement(tweet_id);

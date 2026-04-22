@@ -11,6 +11,7 @@ from typing import Optional
 class GitHubConfig:
     username: str
     token: str
+    repositories: list[str | dict] = field(default_factory=list)
 
 
 @dataclass
@@ -547,7 +548,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
     return Config(
         github=GitHubConfig(
             username=_require(data, "github", "username", section="github"),
-            token=_resolve_env_var(_require(data, "github", "token", section="github"))
+            token=_resolve_env_var(_require(data, "github", "token", section="github")),
+            repositories=data["github"].get("repositories", data["github"].get("repos", [])),
         ),
         x=XConfig(
             api_key=_resolve_env_var(_require(data, "x", "api_key", section="x")),

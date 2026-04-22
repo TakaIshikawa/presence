@@ -23,6 +23,7 @@ class TestSchemaInit:
         expected = {
             "claude_messages",
             "github_commits",
+            "github_activity",
             "commit_prompt_links",
             "generated_content",
             "post_engagement",
@@ -735,6 +736,87 @@ class TestGitHubCommits:
 
         assert len(results) == 2
         assert results[0]["commit_message"] == "commit 1"
+
+
+class TestGitHubActivity:
+    def test_upsert_and_check_processed(self, db):
+        activity_id = db.upsert_github_activity(
+            repo_name="owner/repo",
+            activity_type="issue",
+            number=7,
+            title="Fix flaky tests",
+            body="Details",
+            state="open",
+            author="taka",
+            url="https://github.com/owner/repo/issues/7",
+            updated_at="2026-04-01T12:00:00+00:00",
+            created_at="2026-04-01T10:00:00+00:00",
+            labels=["bug", "tests"],
+        )
+
+        assert activity_id
+        assert db.is_github_activity_processed("owner/repo", "issue", 7) is True
+        assert db.is_github_activity_processed(
+            "owner/repo", "issue", 7, "2026-04-01T12:00:00+00:00"
+        ) is True
+        assert db.is_github_activity_processed(
+            "owner/repo", "issue", 7, "2026-04-01T13:00:00+00:00"
+        ) is False
+
+    def test_upsert_updates_existing_activity(self, db):
+        first_id = db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="pull_request",
+            number=3,
+            title="Old title",
+            state="open",
+            author="taka",
+            url="url",
+            updated_at="2026-04-01T12:00:00+00:00",
+        )
+        second_id = db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="pull_request",
+            number=3,
+            title="New title",
+            state="closed",
+            author="taka",
+            url="url",
+            updated_at="2026-04-01T13:00:00+00:00",
+            merged_at="2026-04-01T13:00:00+00:00",
+        )
+
+        assert second_id == first_id
+        rows = db.get_github_activity_in_range(
+            datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc),
+        )
+        assert len(rows) == 1
+        assert rows[0]["title"] == "New title"
+        assert rows[0]["merged_at"] == "2026-04-01T13:00:00+00:00"
+
+    def test_get_github_activity_in_range_parses_labels(self, db):
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="issue",
+            number=1,
+            title="Issue",
+            state="open",
+            author="taka",
+            url="url",
+            updated_at="2026-04-01T12:00:00+00:00",
+            labels=["bug"],
+            metadata={"source": "test"},
+        )
+
+        rows = db.get_github_activity_in_range(
+            datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc),
+            activity_type="issue",
+        )
+
+        assert rows[0]["labels"] == ["bug"]
+        assert rows[0]["metadata"] == {"source": "test"}
 
 
 # --- Commit-prompt correlation ---

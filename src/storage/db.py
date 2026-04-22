@@ -59,6 +59,35 @@ class Database:
             self._preflight_existing_schema()
             schema = Path(schema_path).read_text()
             self.conn.executescript(schema)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS github_activity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo_name TEXT NOT NULL,
+                    activity_type TEXT NOT NULL,
+                    number INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    body TEXT,
+                    state TEXT,
+                    author TEXT,
+                    url TEXT,
+                    updated_at TEXT NOT NULL,
+                    created_at_github TEXT,
+                    closed_at TEXT,
+                    merged_at TEXT,
+                    labels TEXT,
+                    metadata JSON,
+                    ingested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(repo_name, activity_type, number)
+                )
+            """)
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_github_activity_repo_type "
+                "ON github_activity(repo_name, activity_type)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_github_activity_updated "
+                "ON github_activity(updated_at)"
+            )
             # Migrate: add columns if missing (existing DBs)
             cols = {row[1] for row in self.conn.execute("PRAGMA table_info(generated_content)")}
             if "retry_count" not in cols:
@@ -545,6 +574,124 @@ class Database:
             (start.isoformat(), end.isoformat())
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    # GitHub issues and pull requests
+    def is_github_activity_processed(
+        self,
+        repo_name: str,
+        activity_type: str,
+        number: int,
+        updated_at: str | None = None,
+    ) -> bool:
+        """Return True when an issue/PR version has already been ingested."""
+        cursor = self.conn.execute(
+            """SELECT updated_at FROM github_activity
+               WHERE repo_name = ? AND activity_type = ? AND number = ?""",
+            (repo_name, activity_type, number),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        if updated_at is None:
+            return True
+        return (row["updated_at"] or "") >= updated_at
+
+    def upsert_github_activity(
+        self,
+        repo_name: str,
+        activity_type: str,
+        number: int,
+        title: str,
+        state: str,
+        author: str,
+        url: str,
+        updated_at: str,
+        created_at: str | None = None,
+        body: str = "",
+        closed_at: str | None = None,
+        merged_at: str | None = None,
+        labels: list[str] | str | None = None,
+        metadata: dict | str | None = None,
+    ) -> int:
+        """Insert or update a GitHub issue/PR activity record."""
+        labels_json = labels if isinstance(labels, str) else json.dumps(labels or [])
+        if isinstance(metadata, str) or metadata is None:
+            metadata_json = metadata
+        else:
+            metadata_json = json.dumps(metadata)
+
+        self.conn.execute(
+            """INSERT INTO github_activity
+               (repo_name, activity_type, number, title, body, state, author, url,
+                updated_at, created_at_github, closed_at, merged_at, labels, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(repo_name, activity_type, number) DO UPDATE SET
+                   title = excluded.title,
+                   body = excluded.body,
+                   state = excluded.state,
+                   author = excluded.author,
+                   url = excluded.url,
+                   updated_at = excluded.updated_at,
+                   created_at_github = excluded.created_at_github,
+                   closed_at = excluded.closed_at,
+                   merged_at = excluded.merged_at,
+                   labels = excluded.labels,
+                   metadata = excluded.metadata,
+                   ingested_at = CURRENT_TIMESTAMP
+               WHERE excluded.updated_at >= github_activity.updated_at""",
+            (
+                repo_name,
+                activity_type,
+                number,
+                title,
+                body,
+                state,
+                author,
+                url,
+                updated_at,
+                created_at,
+                closed_at,
+                merged_at,
+                labels_json,
+                metadata_json,
+            ),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            """SELECT id FROM github_activity
+               WHERE repo_name = ? AND activity_type = ? AND number = ?""",
+            (repo_name, activity_type, number),
+        ).fetchone()
+        return row["id"]
+
+    def insert_github_activity(self, **kwargs) -> int:
+        """Compatibility wrapper for inserting/updating GitHub activity."""
+        return self.upsert_github_activity(**kwargs)
+
+    def get_github_activity_in_range(
+        self,
+        start: datetime,
+        end: datetime,
+        activity_type: str | None = None,
+    ) -> list[dict]:
+        params: list[str] = [start.isoformat(), end.isoformat()]
+        type_filter = ""
+        if activity_type:
+            type_filter = " AND activity_type = ?"
+            params.append(activity_type)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE updated_at >= ? AND updated_at < ?{type_filter}
+                ORDER BY updated_at""",
+            tuple(params),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["labels"] = self._parse_json_list(item.get("labels"))
+            item["metadata"] = self._parse_json_object(item.get("metadata"))
+            rows.append(item)
+        return rows
 
     # Commit-prompt correlation
     def link_commit_to_prompts(
@@ -1321,6 +1468,17 @@ class Database:
             (poll_time.isoformat(),)
         )
         self.conn.commit()
+
+    def get_last_github_activity_poll_time(self) -> Optional[datetime]:
+        """Get the last successful GitHub activity poll time."""
+        value = self.get_meta("github_activity:last_poll_time")
+        if not value:
+            return None
+        return datetime.fromisoformat(value)
+
+    def set_last_github_activity_poll_time(self, poll_time: datetime) -> None:
+        """Update the last successful GitHub activity poll time."""
+        self.set_meta("github_activity:last_poll_time", poll_time.isoformat())
 
     # Engagement tracking
     def get_posts_needing_metrics(self, max_age_days: int = 30) -> list[dict]:
