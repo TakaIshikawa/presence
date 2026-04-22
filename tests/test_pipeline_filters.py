@@ -386,6 +386,75 @@ class TestFilterStalePatterns:
         assert filtered[0] == "Clean post without patterns."
 
 
+# --- _filter_unsupported_claims tests ---
+
+
+class TestFilterUnsupportedClaims:
+    """Test the deterministic claim-support filter."""
+
+    def test_supported_metric_passes(self, pipeline):
+        candidates = [
+            "The polling fix cut timeout retries by 42%.",
+            "A plain implementation note without risky metrics.",
+        ]
+
+        filtered, rejected, annotations = pipeline._filter_unsupported_claims(
+            candidates,
+            source_prompts=["Investigated timeout retries in polling"],
+            source_commits=["fix: cut timeout retries by 42% in polling"],
+        )
+
+        assert filtered == candidates
+        assert rejected == 0
+        assert annotations == []
+
+    def test_invented_metric_is_rejected(self, pipeline):
+        candidates = [
+            "The polling fix cut timeout retries by 87%.",
+            "A plain implementation note without risky metrics.",
+        ]
+
+        filtered, rejected, annotations = pipeline._filter_unsupported_claims(
+            candidates,
+            source_prompts=["Investigated timeout retries in polling"],
+            source_commits=["fix: reduce timeout retries in polling"],
+        )
+
+        assert filtered == ["A plain implementation note without risky metrics."]
+        assert rejected == 1
+        assert "87%" in annotations[0]
+
+    def test_factual_claim_passes_with_linked_knowledge(self, pipeline):
+        candidates = ["Redis added vector indexing for search workloads."]
+
+        filtered, rejected, annotations = pipeline._filter_unsupported_claims(
+            candidates,
+            source_prompts=[],
+            source_commits=[],
+            linked_knowledge=[
+                "Redis added vector indexing for search workloads in the latest release."
+            ],
+        )
+
+        assert filtered == candidates
+        assert rejected == 0
+        assert annotations == []
+
+    def test_disabled_behavior_passes_unsupported_claims(self, pipeline):
+        pipeline.claim_check_enabled = False
+        candidates = ["The polling fix cut timeout retries by 87%."]
+
+        filtered, rejected, annotations = pipeline._filter_unsupported_claims(
+            candidates,
+            source_prompts=[],
+            source_commits=[],
+        )
+
+        assert filtered == candidates
+        assert rejected == 0
+        assert annotations == []
+
+
 # --- _select_format_directives tests ---
 
 

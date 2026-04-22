@@ -62,6 +62,7 @@ def main():
             embedder=embedder,
             semantic_threshold=semantic_threshold,
             knowledge_store=knowledge_store,
+            claim_check_enabled=config.synthesis.claim_check_enabled,
         )
 
         # Image generator

@@ -16,6 +16,7 @@ from synthesis.refiner import ContentRefiner, RefinementResult
 from synthesis.few_shot import FewShotSelector
 from synthesis.presence_context import PresenceContextBuilder
 from synthesis.stale_patterns import STALE_PATTERNS
+from synthesis.claim_checker import ClaimChecker, ClaimCheckResult
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,7 @@ class SynthesisPipeline:
         knowledge_store=None,
         engagement_predictor=None,
         format_weighting_enabled: bool = True,
+        claim_check_enabled: bool = True,
     ):
         self.api_key = api_key
         self.generator = ContentGenerator(api_key, generator_model, timeout=anthropic_timeout)
@@ -215,6 +217,8 @@ class SynthesisPipeline:
         self.knowledge_store = knowledge_store
         self.engagement_predictor = engagement_predictor
         self.format_weighting_enabled = format_weighting_enabled
+        self.claim_check_enabled = claim_check_enabled
+        self.claim_checker = ClaimChecker()
         self.presence_context_builder = PresenceContextBuilder(db)
 
     # Character limits per content type
@@ -457,6 +461,57 @@ class SynthesisPipeline:
 
         return filtered
 
+    def _filter_unsupported_claims(
+        self,
+        candidates: list[str],
+        source_prompts: list[str],
+        source_commits: list[str],
+        linked_knowledge: list[str] | None = None,
+    ) -> tuple[list[str], int, list[str]]:
+        """Reject candidates with unsupported risky metrics or factual claims."""
+        if not self.claim_check_enabled:
+            return candidates, 0, []
+
+        filtered = []
+        rejected = 0
+        annotations = []
+        for candidate in candidates:
+            result = self.claim_checker.check(
+                candidate,
+                source_prompts=source_prompts,
+                source_commits=source_commits,
+                linked_knowledge=linked_knowledge,
+            )
+            if result.supported:
+                filtered.append(candidate)
+            else:
+                rejected += 1
+                annotations.extend(result.annotations)
+                logger.debug(
+                    "  Rejected unsupported claim: %s",
+                    "; ".join(result.annotations),
+                )
+
+        return filtered, rejected, annotations
+
+    def _check_final_claims(
+        self,
+        content: str,
+        source_prompts: list[str],
+        source_commits: list[str],
+        linked_knowledge: list[str] | None = None,
+    ) -> ClaimCheckResult:
+        """Annotate final content if refinement introduced unsupported claims."""
+        if not self.claim_check_enabled:
+            return ClaimCheckResult(claims=[], unsupported_claims=[], annotations=[])
+
+        return self.claim_checker.check(
+            content,
+            source_prompts=source_prompts,
+            source_commits=source_commits,
+            linked_knowledge=linked_knowledge,
+        )
+
     def _select_format_directives(
         self,
         num: int,
@@ -566,6 +621,7 @@ class SynthesisPipeline:
     ) -> PipelineResult:
         """Execute the full multi-stage pipeline."""
         batch_id = str(uuid.uuid4())[:8]
+        source_commit_messages = [c["message"] for c in commits]
 
         # Stage 0: Load curation signals and engagement calibration
         too_specific_posts = self.db.get_curated_posts(
@@ -624,6 +680,7 @@ class SynthesisPipeline:
             trend_hooks = trend_builder.build_hook_context(prompts=prompts, commits=commits)
             if trend_hooks:
                 trend_context = (trend_context + "\n" + trend_hooks).strip() + "\n"
+        linked_knowledge = [trend_context] if trend_context else []
 
         # Stage 1.6: Load format weights if enabled
         format_weights = None
@@ -695,9 +752,24 @@ class SynthesisPipeline:
         if candidate_texts:
             candidate_texts = self._filter_semantic_duplicates(candidate_texts)
 
+        # Stage 2.9: Unsupported claim filter
+        claim_check_rejected = 0
+        claim_check_annotations = []
+        if candidate_texts:
+            candidate_texts, claim_check_rejected, claim_check_annotations = (
+                self._filter_unsupported_claims(
+                    candidate_texts,
+                    source_prompts=prompts,
+                    source_commits=source_commit_messages,
+                    linked_knowledge=linked_knowledge,
+                )
+            )
+        filter_stats["claim_check_rejected"] = claim_check_rejected
+        filter_stats["claim_check_annotations"] = claim_check_annotations
+
         # All candidates filtered — reject rather than publish stale/repetitive content
         if not candidate_texts:
-            logger.warning("  All candidates filtered (repetitive, stale, or semantic duplicate)")
+            logger.warning("  All candidates filtered")
             return PipelineResult(
                 batch_id=batch_id,
                 candidates=[],
@@ -711,14 +783,14 @@ class SynthesisPipeline:
                     engagement_potential=0,
                     best_feedback="",
                     improvement="",
-                    reject_reason="All candidates filtered (repetitive or stale patterns)",
+                    reject_reason="All candidates filtered (repetitive, stale, duplicate, or unsupported claims)",
                     raw_response="",
                 ),
                 refinement=None,
                 final_content="",
                 final_score=0,
                 source_prompts=prompts,
-                source_commits=[c["message"] for c in commits],
+                source_commits=source_commit_messages,
                 filter_stats=filter_stats,
             )
 
@@ -726,7 +798,7 @@ class SynthesisPipeline:
         comparison = self.evaluator.evaluate(
             candidates=candidate_texts,
             source_prompts=prompts,
-            source_commits=[c["message"] for c in commits],
+            source_commits=source_commit_messages,
             reference_examples=reference_examples,
             negative_examples=negative_examples or None,
             calibration_resonated=resonated_posts or None,
@@ -830,6 +902,14 @@ class SynthesisPipeline:
                 final_content = truncated or final_content[:char_limit]
                 logger.warning(f"  Hard truncated to {len(final_content)} chars")
 
+        final_claim_check = self._check_final_claims(
+            final_content,
+            source_prompts=prompts,
+            source_commits=source_commit_messages,
+            linked_knowledge=linked_knowledge,
+        )
+        filter_stats["claim_check_final_unsupported"] = final_claim_check.annotations
+
         # Stage 6: Engagement prediction logging.
         # Reuse the prediction computed in Stage 3.5 for the chosen candidate
         # when available. Fall back to a single predict call for the lone-
@@ -881,7 +961,7 @@ class SynthesisPipeline:
             final_content=final_content,
             final_score=final_score,
             source_prompts=prompts,
-            source_commits=[c["message"] for c in commits],
+            source_commits=source_commit_messages,
             filter_stats=filter_stats,
             predicted_engagement=predicted_engagement,
             engagement_prediction_detail=engagement_prediction_detail,

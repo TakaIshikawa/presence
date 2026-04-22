@@ -304,6 +304,16 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.synthesis.num_candidates == 5
 
+    def test_synthesis_claim_check_enabled_default(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert cfg.synthesis.claim_check_enabled is True
+
+    def test_synthesis_claim_check_enabled_override(self, tmp_path):
+        data = _minimal_config_dict()
+        data["synthesis"]["claim_check_enabled"] = False
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.synthesis.claim_check_enabled is False
+
     def test_polling_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert cfg.polling.readiness_token_threshold == 500

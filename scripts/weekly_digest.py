@@ -49,6 +49,7 @@ def main():
             embedder=embedder,
             semantic_threshold=semantic_threshold,
             knowledge_store=knowledge_store,
+            claim_check_enabled=config.synthesis.claim_check_enabled,
         )
         blog_writer = BlogWriter(config.paths.static_site)
 

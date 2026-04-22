@@ -143,6 +143,7 @@ def main() -> None:
             knowledge_store=knowledge_store,
             engagement_predictor=engagement_predictor,
             format_weighting_enabled=config.synthesis.format_weighting_enabled,
+            claim_check_enabled=config.synthesis.claim_check_enabled,
         )
         x_client = XClient(
             config.x.api_key,
