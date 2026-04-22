@@ -185,6 +185,38 @@ class Database:
                 self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
             if pr_cols and "filter_stats" not in pr_cols:
                 self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS eval_batches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    label TEXT,
+                    content_type TEXT NOT NULL,
+                    generator_model TEXT NOT NULL,
+                    evaluator_model TEXT NOT NULL,
+                    threshold REAL NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS eval_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id INTEGER NOT NULL REFERENCES eval_batches(id) ON DELETE CASCADE,
+                    content_type TEXT NOT NULL,
+                    generator_model TEXT NOT NULL,
+                    evaluator_model TEXT NOT NULL,
+                    threshold REAL NOT NULL,
+                    source_window_hours INTEGER NOT NULL,
+                    prompt_count INTEGER NOT NULL,
+                    commit_count INTEGER NOT NULL,
+                    candidate_count INTEGER NOT NULL,
+                    final_score REAL,
+                    rejection_reason TEXT,
+                    filter_stats TEXT,
+                    final_content TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_batches_created ON eval_batches(created_at)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_results_batch ON eval_results(batch_id)")
             # Migrate prompt version hashing.
             pv_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(prompt_versions)")}
             if pv_cols and "prompt_hash" not in pv_cols:
@@ -3071,6 +3103,106 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    # Evaluation batches
+    def create_eval_batch(
+        self,
+        content_type: str,
+        generator_model: str,
+        evaluator_model: str,
+        threshold: float,
+        label: str | None = None,
+    ) -> int:
+        """Create a durable dry-run evaluation batch."""
+        cursor = self.conn.execute(
+            """INSERT INTO eval_batches
+               (label, content_type, generator_model, evaluator_model, threshold)
+               VALUES (?, ?, ?, ?, ?)""",
+            (label, content_type, generator_model, evaluator_model, threshold),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def add_eval_result(
+        self,
+        batch_id: int,
+        content_type: str,
+        generator_model: str,
+        evaluator_model: str,
+        threshold: float,
+        source_window_hours: int,
+        prompt_count: int,
+        commit_count: int,
+        candidate_count: int,
+        final_score: float | None,
+        rejection_reason: str | None = None,
+        filter_stats: dict | None = None,
+        final_content: str | None = None,
+    ) -> int:
+        """Add one per-window result to an evaluation batch."""
+        cursor = self.conn.execute(
+            """INSERT INTO eval_results
+               (batch_id, content_type, generator_model, evaluator_model, threshold,
+                source_window_hours, prompt_count, commit_count, candidate_count,
+                final_score, rejection_reason, filter_stats, final_content)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                batch_id,
+                content_type,
+                generator_model,
+                evaluator_model,
+                threshold,
+                source_window_hours,
+                prompt_count,
+                commit_count,
+                candidate_count,
+                final_score,
+                rejection_reason,
+                json.dumps(filter_stats) if filter_stats else None,
+                final_content,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def list_eval_batches(self, limit: int = 20) -> list[dict]:
+        """List recent evaluation batches with summary counts."""
+        cursor = self.conn.execute(
+            """SELECT b.*,
+                      COUNT(r.id) AS result_count,
+                      AVG(r.final_score) AS average_score,
+                      MAX(r.final_score) AS best_score
+               FROM eval_batches b
+               LEFT JOIN eval_results r ON r.batch_id = b.id
+               GROUP BY b.id
+               ORDER BY b.created_at DESC, b.id DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_eval_batch(self, batch_id: int) -> dict | None:
+        """Fetch one evaluation batch and its per-window results."""
+        batch_row = self.conn.execute(
+            "SELECT * FROM eval_batches WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch_row:
+            return None
+
+        result_rows = self.conn.execute(
+            """SELECT * FROM eval_results
+               WHERE batch_id = ?
+               ORDER BY source_window_hours ASC, id ASC""",
+            (batch_id,),
+        ).fetchall()
+        results = []
+        for row in result_rows:
+            result = dict(row)
+            result["filter_stats"] = self._parse_json_object(result.get("filter_stats"))
+            results.append(result)
+
+        return {"batch": dict(batch_row), "results": results}
 
     # Content repurposing
     def get_repurpose_candidates(

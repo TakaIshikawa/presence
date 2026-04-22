@@ -261,6 +261,35 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Durable dry-run evaluation batches and per-window results
+CREATE TABLE IF NOT EXISTS eval_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT,
+    content_type TEXT NOT NULL,
+    generator_model TEXT NOT NULL,
+    evaluator_model TEXT NOT NULL,
+    threshold REAL NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS eval_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES eval_batches(id) ON DELETE CASCADE,
+    content_type TEXT NOT NULL,
+    generator_model TEXT NOT NULL,
+    evaluator_model TEXT NOT NULL,
+    threshold REAL NOT NULL,
+    source_window_hours INTEGER NOT NULL,
+    prompt_count INTEGER NOT NULL,
+    commit_count INTEGER NOT NULL,
+    candidate_count INTEGER NOT NULL,
+    final_score REAL,
+    rejection_reason TEXT,
+    filter_stats TEXT,
+    final_content TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_source_type ON knowledge(source_type);
 CREATE INDEX IF NOT EXISTS idx_knowledge_author ON knowledge(author);
 CREATE INDEX IF NOT EXISTS idx_curated_sources_type ON curated_sources(source_type);
@@ -273,6 +302,8 @@ CREATE INDEX IF NOT EXISTS idx_github_commits_timestamp ON github_commits(timest
 CREATE INDEX IF NOT EXISTS idx_github_activity_repo_type ON github_activity(repo_name, activity_type);
 CREATE INDEX IF NOT EXISTS idx_github_activity_updated ON github_activity(updated_at);
 CREATE INDEX IF NOT EXISTS idx_generated_content_type ON generated_content(content_type);
+CREATE INDEX IF NOT EXISTS idx_eval_batches_created ON eval_batches(created_at);
+CREATE INDEX IF NOT EXISTS idx_eval_results_batch ON eval_results(batch_id);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_content ON post_engagement(content_id);
 CREATE INDEX IF NOT EXISTS idx_post_engagement_tweet ON post_engagement(tweet_id);
 CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id);

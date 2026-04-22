@@ -25,6 +25,7 @@ def _make_config(embeddings_enabled=True, curated_sources_enabled=True):
     config.synthesis.eval_threshold = 0.7
     config.timeouts.anthropic_seconds = 300
     config.paths.claude_logs = "/path/to/logs"
+    config.privacy.redaction_patterns = []
 
     if embeddings_enabled:
         config.embeddings = MagicMock()
@@ -549,3 +550,161 @@ class TestPipelineInitialization:
             ]
             assert call_kwargs["content_type"] == "x_post"
             assert call_kwargs["threshold"] == 0.7
+
+
+class TestRecording:
+    def test_default_does_not_record(self):
+        """Default dry run preserves no-write behavior."""
+        config = _make_config()
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit()]
+
+        mock_parser = MagicMock()
+        mock_parser.get_messages_since.return_value = [_make_prompt()]
+
+        mock_pipeline = MagicMock()
+        mock_pipeline._build_avoidance_context.return_value = ""
+        mock_pipeline.run.return_value = _make_pipeline_result()
+
+        with patch("eval_pipeline.script_context") as mock_ctx, \
+             patch("eval_pipeline.ClaudeLogParser") as MockLogParser, \
+             patch("eval_pipeline.SynthesisPipeline") as MockPipeline, \
+             patch("sys.argv", ["eval_pipeline.py", "--runs", "1"]):
+
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            MockLogParser.return_value = mock_parser
+            MockPipeline.return_value = mock_pipeline
+
+            import eval_pipeline
+            eval_pipeline.main()
+
+        db.create_eval_batch.assert_not_called()
+        db.add_eval_result.assert_not_called()
+
+    def test_record_creates_batch_and_per_window_result(self):
+        """--record stores batch metadata and window result."""
+        config = _make_config()
+        config.privacy.redaction_patterns = [
+            {"name": "secret", "pattern": "SECRET123", "placeholder": "[REDACTED]"}
+        ]
+        db = MagicMock()
+        db.create_eval_batch.return_value = 42
+        db.get_commits_in_range.return_value = [_make_commit()]
+
+        mock_parser = MagicMock()
+        mock_parser.get_messages_since.return_value = [_make_prompt()]
+
+        mock_pipeline = MagicMock()
+        mock_pipeline._build_avoidance_context.return_value = ""
+        mock_pipeline.run.return_value = _make_pipeline_result(
+            final_content="Generated content with SECRET123",
+            final_score=8.4,
+            filter_stats={"repetition_rejected": 1},
+        )
+
+        with patch("eval_pipeline.script_context") as mock_ctx, \
+             patch("eval_pipeline.ClaudeLogParser") as MockLogParser, \
+             patch("eval_pipeline.SynthesisPipeline") as MockPipeline, \
+             patch("sys.argv", ["eval_pipeline.py", "--runs", "1", "--record", "--label", "baseline"]):
+
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            MockLogParser.return_value = mock_parser
+            MockPipeline.return_value = mock_pipeline
+
+            import eval_pipeline
+            eval_pipeline.main()
+
+        db.create_eval_batch.assert_called_once_with(
+            label="baseline",
+            content_type="x_thread",
+            generator_model="claude-sonnet-4.5",
+            evaluator_model="claude-opus-4.6",
+            threshold=0.7,
+        )
+        db.add_eval_result.assert_called_once()
+        kwargs = db.add_eval_result.call_args[1]
+        assert kwargs["batch_id"] == 42
+        assert kwargs["source_window_hours"] == 8
+        assert kwargs["prompt_count"] == 1
+        assert kwargs["commit_count"] == 1
+        assert kwargs["candidate_count"] == 2
+        assert kwargs["final_score"] == 8.4
+        assert kwargs["filter_stats"] == {"repetition_rejected": 1}
+        assert kwargs["final_content"] == "Generated content with [REDACTED]"
+
+    def test_list_batches_reads_without_pipeline(self, capsys):
+        """--list prints recent batches without running synthesis."""
+        config = _make_config()
+        db = MagicMock()
+        db.list_eval_batches.return_value = [
+            {
+                "id": 7,
+                "created_at": "2026-04-23 10:00:00",
+                "content_type": "x_post",
+                "label": "baseline",
+                "result_count": 2,
+                "average_score": 7.5,
+                "best_score": 8.1,
+            }
+        ]
+
+        with patch("eval_pipeline.script_context") as mock_ctx, \
+             patch("eval_pipeline.SynthesisPipeline") as MockPipeline, \
+             patch("sys.argv", ["eval_pipeline.py", "--list"]):
+
+            mock_ctx.return_value = _mock_script_context(config, db)()
+
+            import eval_pipeline
+            eval_pipeline.main()
+
+        captured = capsys.readouterr()
+        assert "baseline" in captured.out
+        assert "x_post" in captured.out
+        db.list_eval_batches.assert_called_once()
+        MockPipeline.assert_not_called()
+
+    def test_show_batch_reads_results_without_pipeline(self, capsys):
+        """--show prints one batch with stored results."""
+        config = _make_config()
+        db = MagicMock()
+        db.get_eval_batch.return_value = {
+            "batch": {
+                "id": 7,
+                "label": "baseline",
+                "created_at": "2026-04-23 10:00:00",
+                "content_type": "x_thread",
+                "generator_model": "gen",
+                "evaluator_model": "eval",
+                "threshold": 0.7,
+            },
+            "results": [
+                {
+                    "id": 9,
+                    "source_window_hours": 8,
+                    "prompt_count": 3,
+                    "commit_count": 2,
+                    "candidate_count": 4,
+                    "final_score": 8.0,
+                    "threshold": 0.7,
+                    "rejection_reason": None,
+                    "filter_stats": {"stale_pattern_rejected": 1},
+                    "final_content": "Stored content",
+                }
+            ],
+        }
+
+        with patch("eval_pipeline.script_context") as mock_ctx, \
+             patch("eval_pipeline.SynthesisPipeline") as MockPipeline, \
+             patch("sys.argv", ["eval_pipeline.py", "--show", "7"]):
+
+            mock_ctx.return_value = _mock_script_context(config, db)()
+
+            import eval_pipeline
+            eval_pipeline.main()
+
+        captured = capsys.readouterr()
+        assert "Batch 7" in captured.out
+        assert "Stored content" in captured.out
+        assert "stale_pattern_rejected" in captured.out
+        db.get_eval_batch.assert_called_once_with(7)
+        MockPipeline.assert_not_called()

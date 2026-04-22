@@ -36,6 +36,8 @@ class TestSchemaInit:
             "content_publications",
             "content_variants",
             "content_ideas",
+            "eval_batches",
+            "eval_results",
         }
         assert expected.issubset(tables)
 
@@ -2527,6 +2529,80 @@ class TestTransactionBehaviour:
         cols_after = {row[1] for row in db.conn.execute("PRAGMA table_info(pipeline_runs)")}
         assert "filter_stats" in cols_after
         db.close()
+
+    def test_eval_batch_round_trip(self, db):
+        batch_id = db.create_eval_batch(
+            label="prompt tuning",
+            content_type="x_thread",
+            generator_model="claude-sonnet-4.5",
+            evaluator_model="claude-opus-4.6",
+            threshold=0.7,
+        )
+        result_id = db.add_eval_result(
+            batch_id=batch_id,
+            content_type="x_thread",
+            generator_model="claude-sonnet-4.5",
+            evaluator_model="claude-opus-4.6",
+            threshold=0.7,
+            source_window_hours=8,
+            prompt_count=3,
+            commit_count=2,
+            candidate_count=4,
+            final_score=8.2,
+            rejection_reason=None,
+            filter_stats={"repetition_rejected": 1},
+            final_content="redacted content",
+        )
+
+        payload = db.get_eval_batch(batch_id)
+        assert payload["batch"]["label"] == "prompt tuning"
+        assert payload["batch"]["content_type"] == "x_thread"
+        assert payload["results"][0]["id"] == result_id
+        assert payload["results"][0]["source_window_hours"] == 8
+        assert payload["results"][0]["filter_stats"] == {"repetition_rejected": 1}
+        assert payload["results"][0]["final_content"] == "redacted content"
+
+    def test_list_eval_batches_summarizes_recent_batches(self, db):
+        batch_id = db.create_eval_batch(
+            label="compare models",
+            content_type="x_post",
+            generator_model="model-a",
+            evaluator_model="model-b",
+            threshold=0.75,
+        )
+        db.add_eval_result(
+            batch_id=batch_id,
+            content_type="x_post",
+            generator_model="model-a",
+            evaluator_model="model-b",
+            threshold=0.75,
+            source_window_hours=8,
+            prompt_count=1,
+            commit_count=1,
+            candidate_count=2,
+            final_score=7.0,
+        )
+        db.add_eval_result(
+            batch_id=batch_id,
+            content_type="x_post",
+            generator_model="model-a",
+            evaluator_model="model-b",
+            threshold=0.75,
+            source_window_hours=16,
+            prompt_count=2,
+            commit_count=2,
+            candidate_count=3,
+            final_score=9.0,
+        )
+
+        batches = db.list_eval_batches()
+        assert batches[0]["id"] == batch_id
+        assert batches[0]["result_count"] == 2
+        assert batches[0]["average_score"] == 8.0
+        assert batches[0]["best_score"] == 9.0
+
+    def test_get_eval_batch_missing_returns_none(self, db):
+        assert db.get_eval_batch(9999) is None
 
 
 # ---------------------------------------------------------------------------
