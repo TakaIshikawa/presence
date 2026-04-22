@@ -167,6 +167,10 @@ class Database:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN reviewed_at TEXT")
                 if "feed_url" not in cs_cols:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_url TEXT")
+                if "feed_etag" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_etag TEXT")
+                if "feed_last_modified" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_last_modified TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_curated_sources_status ON curated_sources(status)")
             # Migrate: create bluesky_engagement table if missing
             self.conn.execute("""
@@ -1195,6 +1199,32 @@ class Database:
             (source_type,),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_curated_source(self, source_type: str, identifier: str) -> dict | None:
+        """Get one curated source by type and identifier."""
+        cursor = self.conn.execute(
+            """SELECT * FROM curated_sources
+               WHERE source_type = ? AND identifier = ?""",
+            (source_type, identifier),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def update_curated_source_feed_cache(
+        self,
+        source_type: str,
+        identifier: str,
+        etag: str | None,
+        last_modified: str | None,
+    ) -> None:
+        """Persist HTTP cache validators for a curated feed source."""
+        self.conn.execute(
+            """UPDATE curated_sources
+               SET feed_etag = ?, feed_last_modified = ?
+               WHERE source_type = ? AND identifier = ?""",
+            (etag, last_modified, source_type, identifier),
+        )
+        self.conn.commit()
 
     def insert_candidate_source(
         self,

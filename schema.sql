@@ -178,6 +178,8 @@ CREATE TABLE IF NOT EXISTS curated_sources (
     name TEXT,
     license TEXT DEFAULT 'attribution_required',  -- 'open', 'attribution_required', 'restricted'
     feed_url TEXT,
+    feed_etag TEXT,
+    feed_last_modified TEXT,
     notes TEXT,
     active INTEGER DEFAULT 1,
     status TEXT DEFAULT 'active',         -- 'candidate', 'active', 'rejected', 'paused'

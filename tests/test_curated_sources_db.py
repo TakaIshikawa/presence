@@ -57,6 +57,28 @@ class TestSyncConfigSources:
         rows = db.get_active_curated_sources("x_account")
         assert rows[0]["discovery_source"] == "config"
 
+    def test_sync_preserves_feed_cache_on_conflict(self, db):
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Old", "feed_url": "https://example.com/rss"}],
+            "blog",
+        )
+        db.update_curated_source_feed_cache(
+            "blog",
+            "example.com",
+            '"feed-v1"',
+            "Wed, 22 Apr 2026 10:00:00 GMT",
+        )
+
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "New", "feed_url": "https://example.com/rss"}],
+            "blog",
+        )
+
+        row = db.get_curated_source("blog", "example.com")
+        assert row["name"] == "New"
+        assert row["feed_etag"] == '"feed-v1"'
+        assert row["feed_last_modified"] == "Wed, 22 Apr 2026 10:00:00 GMT"
+
 
 class TestGetActiveCuratedSources:
     def test_returns_only_active(self, db):
@@ -88,6 +110,38 @@ class TestGetActiveCuratedSources:
     def test_empty_when_none_active(self, db):
         rows = db.get_active_curated_sources("x_account")
         assert rows == []
+
+
+class TestCuratedSourceFeedCache:
+    def test_update_and_get_feed_cache(self, db):
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example", "feed_url": "https://example.com/rss"}],
+            "blog",
+        )
+
+        db.update_curated_source_feed_cache(
+            "blog",
+            "example.com",
+            '"feed-v1"',
+            "Wed, 22 Apr 2026 10:00:00 GMT",
+        )
+
+        row = db.get_curated_source("blog", "example.com")
+        assert row["feed_etag"] == '"feed-v1"'
+        assert row["feed_last_modified"] == "Wed, 22 Apr 2026 10:00:00 GMT"
+
+    def test_update_feed_cache_allows_missing_headers(self, db):
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example", "feed_url": "https://example.com/rss"}],
+            "blog",
+        )
+        db.update_curated_source_feed_cache("blog", "example.com", '"feed-v1"', "old-date")
+
+        db.update_curated_source_feed_cache("blog", "example.com", None, None)
+
+        row = db.get_curated_source("blog", "example.com")
+        assert row["feed_etag"] is None
+        assert row["feed_last_modified"] is None
 
 
 class TestInsertCandidateSource:

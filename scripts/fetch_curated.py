@@ -15,7 +15,7 @@ from knowledge.embeddings import get_embedding_provider
 from knowledge.store import KnowledgeStore
 from knowledge.ingest import InsightExtractor, ingest_curated_post, ingest_curated_article
 from knowledge.curated_accounts import get_active_x_accounts
-from knowledge.rss import fetch_feed_entries
+from knowledge.rss import fetch_feed
 from output.x_client import XClient
 from output.x_api_guard import (
     get_x_api_block_reason,
@@ -85,6 +85,14 @@ def _iter_config_sources(config, attr: str) -> list:
         return []
 
 
+def _curated_source_row(db, source_type: str, identifier: str) -> dict | None:
+    getter = getattr(db, "get_curated_source", None)
+    if not callable(getter):
+        return None
+    row = getter(source_type, identifier)
+    return row if isinstance(row, dict) else None
+
+
 def _active_feed_sources(config, db) -> list:
     """Return active blog/newsletter sources with optional feed URLs."""
     sources = []
@@ -95,7 +103,16 @@ def _active_feed_sources(config, db) -> list:
             identifier = getattr(source, "identifier", "")
             if not identifier:
                 continue
-            sources.append(source)
+            row = _curated_source_row(db, source_type, identifier)
+            sources.append(SimpleNamespace(
+                source_type=source_type,
+                identifier=identifier,
+                name=getattr(source, "name", None) or identifier,
+                license=getattr(source, "license", "attribution_required"),
+                feed_url=getattr(source, "feed_url", None),
+                feed_etag=row.get("feed_etag") if row else None,
+                feed_last_modified=row.get("feed_last_modified") if row else None,
+            ))
             seen.add((source_type, identifier.lower()))
 
         for row in db.get_active_curated_sources(source_type):
@@ -104,10 +121,13 @@ def _active_feed_sources(config, db) -> list:
             if key in seen:
                 continue
             sources.append(SimpleNamespace(
+                source_type=source_type,
                 identifier=identifier,
                 name=row["name"] or identifier,
                 license=row["license"] or "attribution_required",
                 feed_url=row.get("feed_url"),
+                feed_etag=row.get("feed_etag"),
+                feed_last_modified=row.get("feed_last_modified"),
             ))
             seen.add(key)
 
@@ -118,6 +138,7 @@ def fetch_curated_feed_source(
     store: KnowledgeStore,
     extractor: InsightExtractor,
     source,
+    db=None,
     limit: int = DEFAULT_RSS_ENTRIES_PER_SOURCE,
 ) -> int:
     """Fetch a curated RSS/Atom source and ingest new article entries."""
@@ -127,12 +148,31 @@ def fetch_curated_feed_source(
         logger.debug("Skipping %s; no feed_url configured", getattr(source, "identifier", "source"))
         return 0
 
+    source_type = getattr(source, "source_type", None)
+    identifier = getattr(source, "identifier", "")
+    result = fetch_feed(
+        feed_url,
+        limit=limit,
+        etag=getattr(source, "feed_etag", None),
+        last_modified=getattr(source, "feed_last_modified", None),
+    )
+    update_feed_cache = getattr(db, "update_curated_source_feed_cache", None)
+    if db is not None and source_type and identifier and callable(update_feed_cache):
+        update_feed_cache(
+            source_type,
+            identifier,
+            result.etag,
+            result.last_modified,
+        )
+    if result.not_modified:
+        logger.debug("Skipping %s; feed not modified", identifier or feed_url)
+        return 0
+
     ingested = 0
-    entries = fetch_feed_entries(feed_url, limit=limit)
     author = getattr(source, "name", None) or getattr(source, "identifier", "")
     license_type = getattr(source, "license", "attribution_required")
 
-    for entry in entries:
+    for entry in result.entries:
         if store.exists("curated_article", entry.link):
             logger.debug("Skipping %s (already exists)", entry.link)
             continue
@@ -265,6 +305,7 @@ def main():
                     store,
                     extractor,
                     source,
+                    db=db,
                     limit=rss_entries_per_source,
                 )
                 if count:

@@ -1,8 +1,11 @@
 """Tests for fetch_curated.py — tweet fetching and filtering."""
 
+from email.message import Message
 import sys
+from types import ModuleType
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,8 +14,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+if "tweepy" not in sys.modules:
+    tweepy_stub = ModuleType("tweepy")
+    tweepy_stub.API = object
+    tweepy_stub.Client = object
+    tweepy_stub.OAuth1UserHandler = object
+    tweepy_stub.TweepyException = Exception
+    sys.modules["tweepy"] = tweepy_stub
+
 from fetch_curated import fetch_user_tweets
-from knowledge.rss import parse_feed
+from knowledge.rss import fetch_feed, parse_feed
 
 
 # --- helpers ---
@@ -23,6 +34,30 @@ def _make_tweet(tweet_id="999", text="A substantial tweet with enough content"):
     tweet.id = int(tweet_id)
     tweet.text = text
     return tweet
+
+
+class _MockFeedResponse:
+    def __init__(self, body: str, headers: dict[str, str] | None = None):
+        self._body = body.encode("utf-8")
+        self.headers = Message()
+        for key, value in (headers or {}).items():
+            self.headers[key] = value
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _http_headers(headers: dict[str, str]) -> Message:
+    message = Message()
+    for key, value in headers.items():
+        message[key] = value
+    return message
 
 
 # --- TestFetchUserTweets ---
@@ -92,12 +127,13 @@ class TestFetchCuratedFeeds:
         assert entries[1].summary == "Context windows should shape the product interface."
 
     @patch("fetch_curated.ingest_curated_article")
-    @patch("fetch_curated.fetch_feed_entries")
-    def test_ingests_new_feed_entries_and_skips_existing(self, mock_fetch_entries, mock_ingest):
+    @patch("fetch_curated.fetch_feed")
+    def test_ingests_new_feed_entries_and_skips_existing(self, mock_fetch, mock_ingest):
         from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedFetchResult
 
         fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
-        mock_fetch_entries.return_value = parse_feed(fixture.read_text(), limit=2)
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=2))
         store = MagicMock()
         store.exists.side_effect = [False, True]
         extractor = MagicMock()
@@ -118,6 +154,126 @@ class TestFetchCuratedFeeds:
         assert mock_ingest.call_args.kwargs["title"] == "Building reliable agent loops"
         assert mock_ingest.call_args.kwargs["author"] == "Example Blog"
         assert mock_ingest.call_args.kwargs["license_type"] == "open"
+
+    @patch("knowledge.rss.urlopen")
+    def test_fetch_feed_persists_headers_from_first_fetch(self, mock_urlopen):
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        mock_urlopen.return_value = _MockFeedResponse(
+            fixture.read_text(),
+            {
+                "ETag": '"feed-v1"',
+                "Last-Modified": "Wed, 22 Apr 2026 10:00:00 GMT",
+            },
+        )
+
+        result = fetch_feed("https://example.com/feed.xml", limit=1)
+
+        assert len(result.entries) == 1
+        assert result.etag == '"feed-v1"'
+        assert result.last_modified == "Wed, 22 Apr 2026 10:00:00 GMT"
+        headers = {k.lower(): v for k, v in mock_urlopen.call_args.args[0].header_items()}
+        assert "if-none-match" not in headers
+        assert "if-modified-since" not in headers
+
+    @patch("knowledge.rss.urlopen")
+    def test_fetch_feed_304_is_successful_noop(self, mock_urlopen):
+        mock_urlopen.side_effect = HTTPError(
+            "https://example.com/feed.xml",
+            304,
+            "Not Modified",
+            _http_headers({"ETag": '"feed-v1"'}),
+            None,
+        )
+
+        result = fetch_feed(
+            "https://example.com/feed.xml",
+            etag='"feed-v1"',
+            last_modified="Wed, 22 Apr 2026 10:00:00 GMT",
+        )
+
+        assert result.not_modified is True
+        assert result.entries == []
+        assert result.etag == '"feed-v1"'
+        assert result.last_modified == "Wed, 22 Apr 2026 10:00:00 GMT"
+        headers = {k.lower(): v for k, v in mock_urlopen.call_args.args[0].header_items()}
+        assert headers["if-none-match"] == '"feed-v1"'
+        assert headers["if-modified-since"] == "Wed, 22 Apr 2026 10:00:00 GMT"
+
+    @patch("fetch_curated.ingest_curated_article")
+    @patch("knowledge.rss.urlopen")
+    def test_changed_feed_updates_cache_and_ingests(self, mock_urlopen, mock_ingest, db):
+        from fetch_curated import fetch_curated_feed_source
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example", "feed_url": "https://example.com/feed.xml"}],
+            "blog",
+        )
+        db.update_curated_source_feed_cache(
+            "blog",
+            "example.com",
+            '"feed-v1"',
+            "Wed, 22 Apr 2026 10:00:00 GMT",
+        )
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+            feed_etag='"feed-v1"',
+            feed_last_modified="Wed, 22 Apr 2026 10:00:00 GMT",
+        )
+        mock_urlopen.return_value = _MockFeedResponse(
+            fixture.read_text(),
+            {
+                "ETag": '"feed-v2"',
+                "Last-Modified": "Wed, 22 Apr 2026 11:00:00 GMT",
+            },
+        )
+        store = MagicMock()
+        store.exists.return_value = False
+
+        count = fetch_curated_feed_source(store, MagicMock(), source, db=db, limit=1)
+
+        assert count == 1
+        row = db.get_curated_source("blog", "example.com")
+        assert row["feed_etag"] == '"feed-v2"'
+        assert row["feed_last_modified"] == "Wed, 22 Apr 2026 11:00:00 GMT"
+        headers = {k.lower(): v for k, v in mock_urlopen.call_args.args[0].header_items()}
+        assert headers["if-none-match"] == '"feed-v1"'
+        assert headers["if-modified-since"] == "Wed, 22 Apr 2026 10:00:00 GMT"
+        mock_ingest.assert_called_once()
+
+    @patch("knowledge.rss.urlopen")
+    def test_missing_feed_headers_clear_cache(self, mock_urlopen, db):
+        from fetch_curated import fetch_curated_feed_source
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example", "feed_url": "https://example.com/feed.xml"}],
+            "blog",
+        )
+        db.update_curated_source_feed_cache("blog", "example.com", '"feed-v1"', "old-date")
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+            feed_etag='"feed-v1"',
+            feed_last_modified="old-date",
+        )
+        mock_urlopen.return_value = _MockFeedResponse(fixture.read_text(), {})
+        store = MagicMock()
+        store.exists.return_value = True
+
+        count = fetch_curated_feed_source(store, MagicMock(), source, db=db, limit=1)
+
+        assert count == 0
+        row = db.get_curated_source("blog", "example.com")
+        assert row["feed_etag"] is None
+        assert row["feed_last_modified"] is None
 
 
 # --- TestMain filtering ---

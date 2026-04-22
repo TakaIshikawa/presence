@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from typing import Iterable
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -18,6 +19,16 @@ class FeedEntry:
     link: str
     summary: str
     content: str
+
+
+@dataclass(frozen=True)
+class FeedFetchResult:
+    """Result of fetching a feed, including HTTP cache validators."""
+
+    entries: list[FeedEntry]
+    etag: str | None = None
+    last_modified: str | None = None
+    not_modified: bool = False
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -117,13 +128,41 @@ def parse_feed(xml_text: str, limit: int = 5) -> list[FeedEntry]:
     return entries
 
 
+def fetch_feed(
+    feed_url: str,
+    limit: int = 5,
+    timeout: float = 20.0,
+    etag: str | None = None,
+    last_modified: str | None = None,
+) -> FeedFetchResult:
+    """Fetch and parse a feed URL, using HTTP validators when provided."""
+    headers = {"User-Agent": "PresenceBot/1.0 (+https://github.com/)"}
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+
+    request = Request(feed_url, headers=headers)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            xml_text = response.read().decode(charset, errors="replace")
+            return FeedFetchResult(
+                entries=parse_feed(xml_text, limit=limit),
+                etag=response.headers.get("ETag"),
+                last_modified=response.headers.get("Last-Modified"),
+            )
+    except HTTPError as exc:
+        if exc.code != 304:
+            raise
+        return FeedFetchResult(
+            entries=[],
+            etag=exc.headers.get("ETag") or etag,
+            last_modified=exc.headers.get("Last-Modified") or last_modified,
+            not_modified=True,
+        )
+
+
 def fetch_feed_entries(feed_url: str, limit: int = 5, timeout: float = 20.0) -> list[FeedEntry]:
     """Fetch and parse a feed URL."""
-    request = Request(
-        feed_url,
-        headers={"User-Agent": "PresenceBot/1.0 (+https://github.com/)"},
-    )
-    with urlopen(request, timeout=timeout) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        xml_text = response.read().decode(charset, errors="replace")
-    return parse_feed(xml_text, limit=limit)
+    return fetch_feed(feed_url, limit=limit, timeout=timeout).entries
