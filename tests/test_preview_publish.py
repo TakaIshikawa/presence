@@ -147,6 +147,46 @@ def test_preview_publish_cli_outputs_json(db, capsys):
     assert payload["platforms"]["x"]["posts"][0]["text"] == "CLI preview post"
 
 
+def test_preview_publish_cli_writes_linkedin_artifact(db, tmp_path, capsys):
+    content_id = _insert_content(db, "CLI artifact post w/ source")
+    queue_id = db.queue_for_publishing(
+        content_id,
+        "2026-04-17T12:00:00+00:00",
+        platform="all",
+    )
+    artifact_path = tmp_path / "linkedin.md"
+
+    import preview_publish
+
+    class Context:
+        def __enter__(self):
+            return None, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("preview_publish.script_context", return_value=Context()):
+        exit_code = preview_publish.main(
+            [
+                "--queue-id",
+                str(queue_id),
+                "--linkedin-out",
+                str(artifact_path),
+                "--linkedin-max-length",
+                "500",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"LinkedIn artifact: {artifact_path}" in captured.err
+    artifact = artifact_path.read_text()
+    assert artifact.startswith("# LinkedIn Draft")
+    assert f"- Content ID: {content_id}" in artifact
+    assert f"- Queue ID: {queue_id}" in artifact
+    assert "CLI artifact post with source" in artifact
+
+
 def test_preview_includes_claim_check_summary_in_text_and_json(db):
     content_id = _insert_content(db, "Post with 43% unsupported claim")
     db.save_claim_check_summary(
