@@ -85,10 +85,11 @@ def main() -> None:
 
     # 2. Ingest Claude Code conversations (last 30 days)
     logger.info("=== Ingesting Claude Code conversations ===")
-    parser = ClaudeLogParser(config.paths.claude_logs)
+    parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
     since = datetime.now(timezone.utc) - timedelta(days=30)
 
     conversations = list(parser.get_messages_since(since))
+    parser.log_skipped_project_counts("build_knowledge")
     logger.info(f"Found {len(conversations)} messages in last 30 days")
 
     # Filter to substantial prompts
