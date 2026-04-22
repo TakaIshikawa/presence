@@ -634,6 +634,170 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_publication_ledger(
+        self,
+        days: int = 30,
+        status: str | None = None,
+        platform: str | None = None,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return a cross-platform publication ledger for recent content."""
+        if days <= 0:
+            raise ValueError("days must be positive")
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+
+        filters = [
+            """(
+                gc.created_at >= ?
+                OR gc.published_at >= ?
+                OR lq.scheduled_at >= ?
+                OR lq.queue_published_at >= ?
+                OR cp.published_at >= ?
+                OR cp.updated_at >= ?
+                OR cp.last_error_at >= ?
+            )"""
+        ]
+        params: list[object] = [cutoff] * 7
+
+        if platform and platform != "all":
+            filters.append("targets.platform = ?")
+            params.append(platform)
+        if status:
+            filters.append(
+                """COALESCE(
+                    cp.status,
+                    lq.queue_status,
+                    CASE
+                        WHEN gc.published = 1 THEN 'published'
+                        WHEN gc.published = -1 THEN 'failed'
+                        ELSE 'generated'
+                    END
+                ) = ?"""
+            )
+            params.append(status)
+
+        where_clause = " AND ".join(filters)
+        cursor = self.conn.execute(
+            f"""WITH queue_targets AS (
+                   SELECT
+                       pq.id AS queue_id,
+                       pq.content_id,
+                       'x' AS platform,
+                       pq.platform AS queue_platform,
+                       pq.status AS queue_status,
+                       pq.error AS queue_error,
+                       pq.scheduled_at,
+                       pq.published_at AS queue_published_at,
+                       pq.created_at AS queue_created_at
+                   FROM publish_queue pq
+                   WHERE pq.platform IN ('x', 'all')
+                   UNION ALL
+                   SELECT
+                       pq.id AS queue_id,
+                       pq.content_id,
+                       'bluesky' AS platform,
+                       pq.platform AS queue_platform,
+                       pq.status AS queue_status,
+                       pq.error AS queue_error,
+                       pq.scheduled_at,
+                       pq.published_at AS queue_published_at,
+                       pq.created_at AS queue_created_at
+                   FROM publish_queue pq
+                   WHERE pq.platform IN ('bluesky', 'all')
+               ),
+               latest_queue AS (
+                   SELECT *
+                   FROM (
+                       SELECT
+                           qt.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY qt.content_id, qt.platform
+                               ORDER BY qt.scheduled_at DESC, qt.queue_id DESC
+                           ) AS rn
+                       FROM queue_targets qt
+                   )
+                   WHERE rn = 1
+               ),
+               targets AS (
+                   SELECT content_id, platform FROM latest_queue
+                   UNION
+                   SELECT content_id, platform FROM content_publications
+                   UNION
+                   SELECT id AS content_id, 'x' AS platform
+                   FROM generated_content
+                   WHERE tweet_id IS NOT NULL OR COALESCE(published, 0) != 0
+                   UNION
+                   SELECT id AS content_id, 'bluesky' AS platform
+                   FROM generated_content
+                   WHERE bluesky_uri IS NOT NULL
+                   UNION
+                   SELECT id AS content_id, 'unassigned' AS platform
+                   FROM generated_content gc
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM latest_queue lq WHERE lq.content_id = gc.id
+                   )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM content_publications cp WHERE cp.content_id = gc.id
+                   )
+                     AND gc.tweet_id IS NULL
+                     AND gc.bluesky_uri IS NULL
+               )
+               SELECT
+                   gc.id AS content_id,
+                   gc.content_type,
+                   gc.content,
+                   gc.created_at AS generated_at,
+                   gc.published AS generated_status_code,
+                   gc.published_url,
+                   gc.tweet_id,
+                   gc.bluesky_uri,
+                   gc.published_at AS generated_published_at,
+                   targets.platform,
+                   lq.queue_id,
+                   lq.queue_platform,
+                   lq.queue_status,
+                   lq.queue_error,
+                   lq.scheduled_at,
+                   lq.queue_published_at,
+                   cp.id AS publication_id,
+                   cp.status AS publication_status,
+                   cp.platform_post_id,
+                   cp.platform_url,
+                   cp.error AS publication_error,
+                   cp.attempt_count,
+                   cp.next_retry_at,
+                   cp.last_error_at,
+                   cp.published_at AS platform_published_at,
+                   cp.updated_at AS publication_updated_at,
+                   COALESCE(
+                       cp.status,
+                       lq.queue_status,
+                       CASE
+                           WHEN gc.published = 1 THEN 'published'
+                           WHEN gc.published = -1 THEN 'failed'
+                           ELSE 'generated'
+                       END
+                   ) AS status,
+                   COALESCE(cp.error, lq.queue_error) AS error,
+                   COALESCE(cp.published_at, lq.queue_published_at, gc.published_at) AS published_at
+               FROM targets
+               INNER JOIN generated_content gc ON gc.id = targets.content_id
+               LEFT JOIN latest_queue lq
+                 ON lq.content_id = targets.content_id
+                AND lq.platform = targets.platform
+               LEFT JOIN content_publications cp
+                 ON cp.content_id = targets.content_id
+                AND cp.platform = targets.platform
+               WHERE {where_clause}
+               ORDER BY
+                   COALESCE(lq.scheduled_at, cp.published_at, cp.updated_at, gc.created_at) DESC,
+                   gc.id DESC,
+                   targets.platform ASC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     def _content_variant_from_row(self, row: sqlite3.Row) -> dict:
         variant = dict(row)
         if variant.get("metadata") is not None:
