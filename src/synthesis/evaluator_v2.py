@@ -34,13 +34,23 @@ class CrossModelEvaluator:
     PROMPTS_DIR = Path(__file__).parent / "prompts"
     CANDIDATE_LABELS = "ABCDEFGHIJ"
 
-    def __init__(self, api_key: str, model: str = "claude-opus-4-7", timeout: float = 300.0):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-opus-4-7",
+        timeout: float = 300.0,
+        db=None,
+    ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
+        self.db = db
 
     def _load_prompt(self) -> str:
         prompt_file = self.PROMPTS_DIR / "evaluator_comparative.txt"
-        return prompt_file.read_text()
+        prompt_text = prompt_file.read_text()
+        if self.db and hasattr(self.db, "register_prompt_version"):
+            self.db.register_prompt_version("evaluator_comparative", prompt_text)
+        return prompt_text
 
     STATIC_NEGATIVE_EXAMPLES = [
         (

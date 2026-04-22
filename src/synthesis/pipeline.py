@@ -201,14 +201,19 @@ class SynthesisPipeline:
         restricted_prompt_behavior: str = "strict",
     ):
         self.api_key = api_key
-        self.generator = ContentGenerator(api_key, generator_model, timeout=anthropic_timeout)
-        self.evaluator = CrossModelEvaluator(api_key, evaluator_model, timeout=anthropic_timeout)
+        self.generator = ContentGenerator(
+            api_key, generator_model, timeout=anthropic_timeout, db=db
+        )
+        self.evaluator = CrossModelEvaluator(
+            api_key, evaluator_model, timeout=anthropic_timeout, db=db
+        )
         self.refiner = ContentRefiner(
             refine_api_key=api_key,
             refine_model=generator_model,
             gate_api_key=api_key,
             gate_model=evaluator_model,
             timeout=anthropic_timeout,
+            db=db,
         )
         self.db = db
         self.few_shot_selector = FewShotSelector(db)
@@ -974,7 +979,9 @@ class SynthesisPipeline:
                 "emotional_resonance": pred.emotional_resonance,
                 "novelty": pred.novelty,
                 "actionability": pred.actionability,
-                "prompt_version": "v1",
+                "prompt_type": pred.prompt_type,
+                "prompt_version": pred.prompt_version_label or "v1",
+                "prompt_hash": pred.prompt_hash,
             }
             logger.info(
                 f"  Predicted engagement: {predicted_engagement:.1f} "

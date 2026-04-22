@@ -117,6 +117,38 @@ class TestSchemaInit:
         db.init_schema(schema_path)
 
 
+class TestPromptVersions:
+    def test_prompt_versions_schema_has_hash(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(prompt_versions)")
+        }
+        assert "prompt_hash" in cols
+
+    def test_register_prompt_version_is_deterministic(self, db):
+        first = db.register_prompt_version("x_post", "Prompt text")
+        second = db.register_prompt_version("x_post", "Prompt text")
+
+        assert first["id"] == second["id"]
+        assert first["version"] == 1
+        assert second["usage_count"] == 2
+        assert len(second["prompt_hash"]) == 64
+
+        rows = db.conn.execute(
+            "SELECT * FROM prompt_versions WHERE prompt_type = ?",
+            ("x_post",),
+        ).fetchall()
+        assert len(rows) == 1
+
+    def test_register_prompt_version_increments_version_for_changed_hash(self, db):
+        first = db.register_prompt_version("x_post", "Prompt text")
+        second = db.register_prompt_version("x_post", "Changed prompt text")
+
+        assert first["version"] == 1
+        assert second["version"] == 2
+        assert first["prompt_hash"] != second["prompt_hash"]
+
+
 # --- Schema migration logic ---
 
 

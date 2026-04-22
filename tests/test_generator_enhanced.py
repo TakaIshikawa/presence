@@ -1,5 +1,6 @@
 """Tests for EnhancedContentGenerator — knowledge-enhanced content generation."""
 
+import hashlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -277,6 +278,27 @@ class TestLoadPrompt:
 
         assert "Enhanced:" in result
         assert "own_insights" in result
+
+    def test_registers_enhanced_prompt_version_when_used(self, mock_anthropic, mock_knowledge_store, db, tmp_path):
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        prompt_text = "Enhanced: {prompt} {own_insights}"
+        (prompts_dir / "x_post_enhanced.txt").write_text(prompt_text)
+        gen = EnhancedContentGenerator(
+            api_key="test-key",
+            knowledge_store=mock_knowledge_store,
+            model="test-model",
+            db=db,
+        )
+
+        with patch.object(EnhancedContentGenerator, "PROMPTS_DIR", prompts_dir):
+            result = gen._load_prompt("x_post")
+
+        prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+        row = db.get_prompt_version("x_post_enhanced", prompt_hash)
+        assert result == prompt_text
+        assert row["version"] == 1
+        assert row["usage_count"] == 1
 
 
 # -- generate_x_post tests ----------------------------------------------------

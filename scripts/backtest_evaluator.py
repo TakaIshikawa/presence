@@ -55,13 +55,13 @@ def main() -> None:
     config = load_config()
     model = args.model or config.synthesis.eval_model
 
-    predictor = EngagementPredictor(
-        api_key=config.anthropic.api_key, model=model
-    )
-
     db = ValidationDatabase(args.db_path)
     db.connect()
     db.init_schema()
+
+    predictor = EngagementPredictor(
+        api_key=config.anthropic.api_key, model=model, db=db
+    )
 
     # Refetch text for any previously purged tweets
     purged_ids = db.get_purged_tweet_ids()
@@ -145,6 +145,9 @@ def main() -> None:
                     novelty=pred.novelty,
                     actionability=pred.actionability,
                     raw_response=pred.raw_response,
+                    prompt_type=pred.prompt_type,
+                    prompt_version=pred.prompt_version,
+                    prompt_hash=pred.prompt_hash,
                 )
                 evaluated += 1
 

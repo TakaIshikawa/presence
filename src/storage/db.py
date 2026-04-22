@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import hashlib
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -135,6 +136,29 @@ class Database:
                 self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN rejection_reason TEXT")
             if pr_cols and "filter_stats" not in pr_cols:
                 self.conn.execute("ALTER TABLE pipeline_runs ADD COLUMN filter_stats TEXT")
+            # Migrate prompt version hashing.
+            pv_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(prompt_versions)")}
+            if pv_cols and "prompt_hash" not in pv_cols:
+                self.conn.execute("ALTER TABLE prompt_versions ADD COLUMN prompt_hash TEXT")
+            if pv_cols:
+                rows = self.conn.execute(
+                    "SELECT id, prompt_text FROM prompt_versions WHERE prompt_hash IS NULL"
+                ).fetchall()
+                for row in rows:
+                    prompt_hash = self.compute_prompt_hash(row["prompt_text"])
+                    self.conn.execute(
+                        "UPDATE prompt_versions SET prompt_hash = ? WHERE id = ?",
+                        (prompt_hash, row["id"]),
+                    )
+                self.conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_versions_type_hash "
+                    "ON prompt_versions(prompt_type, prompt_hash)"
+                )
+            ep_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(engagement_predictions)")}
+            if ep_cols and "prompt_type" not in ep_cols:
+                self.conn.execute("ALTER TABLE engagement_predictions ADD COLUMN prompt_type TEXT")
+            if ep_cols and "prompt_hash" not in ep_cols:
+                self.conn.execute("ALTER TABLE engagement_predictions ADD COLUMN prompt_hash TEXT")
             # Migrate: create meta table if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS meta (
@@ -321,6 +345,65 @@ class Database:
                 "ALTER TABLE planned_topics ADD COLUMN campaign_id INTEGER REFERENCES content_campaigns(id)"
             )
         self.conn.commit()
+
+    @staticmethod
+    def compute_prompt_hash(prompt_text: str) -> str:
+        """Return the deterministic SHA-256 hash for prompt text."""
+        return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+
+    def register_prompt_version(
+        self, prompt_type: str, prompt_text: str, prompt_hash: str | None = None
+    ) -> dict:
+        """Create or update a prompt_versions row for a prompt use.
+
+        The same prompt_type/text hash always reuses the same row and increments
+        usage_count. A new hash for the same prompt_type gets the next integer
+        version.
+        """
+        if not prompt_type:
+            raise ValueError("prompt_type is required")
+
+        prompt_hash = prompt_hash or self.compute_prompt_hash(prompt_text)
+        cursor = self.conn.execute(
+            """SELECT * FROM prompt_versions
+               WHERE prompt_type = ? AND prompt_hash = ?""",
+            (prompt_type, prompt_hash),
+        )
+        row = cursor.fetchone()
+        if row:
+            self.conn.execute(
+                """UPDATE prompt_versions
+                   SET usage_count = COALESCE(usage_count, 0) + 1
+                   WHERE id = ?""",
+                (row["id"],),
+            )
+            self.conn.commit()
+            return self.get_prompt_version(prompt_type, prompt_hash)
+
+        cursor = self.conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM prompt_versions WHERE prompt_type = ?",
+            (prompt_type,),
+        )
+        version = cursor.fetchone()[0]
+        self.conn.execute(
+            """INSERT INTO prompt_versions
+               (prompt_type, version, prompt_hash, prompt_text, usage_count)
+               VALUES (?, ?, ?, ?, 1)""",
+            (prompt_type, version, prompt_hash, prompt_text),
+        )
+        self.conn.commit()
+        return self.get_prompt_version(prompt_type, prompt_hash)
+
+    def get_prompt_version(
+        self, prompt_type: str, prompt_hash: str
+    ) -> dict | None:
+        cursor = self.conn.execute(
+            """SELECT * FROM prompt_versions
+               WHERE prompt_type = ? AND prompt_hash = ?""",
+            (prompt_type, prompt_hash),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     # Claude messages
     def is_message_processed(self, message_uuid: str) -> bool:
@@ -2423,16 +2506,20 @@ class Database:
         emotional_resonance: float = None,
         novelty: float = None,
         actionability: float = None,
+        prompt_type: str = None,
         prompt_version: str = None,
+        prompt_hash: str = None,
     ) -> int:
         """Store an engagement prediction for content."""
         cursor = self.conn.execute(
             """INSERT INTO engagement_predictions
                (content_id, predicted_score, hook_strength, specificity,
-                emotional_resonance, novelty, actionability, prompt_version)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                emotional_resonance, novelty, actionability,
+                prompt_type, prompt_version, prompt_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (content_id, predicted_score, hook_strength, specificity,
-             emotional_resonance, novelty, actionability, prompt_version)
+             emotional_resonance, novelty, actionability,
+             prompt_type, prompt_version, prompt_hash)
         )
         self.conn.commit()
         return cursor.lastrowid

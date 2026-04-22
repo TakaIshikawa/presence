@@ -1,5 +1,6 @@
 """Tests for the content generator (synthesis/generator.py)."""
 
+import hashlib
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -162,6 +163,28 @@ class TestGenerateXPost:
         assert result.content == "a great post"
         assert result.source_prompts == ["test prompt"]
         assert result.source_commits == ["feat: add feature"]
+
+    def test_registers_prompt_version_when_prompt_file_used(self, mock_client, db, tmp_path):
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        prompt_text = "{prompt}\n{commit_message}\n{repo_name}"
+        (prompts_dir / "x_post.txt").write_text(prompt_text)
+        mock_client.messages.create.return_value = _make_mock_response("post")
+
+        with patch("synthesis.generator.anthropic.Anthropic", return_value=mock_client):
+            gen = ContentGenerator(api_key="test-key", db=db)
+
+        with patch.object(ContentGenerator, "PROMPTS_DIR", prompts_dir):
+            first = gen.generate_x_post("prompt", "commit", "repo")
+            second = gen.generate_x_post("prompt", "commit", "repo")
+
+        prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+        row = db.get_prompt_version("x_post", prompt_hash)
+        assert row["version"] == 1
+        assert row["usage_count"] == 2
+        assert row["prompt_text"] == prompt_text
+        assert first.prompt_hash == prompt_hash
+        assert second.prompt_version == 1
 
 
 # ---------------------------------------------------------------------------

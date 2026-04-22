@@ -44,6 +44,46 @@ class TestContextManager:
         assert vdb.conn is None
 
 
+# --- Prompt Version Operations Tests ---
+
+
+class TestPromptVersionOperations:
+    def test_register_prompt_version_is_deterministic(self, db):
+        first = db.register_prompt_version("predict_engagement_v1", "Prompt text")
+        second = db.register_prompt_version("predict_engagement_v1", "Prompt text")
+
+        assert first["id"] == second["id"]
+        assert first["version"] == 1
+        assert second["usage_count"] == 2
+        assert len(second["prompt_hash"]) == 64
+
+    def test_insert_evaluation_stores_prompt_lineage(self, db):
+        acct = _create_account(db)
+        db.insert_tweet("t1", acct["id"], "tweet", 5, 1, 0, 0, 11.0, "2025-01-01")
+        prompt = db.register_prompt_version("predict_engagement_v1", "Prompt text")
+
+        db.insert_evaluation(
+            tweet_id="t1",
+            evaluator_version="v1",
+            model="sonnet",
+            predicted_score=7.0,
+            hook_strength=7.0,
+            specificity=7.0,
+            emotional_resonance=7.0,
+            novelty=7.0,
+            actionability=7.0,
+            raw_response="raw",
+            prompt_type=prompt["prompt_type"],
+            prompt_version=prompt["version"],
+            prompt_hash=prompt["prompt_hash"],
+        )
+
+        row = db.conn.execute("SELECT * FROM evaluations WHERE tweet_id = 't1'").fetchone()
+        assert row["prompt_type"] == "predict_engagement_v1"
+        assert row["prompt_version"] == 1
+        assert row["prompt_hash"] == prompt["prompt_hash"]
+
+
 # --- Account Operations Tests ---
 
 

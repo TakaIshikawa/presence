@@ -129,6 +129,7 @@ def main() -> None:
             api_key=config.anthropic.api_key,
             model=config.synthesis.eval_model,
             timeout=config.timeouts.anthropic_seconds,
+            db=db,
         )
 
         pipeline = SynthesisPipeline(
@@ -430,7 +431,9 @@ def main() -> None:
                     emotional_resonance=detail.get("emotional_resonance"),
                     novelty=detail.get("novelty"),
                     actionability=detail.get("actionability"),
+                    prompt_type=detail.get("prompt_type"),
                     prompt_version=detail.get("prompt_version", "v1"),
+                    prompt_hash=detail.get("prompt_hash"),
                 )
                 logger.info(f"  Stored engagement prediction: {detail['predicted_score']:.1f}")
             except sqlite3.Error as e:

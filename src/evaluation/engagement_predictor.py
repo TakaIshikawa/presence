@@ -23,6 +23,10 @@ class EngagementPrediction:
     novelty: float
     actionability: float
     raw_response: str
+    prompt_type: str | None = None
+    prompt_version: int | None = None
+    prompt_hash: str | None = None
+    prompt_version_label: str | None = None
 
 
 class EngagementPredictor:
@@ -39,13 +43,30 @@ class EngagementPredictor:
         "PREDICTED_ENGAGEMENT",
     ]
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", timeout: float = 300.0):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-6",
+        timeout: float = 300.0,
+        db=None,
+    ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
+        self.db = db
+        self.prompt_versions: dict[str, dict] = {}
 
     def _load_prompt(self, version: str = "v1") -> str:
         prompt_file = self.PROMPTS_DIR / f"predict_engagement_{version}.txt"
-        return prompt_file.read_text()
+        prompt_text = prompt_file.read_text()
+        self._register_prompt(f"predict_engagement_{version}", prompt_text)
+        return prompt_text
+
+    def _register_prompt(self, prompt_type: str, prompt_text: str) -> dict | None:
+        if not self.db or not hasattr(self.db, "register_prompt_version"):
+            return None
+        record = self.db.register_prompt_version(prompt_type, prompt_text)
+        self.prompt_versions[prompt_type] = record
+        return record
 
     def predict_batch(
         self,
@@ -66,6 +87,8 @@ class EngagementPredictor:
             List of EngagementPrediction, one per input tweet.
         """
         template = self._load_prompt(prompt_version)
+        prompt_type = f"predict_engagement_{prompt_version}"
+        prompt_record = self.prompt_versions.get(prompt_type, {})
 
         tweets_text = "\n\n".join(
             f"TWEET_{i + 1} (id={t['id']}):\n{t['text']}"
@@ -106,10 +129,23 @@ class EngagementPredictor:
                 f"Anthropic API error: {e}"
             ) from e
 
-        return self._parse_batch_response(response.content[0].text, tweets)
+        return self._parse_batch_response(
+            response.content[0].text,
+            tweets,
+            prompt_type=prompt_type,
+            prompt_version=prompt_record.get("version"),
+            prompt_hash=prompt_record.get("prompt_hash"),
+            prompt_version_label=prompt_version,
+        )
 
     def _parse_batch_response(
-        self, response: str, tweets: list[dict]
+        self,
+        response: str,
+        tweets: list[dict],
+        prompt_type: str | None = None,
+        prompt_version: int | None = None,
+        prompt_hash: str | None = None,
+        prompt_version_label: str | None = None,
     ) -> list[EngagementPrediction]:
         """Parse multi-tweet scoring response into individual predictions."""
         predictions = []
@@ -130,6 +166,10 @@ class EngagementPredictor:
                     novelty=self._extract_score(block, "NOVELTY"),
                     actionability=self._extract_score(block, "ACTIONABILITY"),
                     raw_response=block,
+                    prompt_type=prompt_type,
+                    prompt_version=prompt_version,
+                    prompt_hash=prompt_hash,
+                    prompt_version_label=prompt_version_label,
                 )
             )
         return predictions

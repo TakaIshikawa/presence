@@ -39,6 +39,12 @@ class ContentRepurposer:
         self.model = model
         self.db = db
 
+    def _load_prompt(self, prompt_type: str) -> str:
+        prompt_template = (self.PROMPTS_DIR / f"{prompt_type}.txt").read_text()
+        if self.db and hasattr(self.db, "register_prompt_version"):
+            self.db.register_prompt_version(prompt_type, prompt_template)
+        return prompt_template
+
     def find_candidates(
         self,
         min_engagement: float = 10.0,
@@ -93,8 +99,7 @@ class ContentRepurposer:
         Returns:
             RepurposeResult with generated thread content
         """
-        prompt_path = self.PROMPTS_DIR / "repurpose_post_to_thread.txt"
-        prompt_template = prompt_path.read_text()
+        prompt_template = self._load_prompt("repurpose_post_to_thread")
 
         filled_prompt = prompt_template.format(original_content=candidate.original_content)
 
@@ -131,8 +136,7 @@ class ContentRepurposer:
         Returns:
             RepurposeResult with blog seed content
         """
-        prompt_path = self.PROMPTS_DIR / "repurpose_to_blog_seed.txt"
-        prompt_template = prompt_path.read_text()
+        prompt_template = self._load_prompt("repurpose_to_blog_seed")
 
         filled_prompt = prompt_template.format(original_content=candidate.original_content)
 

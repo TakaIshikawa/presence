@@ -37,11 +37,19 @@ class ContentRefiner:
         gate_api_key: str,
         gate_model: str,
         timeout: float = 300.0,
+        db=None,
     ):
         self.refine_client = anthropic.Anthropic(api_key=refine_api_key, timeout=timeout)
         self.refine_model = refine_model
         self.gate_client = anthropic.Anthropic(api_key=gate_api_key, timeout=timeout)
         self.gate_model = gate_model
+        self.db = db
+
+    def _load_prompt(self, prompt_type: str) -> str:
+        prompt_text = (self.PROMPTS_DIR / f"{prompt_type}.txt").read_text()
+        if self.db and hasattr(self.db, "register_prompt_version"):
+            self.db.register_prompt_version(prompt_type, prompt_text)
+        return prompt_text
 
     def refine_and_gate(
         self,
@@ -57,7 +65,7 @@ class ContentRefiner:
     def _refine(
         self, content: str, best_feedback: str, improvement: str, content_type: str
     ) -> str:
-        template = (self.PROMPTS_DIR / "refiner.txt").read_text()
+        template = self._load_prompt("refiner")
         constraints, max_tokens = self.FORMAT_CONSTRAINTS.get(
             content_type, self.FORMAT_CONSTRAINTS["x_post"]
         )
@@ -83,7 +91,7 @@ class ContentRefiner:
             raise
 
     def _final_gate(self, original: str, refined: str, content_type: str = "x_post") -> RefinementResult:
-        template = (self.PROMPTS_DIR / "final_gate.txt").read_text()
+        template = self._load_prompt("final_gate")
         filled = template.format(original=original, refined=refined)
 
         try:

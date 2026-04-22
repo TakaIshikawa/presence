@@ -127,7 +127,9 @@ CREATE TABLE IF NOT EXISTS engagement_predictions (
     emotional_resonance REAL,
     novelty REAL,
     actionability REAL,
+    prompt_type TEXT,
     prompt_version TEXT,
+    prompt_hash TEXT,
     actual_engagement_score REAL,  -- backfilled from post_engagement
     prediction_error REAL,         -- actual - predicted, backfilled
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -139,11 +141,13 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     prompt_type TEXT NOT NULL,  -- 'x_post', 'x_thread', 'blog_post'
     version INTEGER NOT NULL,
+    prompt_hash TEXT NOT NULL,
     prompt_text TEXT NOT NULL,
     avg_score REAL,
     usage_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(prompt_type, version)
+    UNIQUE(prompt_type, version),
+    UNIQUE(prompt_type, prompt_hash)
 );
 
 -- Poll state tracking

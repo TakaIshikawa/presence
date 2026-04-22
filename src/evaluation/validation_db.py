@@ -1,6 +1,7 @@
 """SQLite storage for evaluator backtesting validation data."""
 
 import sqlite3
+import hashlib
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
@@ -46,6 +47,9 @@ CREATE TABLE IF NOT EXISTS evaluations (
     emotional_resonance REAL,
     novelty REAL,
     actionability REAL,
+    prompt_type TEXT,
+    prompt_version INTEGER,
+    prompt_hash TEXT,
     raw_response TEXT,
     evaluated_at TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -66,6 +70,19 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     bottom_quartile_precision REAL,
     notes TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS prompt_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_type TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    prompt_hash TEXT NOT NULL,
+    prompt_text TEXT NOT NULL,
+    avg_score REAL,
+    usage_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(prompt_type, version),
+    UNIQUE(prompt_type, prompt_hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tweets_account ON tweets(account_id);
@@ -100,6 +117,73 @@ class ValidationDatabase:
 
     def init_schema(self) -> None:
         self.conn.executescript(VALIDATION_SCHEMA)
+        eval_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(evaluations)")}
+        if eval_cols and "prompt_type" not in eval_cols:
+            self.conn.execute("ALTER TABLE evaluations ADD COLUMN prompt_type TEXT")
+        if eval_cols and "prompt_version" not in eval_cols:
+            self.conn.execute("ALTER TABLE evaluations ADD COLUMN prompt_version INTEGER")
+        if eval_cols and "prompt_hash" not in eval_cols:
+            self.conn.execute("ALTER TABLE evaluations ADD COLUMN prompt_hash TEXT")
+        pv_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(prompt_versions)")}
+        if pv_cols and "prompt_hash" not in pv_cols:
+            self.conn.execute("ALTER TABLE prompt_versions ADD COLUMN prompt_hash TEXT")
+        if pv_cols:
+            rows = self.conn.execute(
+                "SELECT id, prompt_text FROM prompt_versions WHERE prompt_hash IS NULL"
+            ).fetchall()
+            for row in rows:
+                self.conn.execute(
+                    "UPDATE prompt_versions SET prompt_hash = ? WHERE id = ?",
+                    (self.compute_prompt_hash(row["prompt_text"]), row["id"]),
+                )
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_versions_type_hash "
+                "ON prompt_versions(prompt_type, prompt_hash)"
+            )
+        self.conn.commit()
+
+    @staticmethod
+    def compute_prompt_hash(prompt_text: str) -> str:
+        return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+
+    def register_prompt_version(
+        self, prompt_type: str, prompt_text: str, prompt_hash: str | None = None
+    ) -> dict:
+        if not prompt_type:
+            raise ValueError("prompt_type is required")
+
+        prompt_hash = prompt_hash or self.compute_prompt_hash(prompt_text)
+        row = self.conn.execute(
+            "SELECT * FROM prompt_versions WHERE prompt_type = ? AND prompt_hash = ?",
+            (prompt_type, prompt_hash),
+        ).fetchone()
+        if row:
+            self.conn.execute(
+                "UPDATE prompt_versions SET usage_count = COALESCE(usage_count, 0) + 1 WHERE id = ?",
+                (row["id"],),
+            )
+            self.conn.commit()
+            return self.get_prompt_version(prompt_type, prompt_hash)
+
+        version = self.conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM prompt_versions WHERE prompt_type = ?",
+            (prompt_type,),
+        ).fetchone()[0]
+        self.conn.execute(
+            """INSERT INTO prompt_versions
+               (prompt_type, version, prompt_hash, prompt_text, usage_count)
+               VALUES (?, ?, ?, ?, 1)""",
+            (prompt_type, version, prompt_hash, prompt_text),
+        )
+        self.conn.commit()
+        return self.get_prompt_version(prompt_type, prompt_hash)
+
+    def get_prompt_version(self, prompt_type: str, prompt_hash: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM prompt_versions WHERE prompt_type = ? AND prompt_hash = ?",
+            (prompt_type, prompt_hash),
+        ).fetchone()
+        return dict(row) if row else None
 
     # --- Account operations ---
 
@@ -240,14 +324,18 @@ class ValidationDatabase:
         novelty: float,
         actionability: float,
         raw_response: str,
+        prompt_type: str | None = None,
+        prompt_version: int | None = None,
+        prompt_hash: str | None = None,
     ) -> int:
         now = datetime.now(timezone.utc).isoformat()
         cursor = self.conn.execute(
             """INSERT INTO evaluations
                (tweet_id, evaluator_version, model, predicted_score,
                 hook_strength, specificity, emotional_resonance,
-                novelty, actionability, raw_response, evaluated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                novelty, actionability, prompt_type, prompt_version,
+                prompt_hash, raw_response, evaluated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(tweet_id, evaluator_version) DO UPDATE SET
                  model=excluded.model,
                  predicted_score=excluded.predicted_score,
@@ -256,11 +344,15 @@ class ValidationDatabase:
                  emotional_resonance=excluded.emotional_resonance,
                  novelty=excluded.novelty,
                  actionability=excluded.actionability,
+                 prompt_type=excluded.prompt_type,
+                 prompt_version=excluded.prompt_version,
+                 prompt_hash=excluded.prompt_hash,
                  raw_response=excluded.raw_response,
                  evaluated_at=excluded.evaluated_at""",
             (tweet_id, evaluator_version, model, predicted_score,
              hook_strength, specificity, emotional_resonance,
-             novelty, actionability, raw_response, now),
+             novelty, actionability, prompt_type, prompt_version,
+             prompt_hash, raw_response, now),
         )
         self.conn.commit()
         return cursor.lastrowid

@@ -16,18 +16,41 @@ class GeneratedContent:
     content: str
     source_prompts: list[str]
     source_commits: list[str]
+    prompt_type: Optional[str] = None
+    prompt_version: Optional[int] = None
+    prompt_hash: Optional[str] = None
 
 
 class ContentGenerator:
     PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", timeout: float = 300.0):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-6",
+        timeout: float = 300.0,
+        db=None,
+    ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
+        self.db = db
+        self.prompt_versions: dict[str, dict] = {}
 
     def _load_prompt(self, prompt_type: str) -> str:
         prompt_file = self.PROMPTS_DIR / f"{prompt_type}.txt"
-        return prompt_file.read_text()
+        prompt_text = prompt_file.read_text()
+        self._register_prompt(prompt_type, prompt_text)
+        return prompt_text
+
+    def _register_prompt(self, prompt_type: str, prompt_text: str) -> dict | None:
+        if not self.db or not hasattr(self.db, "register_prompt_version"):
+            return None
+        record = self.db.register_prompt_version(prompt_type, prompt_text)
+        self.prompt_versions[prompt_type] = record
+        return record
+
+    def _prompt_metadata(self, prompt_type: str) -> dict:
+        return self.prompt_versions.get(prompt_type, {})
 
     def generate_x_post(
         self,
@@ -62,7 +85,10 @@ class ContentGenerator:
             content_type="x_post",
             content=response.content[0].text.strip(),
             source_prompts=[prompt],
-            source_commits=[commit_message]
+            source_commits=[commit_message],
+            prompt_type="x_post",
+            prompt_version=self._prompt_metadata("x_post").get("version"),
+            prompt_hash=self._prompt_metadata("x_post").get("prompt_hash"),
         )
 
     def generate_x_post_batched(
@@ -104,7 +130,10 @@ class ContentGenerator:
             content_type="x_post",
             content=response.content[0].text.strip(),
             source_prompts=prompts,
-            source_commits=[c["message"] for c in commits]
+            source_commits=[c["message"] for c in commits],
+            prompt_type="x_post_batched",
+            prompt_version=self._prompt_metadata("x_post_batched").get("version"),
+            prompt_hash=self._prompt_metadata("x_post_batched").get("prompt_hash"),
         )
 
     # Content-type settings for multi-candidate generation
@@ -133,6 +162,7 @@ class ContentGenerator:
             content_type, self.CONTENT_TYPE_CONFIG["x_post"]
         )
         template = self._load_prompt(type_config["template"])
+        prompt_template_type = type_config["template"]
         max_tokens = type_config["max_tokens"]
 
         prompts_text = "\n\n".join(f"- {p[:500]}" for p in prompts[:5])
@@ -214,6 +244,9 @@ class ContentGenerator:
                     content=response.content[0].text.strip(),
                     source_prompts=prompts,
                     source_commits=[c.get("message") or c.get("commit_message", "") for c in commits],
+                    prompt_type=prompt_template_type,
+                    prompt_version=self._prompt_metadata(prompt_template_type).get("version"),
+                    prompt_hash=self._prompt_metadata(prompt_template_type).get("prompt_hash"),
                 )
             )
 
@@ -279,7 +312,10 @@ class ContentGenerator:
             content_type="x_thread",
             content=response.content[0].text.strip(),
             source_prompts=prompts,
-            source_commits=[c.get("message") or c.get("commit_message") for c in commits]
+            source_commits=[c.get("message") or c.get("commit_message") for c in commits],
+            prompt_type="x_thread",
+            prompt_version=self._prompt_metadata("x_thread").get("version"),
+            prompt_hash=self._prompt_metadata("x_thread").get("prompt_hash"),
         )
 
     def generate_blog_post(
@@ -320,5 +356,8 @@ class ContentGenerator:
             content_type="blog_post",
             content=response.content[0].text.strip(),
             source_prompts=prompts,
-            source_commits=[c.get("message") or c.get("commit_message") for c in commits]
+            source_commits=[c.get("message") or c.get("commit_message") for c in commits],
+            prompt_type="blog_post",
+            prompt_version=self._prompt_metadata("blog_post").get("version"),
+            prompt_hash=self._prompt_metadata("blog_post").get("prompt_hash"),
         )

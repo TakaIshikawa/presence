@@ -17,6 +17,9 @@ class GeneratedContent:
     knowledge_used: list[tuple[KnowledgeItem, float]]  # (item, relevance)
     attributions: list[str]
     knowledge_ids: list[tuple[int, float]]  # (knowledge_id, relevance_score) for lineage tracking
+    prompt_type: Optional[str] = None
+    prompt_version: Optional[int] = None
+    prompt_hash: Optional[str] = None
 
 
 class EnhancedContentGenerator:
@@ -30,12 +33,16 @@ class EnhancedContentGenerator:
         timeout: float = 300.0,
         restricted_prompt_behavior: str = KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
         freshness_half_life_days: Optional[float] = None,
+        db=None,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.knowledge_store = knowledge_store
         self.restricted_prompt_behavior = restricted_prompt_behavior
         self.freshness_half_life_days = freshness_half_life_days
+        self.db = db
+        self.prompt_versions: dict[str, dict] = {}
+        self.loaded_prompt_types: dict[str, str] = {}
 
     def _load_prompt(self, prompt_type: str) -> str:
         # Try enhanced version first, fall back to basic
@@ -43,8 +50,25 @@ class EnhancedContentGenerator:
         basic_file = self.PROMPTS_DIR / f"{prompt_type}.txt"
 
         if enhanced_file.exists() and self.knowledge_store:
-            return enhanced_file.read_text()
-        return basic_file.read_text()
+            prompt_text = enhanced_file.read_text()
+            registered_type = f"{prompt_type}_enhanced"
+            self.loaded_prompt_types[prompt_type] = registered_type
+            self._register_prompt(registered_type, prompt_text)
+            return prompt_text
+        prompt_text = basic_file.read_text()
+        self.loaded_prompt_types[prompt_type] = prompt_type
+        self._register_prompt(prompt_type, prompt_text)
+        return prompt_text
+
+    def _register_prompt(self, prompt_type: str, prompt_text: str) -> dict | None:
+        if not self.db or not hasattr(self.db, "register_prompt_version"):
+            return None
+        record = self.db.register_prompt_version(prompt_type, prompt_text)
+        self.prompt_versions[prompt_type] = record
+        return record
+
+    def _prompt_metadata(self, prompt_type: str) -> dict:
+        return self.prompt_versions.get(prompt_type, {})
 
     def _retrieve_knowledge(
         self,
@@ -112,6 +136,7 @@ class EnhancedContentGenerator:
 
         # Load template
         template = self._load_prompt("x_post")
+        prompt_template_type = self.loaded_prompt_types.get("x_post", "x_post")
 
         # Check if using enhanced template
         if "own_insights" in template:
@@ -157,7 +182,10 @@ class EnhancedContentGenerator:
             source_commits=[commit_message],
             knowledge_used=own_insights + external_insights,
             attributions=attributions,
-            knowledge_ids=knowledge_ids
+            knowledge_ids=knowledge_ids,
+            prompt_type=prompt_template_type,
+            prompt_version=self._prompt_metadata(prompt_template_type).get("version"),
+            prompt_hash=self._prompt_metadata(prompt_template_type).get("prompt_hash"),
         )
 
     def generate_x_thread(
@@ -177,6 +205,7 @@ class EnhancedContentGenerator:
         )
 
         template = self._load_prompt("x_thread")
+        prompt_template_type = self.loaded_prompt_types.get("x_thread", "x_thread")
 
         prompts_text = "\n\n".join(f"- {p}" for p in prompts)
         commits_text = "\n\n".join(
@@ -223,5 +252,8 @@ class EnhancedContentGenerator:
             source_commits=[c["message"] for c in commits],
             knowledge_used=own_insights + external_insights,
             attributions=attributions,
-            knowledge_ids=knowledge_ids
+            knowledge_ids=knowledge_ids,
+            prompt_type=prompt_template_type,
+            prompt_version=self._prompt_metadata(prompt_template_type).get("version"),
+            prompt_hash=self._prompt_metadata(prompt_template_type).get("prompt_hash"),
         )
