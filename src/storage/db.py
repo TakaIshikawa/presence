@@ -266,6 +266,24 @@ class Database:
             """)
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_send ON newsletter_engagement(newsletter_send_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_issue ON newsletter_engagement(issue_id)")
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS newsletter_subscriber_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subscriber_count INTEGER NOT NULL DEFAULT 0,
+                    active_subscriber_count INTEGER,
+                    unsubscribes INTEGER,
+                    churn_rate REAL,
+                    new_subscribers INTEGER,
+                    net_subscriber_change INTEGER,
+                    raw_metrics JSON,
+                    fetched_at TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_newsletter_subscriber_metrics_fetched "
+                "ON newsletter_subscriber_metrics(fetched_at)"
+            )
             self.conn.commit()
         except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
             raise DatabaseError(
@@ -2150,6 +2168,58 @@ class Database:
             self.update_newsletter_send_status(newsletter_send_id, status, commit=False)
         self.conn.commit()
         return cursor.lastrowid
+
+    def insert_newsletter_subscriber_metrics(
+        self,
+        subscriber_count: int,
+        active_subscriber_count: Optional[int] = None,
+        unsubscribes: Optional[int] = None,
+        churn_rate: Optional[float] = None,
+        new_subscribers: Optional[int] = None,
+        net_subscriber_change: Optional[int] = None,
+        raw_metrics: Optional[dict] = None,
+    ) -> int:
+        """Insert a Buttondown aggregate subscriber metrics snapshot."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO newsletter_subscriber_metrics
+               (subscriber_count, active_subscriber_count, unsubscribes, churn_rate,
+                new_subscribers, net_subscriber_change, raw_metrics, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                subscriber_count,
+                active_subscriber_count,
+                unsubscribes,
+                churn_rate,
+                new_subscribers,
+                net_subscriber_change,
+                json.dumps(raw_metrics or {}),
+                now,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def list_newsletter_subscriber_metrics(self, limit: int = 30) -> list[dict]:
+        """List aggregate newsletter subscriber metrics snapshots newest-first."""
+        cursor = self.conn.execute(
+            """SELECT id, subscriber_count, active_subscriber_count, unsubscribes,
+                      churn_rate, new_subscribers, net_subscriber_change,
+                      raw_metrics, fetched_at, created_at
+               FROM newsletter_subscriber_metrics
+               ORDER BY fetched_at DESC, id DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                item["raw_metrics"] = json.loads(item.get("raw_metrics") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item["raw_metrics"] = {}
+            rows.append(item)
+        return rows
 
     def update_newsletter_send_status(
         self, newsletter_send_id: int, status: str, commit: bool = True

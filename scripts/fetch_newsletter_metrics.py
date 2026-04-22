@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fetch Buttondown newsletter engagement metrics for recent sent issues."""
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -14,7 +15,44 @@ from output.newsletter import ButtondownClient
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Fetch Buttondown newsletter engagement and subscriber metrics."
+    )
+    parser.add_argument(
+        "--subscribers",
+        action="store_true",
+        help="Fetch aggregate subscriber metrics instead of issue engagement metrics.",
+    )
+    return parser.parse_args(argv)
+
+
+def _fetch_subscriber_metrics(client: ButtondownClient, db) -> bool:
+    metrics = client.get_subscriber_metrics()
+    if metrics is None:
+        logger.warning("Failed to fetch newsletter subscriber metrics")
+        return False
+
+    db.insert_newsletter_subscriber_metrics(
+        subscriber_count=metrics.subscriber_count,
+        active_subscriber_count=metrics.active_subscriber_count,
+        unsubscribes=metrics.unsubscribes,
+        churn_rate=metrics.churn_rate,
+        new_subscribers=metrics.new_subscribers,
+        net_subscriber_change=metrics.net_subscriber_change,
+        raw_metrics=metrics.raw_metrics,
+    )
+    logger.info(
+        "Subscriber metrics: %s subscribers, %s active, %s unsubscribes",
+        metrics.subscriber_count,
+        metrics.active_subscriber_count,
+        metrics.unsubscribes,
+    )
+    return True
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv or [])
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -30,15 +68,22 @@ def main() -> None:
             logger.warning("Newsletter API key not configured, skipping metrics fetch")
             return
 
-        sends = db.get_newsletter_sends_needing_metrics(max_age_days=90)
-        if not sends:
-            logger.info("No newsletter issues need metrics fetching")
-            return
-
         client = ButtondownClient(
             config.newsletter.api_key,
             timeout=config.timeouts.http_seconds,
         )
+
+        if args.subscribers:
+            fetched = _fetch_subscriber_metrics(client, db)
+            if fetched:
+                update_monitoring("fetch-newsletter-subscribers")
+                logger.info("Done. Fetched newsletter subscriber metrics.")
+            return
+
+        sends = db.get_newsletter_sends_needing_metrics(max_age_days=90)
+        if not sends:
+            logger.info("No newsletter issues need metrics fetching")
+            return
 
         fetched = 0
         for send in sends:
@@ -68,4 +113,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

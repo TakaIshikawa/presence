@@ -93,6 +93,25 @@ class TestSchemaInit:
         }
         assert expected.issubset(cols)
 
+    def test_newsletter_subscriber_metrics_table_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute(
+                "PRAGMA table_info(newsletter_subscriber_metrics)"
+            )
+        }
+        expected = {
+            "subscriber_count",
+            "active_subscriber_count",
+            "unsubscribes",
+            "churn_rate",
+            "new_subscribers",
+            "net_subscriber_change",
+            "raw_metrics",
+            "fetched_at",
+        }
+        assert expected.issubset(cols)
+
     def test_idempotent_init(self, db, schema_path):
         # Running init_schema again should not raise
         db.init_schema(schema_path)
@@ -2763,6 +2782,33 @@ class TestNewsletterMethods:
             (send_id,),
         ).fetchone()["status"]
         assert status == "resonated"
+
+    def test_insert_and_list_newsletter_subscriber_metrics(self, db):
+        """Newsletter subscriber snapshots are persisted newest-first."""
+        first_id = db.insert_newsletter_subscriber_metrics(
+            subscriber_count=100,
+            active_subscriber_count=95,
+            unsubscribes=5,
+            churn_rate=0.05,
+            new_subscribers=8,
+            net_subscriber_change=3,
+            raw_metrics={"count": 100},
+        )
+        second_id = db.insert_newsletter_subscriber_metrics(
+            subscriber_count=102,
+            active_subscriber_count=97,
+            unsubscribes=5,
+            raw_metrics={"count": 102},
+        )
+
+        rows = db.list_newsletter_subscriber_metrics(limit=10)
+
+        assert [row["id"] for row in rows] == [second_id, first_id]
+        assert rows[0]["subscriber_count"] == 102
+        assert rows[0]["active_subscriber_count"] == 97
+        assert rows[0]["unsubscribes"] == 5
+        assert rows[0]["raw_metrics"] == {"count": 102}
+        assert rows[1]["churn_rate"] == 0.05
 
     def test_resonant_newsletter_source_patterns_uses_source_content(self, db):
         """Source content from resonant sends becomes future assembly preference data."""

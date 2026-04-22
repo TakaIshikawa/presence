@@ -47,6 +47,17 @@ class NewsletterMetrics:
     unsubscribes: int = 0
 
 
+@dataclass
+class NewsletterSubscriberMetrics:
+    subscriber_count: int
+    active_subscriber_count: Optional[int] = None
+    unsubscribes: Optional[int] = None
+    churn_rate: Optional[float] = None
+    new_subscribers: Optional[int] = None
+    net_subscriber_change: Optional[int] = None
+    raw_metrics: dict = field(default_factory=dict)
+
+
 class NewsletterAssembler:
     """Assembles newsletter content from the week's published posts."""
 
@@ -352,6 +363,126 @@ class ButtondownClient:
         except requests.RequestException as e:
             logger.debug(f"Subscriber count fetch failed: {e}")
         return 0
+
+    def get_subscriber_metrics(self) -> Optional[NewsletterSubscriberMetrics]:
+        """Fetch aggregate newsletter subscriber metrics when available."""
+        try:
+            active_response = self.session.get(
+                f"{self.BASE_URL}/subscribers",
+                params={"type": "regular"},
+                timeout=self.timeout,
+            )
+            if active_response.status_code != 200:
+                logger.warning(
+                    "Subscriber metrics fetch failed: HTTP %s",
+                    active_response.status_code,
+                )
+                return None
+
+            active_data = active_response.json()
+            raw_metrics = dict(active_data) if isinstance(active_data, dict) else {}
+            active_count = self._extract_int(
+                raw_metrics,
+                "active_subscriber_count",
+                "active_subscribers",
+                "regular_subscribers",
+                "subscriber_count",
+                "count",
+            )
+            subscriber_count = self._extract_int(
+                raw_metrics,
+                "subscriber_count",
+                "total_subscribers",
+                "count",
+            )
+
+            unsubscribes = self._extract_int(
+                raw_metrics,
+                "unsubscribes",
+                "unsubscriptions",
+                "unsubscribed_count",
+                "unsubscribed_subscribers",
+            )
+            if unsubscribes is None:
+                unsubscribes = self._fetch_subscriber_type_count("unsubscribed")
+                if unsubscribes is not None:
+                    raw_metrics["unsubscribed_count"] = unsubscribes
+
+            churn_rate = self._extract_float(
+                raw_metrics,
+                "churn_rate",
+                "unsubscribe_rate",
+                "unsubscription_rate",
+            )
+            new_subscribers = self._extract_int(
+                raw_metrics,
+                "new_subscribers",
+                "subscribers_added",
+                "new_subscriber_count",
+            )
+            net_change = self._extract_int(
+                raw_metrics,
+                "net_subscriber_change",
+                "net_subscribers",
+                "subscriber_delta",
+            )
+
+            if subscriber_count is None:
+                subscriber_count = active_count or 0
+
+            return NewsletterSubscriberMetrics(
+                subscriber_count=subscriber_count,
+                active_subscriber_count=active_count,
+                unsubscribes=unsubscribes,
+                churn_rate=churn_rate,
+                new_subscribers=new_subscribers,
+                net_subscriber_change=net_change,
+                raw_metrics=raw_metrics,
+            )
+        except (ValueError, TypeError, requests.RequestException) as e:
+            logger.warning("Subscriber metrics fetch failed: %s", e)
+            return None
+
+    def _fetch_subscriber_type_count(self, subscriber_type: str) -> Optional[int]:
+        """Fetch a Buttondown subscriber count for one subscriber type."""
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}/subscribers",
+                params={"type": subscriber_type},
+                timeout=self.timeout,
+            )
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            if not isinstance(data, dict):
+                return None
+            return self._extract_int(data, "count")
+        except (ValueError, TypeError, requests.RequestException):
+            return None
+
+    @staticmethod
+    def _extract_int(data: dict, *keys: str) -> Optional[int]:
+        for key in keys:
+            value = data.get(key)
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _extract_float(data: dict, *keys: str) -> Optional[float]:
+        for key in keys:
+            value = data.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def get_email_analytics(self, issue_id: str) -> Optional[NewsletterMetrics]:
         """Fetch aggregate analytics for a Buttondown email issue."""

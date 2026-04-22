@@ -1,6 +1,7 @@
 """Tests for newsletter assembly and delivery."""
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
@@ -13,6 +14,7 @@ from output.newsletter import (
     NewsletterAssembler,
     NewsletterContent,
     NewsletterMetrics,
+    NewsletterSubscriberMetrics,
     NewsletterResult,
     ButtondownClient,
 )
@@ -642,6 +644,60 @@ class TestButtondownClient:
         client.session = mock_session
 
         assert client.get_email_analytics("issue-123") is None
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_subscriber_metrics_success(self, MockSession):
+        """Subscriber metrics include aggregate counts exposed by Buttondown."""
+        mock_session = MockSession.return_value
+        active_response = MagicMock()
+        active_response.status_code = 200
+        active_response.json.return_value = {
+            "count": 125,
+            "churn_rate": 0.08,
+            "new_subscribers": 9,
+            "net_subscriber_change": 6,
+        }
+        unsubscribed_response = MagicMock()
+        unsubscribed_response.status_code = 200
+        unsubscribed_response.json.return_value = {"count": 3}
+        mock_session.get.side_effect = [active_response, unsubscribed_response]
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        metrics = client.get_subscriber_metrics()
+
+        assert metrics == NewsletterSubscriberMetrics(
+            subscriber_count=125,
+            active_subscriber_count=125,
+            unsubscribes=3,
+            churn_rate=0.08,
+            new_subscribers=9,
+            net_subscriber_change=6,
+            raw_metrics={
+                "count": 125,
+                "churn_rate": 0.08,
+                "new_subscribers": 9,
+                "net_subscriber_change": 6,
+                "unsubscribed_count": 3,
+            },
+        )
+        assert mock_session.get.call_count == 2
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_subscriber_metrics_http_error_logs_failure(self, MockSession, caplog):
+        """HTTP failures return None and log a warning."""
+        mock_session = MockSession.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_session.get.return_value = mock_response
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+
+        with caplog.at_level(logging.WARNING):
+            assert client.get_subscriber_metrics() is None
+
+        assert "Subscriber metrics fetch failed" in caplog.text
 
 
 # --- DB Methods ---
