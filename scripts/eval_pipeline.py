@@ -4,6 +4,7 @@
 import argparse
 import sys
 from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -12,6 +13,22 @@ from runner import script_context
 from ingestion.claude_logs import ClaudeLogParser
 from ingestion.redaction import redact_text
 from synthesis.pipeline import SynthesisPipeline
+
+
+@dataclass(frozen=True)
+class MatrixVariant:
+    name: str
+    prompt_file: Path
+    generator_model: str
+    evaluator_model: str
+
+
+@dataclass(frozen=True)
+class SourceWindow:
+    run: int
+    hours: int
+    commits: list[dict]
+    prompts: list
 
 
 def _redaction_patterns(config):
@@ -24,6 +41,149 @@ def _redaction_patterns(config):
 
 def _redact_final_content(content: str, config) -> str:
     return redact_text(content, _redaction_patterns(config))
+
+
+def _parse_variant(spec: str) -> MatrixVariant:
+    parts = spec.split(":", 3)
+    if len(parts) != 4 or not all(parts):
+        raise argparse.ArgumentTypeError(
+            "--variant must be NAME:PROMPT_FILE:GENERATOR_MODEL:EVALUATOR_MODEL"
+        )
+
+    name, prompt_file, generator_model, evaluator_model = parts
+    path = Path(prompt_file).expanduser()
+    if not path.exists():
+        raise argparse.ArgumentTypeError(f"Prompt file not found: {prompt_file}")
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"Prompt path is not a file: {prompt_file}")
+
+    return MatrixVariant(
+        name=name,
+        prompt_file=path,
+        generator_model=generator_model,
+        evaluator_model=evaluator_model,
+    )
+
+
+def _commit_dicts(commits: list[dict]) -> list[dict]:
+    return [
+        {
+            "sha": c.get("commit_sha", ""),
+            "repo_name": c.get("repo_name", ""),
+            "message": c.get("commit_message", ""),
+        }
+        for c in commits
+    ]
+
+
+def _prompt_texts(prompts: list) -> list[str]:
+    return [p.prompt_text for p in prompts]
+
+
+def _select_source_windows(
+    *,
+    db,
+    log_parser: ClaudeLogParser,
+    now: datetime,
+    hours_slices: list[int],
+    total_runs: int,
+) -> list[SourceWindow]:
+    windows = []
+    for run_idx, hours in enumerate(hours_slices):
+        since = now - timedelta(hours=hours)
+        commits = db.get_commits_in_range(since, now)
+        prompts = list(log_parser.get_messages_since(since))
+
+        if not commits or not prompts:
+            print(f"\n{'='*60}")
+            print(f"Run {run_idx + 1}/{total_runs} — last {hours}h: "
+                  f"skipped (commits={len(commits)}, prompts={len(prompts)})")
+            continue
+
+        windows.append(
+            SourceWindow(
+                run=run_idx + 1,
+                hours=hours,
+                commits=commits,
+                prompts=prompts,
+            )
+        )
+    return windows
+
+
+def _build_pipeline(
+    *,
+    config,
+    db,
+    embedder,
+    semantic_threshold: float,
+    knowledge_store,
+    generator_model: str,
+    evaluator_model: str,
+) -> SynthesisPipeline:
+    return SynthesisPipeline(
+        api_key=config.anthropic.api_key,
+        generator_model=generator_model,
+        evaluator_model=evaluator_model,
+        db=db,
+        num_candidates=config.synthesis.num_candidates,
+        anthropic_timeout=config.timeouts.anthropic_seconds,
+        embedder=embedder,
+        semantic_threshold=semantic_threshold,
+        knowledge_store=knowledge_store,
+        claim_check_enabled=config.synthesis.claim_check_enabled,
+        restricted_prompt_behavior=getattr(
+            config.curated_sources, "restricted_prompt_behavior", "strict"
+        ) if config.curated_sources else "strict",
+    )
+
+
+def _apply_prompt_variant(pipeline: SynthesisPipeline, content_type: str, prompt_file: Path) -> str:
+    type_config = pipeline.generator.CONTENT_TYPE_CONFIG.get(
+        content_type,
+        pipeline.generator.CONTENT_TYPE_CONFIG["x_post"],
+    )
+    prompt_type = type_config["template"]
+    pipeline.generator.set_prompt_file_override(prompt_type, prompt_file)
+    return prompt_type
+
+
+def _print_run_result(result, threshold: float) -> None:
+    if result.filter_stats:
+        print(f"\n  FILTER STATS:")
+        for k, v in result.filter_stats.items():
+            if v:
+                print(f"    {k}: {v}")
+
+    print(f"\n  CANDIDATES ({len(result.candidates)} survived filtering):")
+    for i, c in enumerate(result.candidates):
+        preview = c[:120].replace("\n", " | ")
+        print(f"    [{i}] {preview}...")
+
+    comp = result.comparison
+    if comp.ranking:
+        print(f"\n  EVALUATOR SCORES:")
+        print(f"    Best score:     {comp.best_score:.1f}/10")
+        print(f"    Groundedness:   {comp.groundedness}/10")
+        print(f"    Rawness:        {comp.rawness}/10")
+        print(f"    Specificity:    {comp.narrative_specificity}/10")
+        print(f"    Voice:          {comp.voice}/10")
+        print(f"    Engagement:     {comp.engagement_potential}/10")
+        if comp.reject_reason:
+            print(f"    REJECT REASON:  {comp.reject_reason}")
+        if comp.improvement:
+            print(f"    Improvement:    {comp.improvement[:100]}...")
+
+    if result.refinement:
+        print(f"\n  REFINEMENT:")
+        print(f"    Picked: {result.refinement.picked}")
+        print(f"    Score:  {result.refinement.final_score}/10")
+
+    print(f"\n  FINAL CONTENT (score: {result.final_score:.1f}/10):")
+    print(f"  {'—'*50}")
+    for line in result.final_content.split("\n"):
+        print(f"  {line}")
+    print(f"  {'—'*50}")
 
 
 def _print_batch_list(batches: list[dict]) -> None:
@@ -92,6 +252,260 @@ def _print_batch_detail(payload: dict | None) -> None:
             print(f"    {line}")
 
 
+def _record_eval_result(
+    *,
+    db,
+    batch_id: int,
+    content_type: str,
+    generator_model: str,
+    evaluator_model: str,
+    threshold: float,
+    window: SourceWindow,
+    result,
+    config,
+) -> None:
+    db.add_eval_result(
+        batch_id=batch_id,
+        content_type=content_type,
+        generator_model=generator_model,
+        evaluator_model=evaluator_model,
+        threshold=threshold,
+        source_window_hours=window.hours,
+        prompt_count=len(window.prompts),
+        commit_count=len(window.commits),
+        candidate_count=len(result.candidates),
+        final_score=result.final_score,
+        rejection_reason=result.comparison.reject_reason,
+        filter_stats=result.filter_stats,
+        final_content=_redact_final_content(result.final_content, config),
+    )
+
+
+def _run_single(args, config, db, embedder, semantic_threshold, knowledge_store, log_parser) -> None:
+    pipeline = _build_pipeline(
+        config=config,
+        db=db,
+        embedder=embedder,
+        semantic_threshold=semantic_threshold,
+        knowledge_store=knowledge_store,
+        generator_model=config.synthesis.model,
+        evaluator_model=config.synthesis.eval_model,
+    )
+    now = datetime.now(timezone.utc)
+    hours_slices = [8, 16, 24, 48, 72][:args.runs]
+
+    batch_id = None
+    if args.record:
+        batch_id = db.create_eval_batch(
+            label=args.label,
+            content_type=args.type,
+            generator_model=config.synthesis.model,
+            evaluator_model=config.synthesis.eval_model,
+            threshold=config.synthesis.eval_threshold,
+        )
+        print(f"Recording evaluation batch {batch_id}")
+
+    windows = _select_source_windows(
+        db=db,
+        log_parser=log_parser,
+        now=now,
+        hours_slices=hours_slices,
+        total_runs=args.runs,
+    )
+
+    results = []
+    for window in windows:
+        print(f"\n{'='*60}")
+        print(f"Run {window.run}/{args.runs} — last {window.hours}h")
+        print(f"  Commits: {len(window.commits)}, Prompts: {len(window.prompts)}")
+        print(f"  Content type: {args.type}")
+
+        avoidance = pipeline._build_avoidance_context()
+        if avoidance:
+            print(f"\n  AVOIDANCE CONTEXT:")
+            for line in avoidance.strip().split("\n"):
+                print(f"    {line}")
+        else:
+            print(f"\n  AVOIDANCE CONTEXT: (none — no recent published content)")
+
+        print(f"\n  Running pipeline...")
+        result = pipeline.run(
+            prompts=_prompt_texts(window.prompts),
+            commits=_commit_dicts(window.commits),
+            content_type=args.type,
+            threshold=config.synthesis.eval_threshold,
+        )
+        _print_run_result(result, config.synthesis.eval_threshold)
+
+        if batch_id is not None:
+            _record_eval_result(
+                db=db,
+                batch_id=batch_id,
+                content_type=args.type,
+                generator_model=config.synthesis.model,
+                evaluator_model=config.synthesis.eval_model,
+                threshold=config.synthesis.eval_threshold,
+                window=window,
+                result=result,
+                config=config,
+            )
+            print(f"\n  Recorded result in batch {batch_id}")
+
+        results.append({
+            "run": window.run,
+            "hours": window.hours,
+            "commits": len(window.commits),
+            "prompts": len(window.prompts),
+            "candidates": len(result.candidates),
+            "score": result.final_score,
+            "filter_stats": result.filter_stats,
+            "rejected": result.comparison.reject_reason is not None,
+        })
+
+    log_parser.log_skipped_project_counts("eval_pipeline")
+
+    if results:
+        print(f"\n{'='*60}")
+        print(f"SUMMARY")
+        print(f"{'='*60}")
+        print(f"{'Run':>4} {'Window':>8} {'Commits':>8} {'Cands':>6} {'Score':>6} {'Status':>12}")
+        print(f"{'—'*4:>4} {'—'*8:>8} {'—'*8:>8} {'—'*6:>6} {'—'*6:>6} {'—'*12:>12}")
+        for r in results:
+            status = "REJECTED" if r["rejected"] else (
+                "PASS" if r["score"] >= config.synthesis.eval_threshold * 10 else "BELOW"
+            )
+            print(f"{r['run']:>4} {r['hours']:>6}h {r['commits']:>8} "
+                  f"{r['candidates']:>6} {r['score']:>6.1f} {status:>12}")
+
+        avg_score = sum(r["score"] for r in results) / len(results)
+        print(f"\n  Average score: {avg_score:.1f}/10")
+        print(f"  Threshold: {config.synthesis.eval_threshold * 10}/10")
+
+
+def _run_matrix(args, config, db, embedder, semantic_threshold, knowledge_store, log_parser) -> None:
+    variants = args.variant or []
+    if not variants:
+        raise SystemExit("--matrix requires at least one --variant")
+
+    now = datetime.now(timezone.utc)
+    hours_slices = [8, 16, 24, 48, 72][:args.runs]
+    parent_label = args.label or f"matrix-{now.strftime('%Y%m%d-%H%M%S')}"
+    windows = _select_source_windows(
+        db=db,
+        log_parser=log_parser,
+        now=now,
+        hours_slices=hours_slices,
+        total_runs=args.runs,
+    )
+
+    print(f"\nMatrix label: {parent_label}")
+    print(f"Selected windows: {', '.join(f'{w.hours}h' for w in windows) or '(none)'}")
+
+    summaries = []
+    for variant in variants:
+        pipeline = _build_pipeline(
+            config=config,
+            db=db,
+            embedder=embedder,
+            semantic_threshold=semantic_threshold,
+            knowledge_store=knowledge_store,
+            generator_model=variant.generator_model,
+            evaluator_model=variant.evaluator_model,
+        )
+        prompt_type = _apply_prompt_variant(pipeline, args.type, variant.prompt_file)
+        batch_label = f"{parent_label}/{variant.name}"
+        batch_id = db.create_eval_batch(
+            label=batch_label,
+            content_type=args.type,
+            generator_model=variant.generator_model,
+            evaluator_model=variant.evaluator_model,
+            threshold=config.synthesis.eval_threshold,
+        )
+
+        print(f"\n{'='*60}")
+        print(f"Variant {variant.name} — batch {batch_id}")
+        print(f"  Prompt: {variant.prompt_file} ({prompt_type})")
+        print(f"  Generator: {variant.generator_model}")
+        print(f"  Evaluator: {variant.evaluator_model}")
+
+        variant_results = []
+        for window in windows:
+            print(f"\n  Run {window.run}/{args.runs} — last {window.hours}h")
+            print(f"    Commits: {len(window.commits)}, Prompts: {len(window.prompts)}")
+            result = pipeline.run(
+                prompts=_prompt_texts(window.prompts),
+                commits=_commit_dicts(window.commits),
+                content_type=args.type,
+                threshold=config.synthesis.eval_threshold,
+            )
+            comp = result.comparison
+            status = "REJECTED" if comp.reject_reason else (
+                "PASS" if result.final_score >= config.synthesis.eval_threshold * 10 else "BELOW"
+            )
+            print(
+                f"    Score: {result.final_score:.1f}/10, "
+                f"Candidates: {len(result.candidates)}/{config.synthesis.num_candidates}, "
+                f"Status: {status}"
+            )
+            _record_eval_result(
+                db=db,
+                batch_id=batch_id,
+                content_type=args.type,
+                generator_model=variant.generator_model,
+                evaluator_model=variant.evaluator_model,
+                threshold=config.synthesis.eval_threshold,
+                window=window,
+                result=result,
+                config=config,
+            )
+            variant_results.append(result)
+
+        run_count = len(variant_results)
+        avg_score = (
+            sum(r.final_score for r in variant_results) / run_count
+            if run_count else 0.0
+        )
+        rejection_rate = (
+            sum(1 for r in variant_results if r.comparison.reject_reason) / run_count
+            if run_count else 0.0
+        )
+        candidate_survival_rate = (
+            sum(len(r.candidates) for r in variant_results)
+            / (run_count * config.synthesis.num_candidates)
+            if run_count and config.synthesis.num_candidates else 0.0
+        )
+        summaries.append({
+            "name": variant.name,
+            "batch_id": batch_id,
+            "runs": run_count,
+            "avg_score": avg_score,
+            "rejection_rate": rejection_rate,
+            "candidate_survival_rate": candidate_survival_rate,
+        })
+
+    log_parser.log_skipped_project_counts("eval_pipeline")
+
+    summaries.sort(
+        key=lambda row: (
+            -row["avg_score"],
+            row["rejection_rate"],
+            -row["candidate_survival_rate"],
+            row["name"],
+        )
+    )
+    print(f"\n{'='*60}")
+    print("MATRIX SUMMARY")
+    print(f"{'='*60}")
+    print(f"{'Rank':>4} {'Variant':<24} {'Batch':>6} {'Runs':>4} {'Avg':>6} {'Reject':>8} {'Survive':>8}")
+    print(f"{'—'*4:>4} {'—'*24:<24} {'—'*6:>6} {'—'*4:>4} {'—'*6:>6} {'—'*8:>8} {'—'*8:>8}")
+    for idx, row in enumerate(summaries, start=1):
+        print(
+            f"{idx:>4} {row['name'][:24]:<24} {row['batch_id']:>6} {row['runs']:>4} "
+            f"{row['avg_score']:>6.1f} {row['rejection_rate']*100:>7.0f}% "
+            f"{row['candidate_survival_rate']*100:>7.0f}%"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate pipeline output (dry run)")
     parser.add_argument("--runs", type=int, default=3, help="Number of pipeline runs")
@@ -100,6 +514,14 @@ def main() -> None:
     parser.add_argument("--label", help="Optional label for a recorded evaluation batch")
     parser.add_argument("--list", action="store_true", help="List recent recorded evaluation batches")
     parser.add_argument("--show", type=int, metavar="BATCH_ID", help="Show a recorded evaluation batch")
+    parser.add_argument("--matrix", action="store_true", help="Compare prompt/model variants")
+    parser.add_argument(
+        "--variant",
+        action="append",
+        type=_parse_variant,
+        metavar="NAME:PROMPT_FILE:GENERATOR_MODEL:EVALUATOR_MODEL",
+        help="Variant for --matrix; repeat for each prompt/model combination",
+    )
     args = parser.parse_args()
 
     with script_context() as (config, db):
@@ -132,175 +554,19 @@ def main() -> None:
             from knowledge.store import KnowledgeStore
             knowledge_store = KnowledgeStore(db.conn, embedder)
 
-        pipeline = SynthesisPipeline(
-            api_key=config.anthropic.api_key,
-            generator_model=config.synthesis.model,
-            evaluator_model=config.synthesis.eval_model,
-            db=db,
-            num_candidates=config.synthesis.num_candidates,
-            anthropic_timeout=config.timeouts.anthropic_seconds,
-            embedder=embedder,
-            semantic_threshold=semantic_threshold,
-            knowledge_store=knowledge_store,
-            claim_check_enabled=config.synthesis.claim_check_enabled,
-            restricted_prompt_behavior=getattr(
-                config.curated_sources, "restricted_prompt_behavior", "strict"
-            ) if config.curated_sources else "strict",
-        )
-
-        # Gather prompts and commits for different time windows
         log_parser = ClaudeLogParser(
             config.paths.claude_logs,
             config.paths.allowed_projects,
             redaction_patterns=config.privacy.redaction_patterns,
         )
-        now = datetime.now(timezone.utc)
-
-        # Time slices: 8h, 16h, 24h (or fewer if --runs < 3)
-        hours_slices = [8, 16, 24, 48, 72][:args.runs]
-
-        batch_id = None
-        if args.record:
-            batch_id = db.create_eval_batch(
-                label=args.label,
-                content_type=args.type,
-                generator_model=config.synthesis.model,
-                evaluator_model=config.synthesis.eval_model,
-                threshold=config.synthesis.eval_threshold,
+        if args.matrix:
+            _run_matrix(
+                args, config, db, embedder, semantic_threshold, knowledge_store, log_parser
             )
-            print(f"Recording evaluation batch {batch_id}")
-
-        results = []
-        for run_idx, hours in enumerate(hours_slices):
-            since = now - timedelta(hours=hours)
-            commits = db.get_commits_in_range(since, now)
-            prompts = list(log_parser.get_messages_since(since))
-
-            if not commits or not prompts:
-                print(f"\n{'='*60}")
-                print(f"Run {run_idx + 1}/{args.runs} — last {hours}h: "
-                      f"skipped (commits={len(commits)}, prompts={len(prompts)})")
-                continue
-
-            commit_dicts = [
-                {"sha": c.get("commit_sha", ""), "repo_name": c.get("repo_name", ""),
-                 "message": c.get("commit_message", "")}
-                for c in commits
-            ]
-            prompt_texts = [p.prompt_text for p in prompts]
-
-            print(f"\n{'='*60}")
-            print(f"Run {run_idx + 1}/{args.runs} — last {hours}h")
-            print(f"  Commits: {len(commits)}, Prompts: {len(prompts)}")
-            print(f"  Content type: {args.type}")
-
-            # Show avoidance context
-            avoidance = pipeline._build_avoidance_context()
-            if avoidance:
-                print(f"\n  AVOIDANCE CONTEXT:")
-                for line in avoidance.strip().split("\n"):
-                    print(f"    {line}")
-            else:
-                print(f"\n  AVOIDANCE CONTEXT: (none — no recent published content)")
-
-            # Run pipeline
-            print(f"\n  Running pipeline...")
-            result = pipeline.run(
-                prompts=prompt_texts,
-                commits=commit_dicts,
-                content_type=args.type,
-                threshold=config.synthesis.eval_threshold,
+        else:
+            _run_single(
+                args, config, db, embedder, semantic_threshold, knowledge_store, log_parser
             )
-
-            # Filter stats
-            if result.filter_stats:
-                print(f"\n  FILTER STATS:")
-                for k, v in result.filter_stats.items():
-                    if v:
-                        print(f"    {k}: {v}")
-
-            # Candidates
-            print(f"\n  CANDIDATES ({len(result.candidates)} survived filtering):")
-            for i, c in enumerate(result.candidates):
-                preview = c[:120].replace("\n", " | ")
-                print(f"    [{i}] {preview}...")
-
-            # Evaluator scores
-            comp = result.comparison
-            if comp.ranking:
-                print(f"\n  EVALUATOR SCORES:")
-                print(f"    Best score:     {comp.best_score:.1f}/10")
-                print(f"    Groundedness:   {comp.groundedness}/10")
-                print(f"    Rawness:        {comp.rawness}/10")
-                print(f"    Specificity:    {comp.narrative_specificity}/10")
-                print(f"    Voice:          {comp.voice}/10")
-                print(f"    Engagement:     {comp.engagement_potential}/10")
-                if comp.reject_reason:
-                    print(f"    REJECT REASON:  {comp.reject_reason}")
-                if comp.improvement:
-                    print(f"    Improvement:    {comp.improvement[:100]}...")
-
-            # Refinement
-            if result.refinement:
-                print(f"\n  REFINEMENT:")
-                print(f"    Picked: {result.refinement.picked}")
-                print(f"    Score:  {result.refinement.final_score}/10")
-
-            # Final content
-            print(f"\n  FINAL CONTENT (score: {result.final_score:.1f}/10):")
-            print(f"  {'—'*50}")
-            for line in result.final_content.split("\n"):
-                print(f"  {line}")
-            print(f"  {'—'*50}")
-
-            if batch_id is not None:
-                db.add_eval_result(
-                    batch_id=batch_id,
-                    content_type=args.type,
-                    generator_model=config.synthesis.model,
-                    evaluator_model=config.synthesis.eval_model,
-                    threshold=config.synthesis.eval_threshold,
-                    source_window_hours=hours,
-                    prompt_count=len(prompts),
-                    commit_count=len(commits),
-                    candidate_count=len(result.candidates),
-                    final_score=result.final_score,
-                    rejection_reason=comp.reject_reason,
-                    filter_stats=result.filter_stats,
-                    final_content=_redact_final_content(result.final_content, config),
-                )
-                print(f"\n  Recorded result in batch {batch_id}")
-
-            results.append({
-                "run": run_idx + 1,
-                "hours": hours,
-                "commits": len(commits),
-                "prompts": len(prompts),
-                "candidates": len(result.candidates),
-                "score": result.final_score,
-                "filter_stats": result.filter_stats,
-                "rejected": comp.reject_reason is not None,
-            })
-
-        log_parser.log_skipped_project_counts("eval_pipeline")
-
-        # Summary table
-        if results:
-            print(f"\n{'='*60}")
-            print(f"SUMMARY")
-            print(f"{'='*60}")
-            print(f"{'Run':>4} {'Window':>8} {'Commits':>8} {'Cands':>6} {'Score':>6} {'Status':>12}")
-            print(f"{'—'*4:>4} {'—'*8:>8} {'—'*8:>8} {'—'*6:>6} {'—'*6:>6} {'—'*12:>12}")
-            for r in results:
-                status = "REJECTED" if r["rejected"] else (
-                    "PASS" if r["score"] >= config.synthesis.eval_threshold * 10 else "BELOW"
-                )
-                print(f"{r['run']:>4} {r['hours']:>6}h {r['commits']:>8} "
-                      f"{r['candidates']:>6} {r['score']:>6.1f} {status:>12}")
-
-            avg_score = sum(r["score"] for r in results) / len(results)
-            print(f"\n  Average score: {avg_score:.1f}/10")
-            print(f"  Threshold: {config.synthesis.eval_threshold * 10}/10")
 
 
 if __name__ == "__main__":

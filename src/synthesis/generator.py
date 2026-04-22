@@ -35,9 +35,17 @@ class ContentGenerator:
         self.model = model
         self.db = db
         self.prompt_versions: dict[str, dict] = {}
+        self.prompt_file_overrides: dict[str, Path] = {}
+
+    def set_prompt_file_override(self, prompt_type: str, prompt_file: str | Path) -> None:
+        """Use an alternate file for a registered prompt type."""
+        self.prompt_file_overrides[prompt_type] = Path(prompt_file)
 
     def _load_prompt(self, prompt_type: str) -> str:
-        prompt_file = self.PROMPTS_DIR / f"{prompt_type}.txt"
+        prompt_file = self.prompt_file_overrides.get(
+            prompt_type,
+            self.PROMPTS_DIR / f"{prompt_type}.txt",
+        )
         prompt_text = prompt_file.read_text()
         self._register_prompt(prompt_type, prompt_text)
         return prompt_text

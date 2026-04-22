@@ -708,3 +708,92 @@ class TestRecording:
         assert "stale_pattern_rejected" in captured.out
         db.get_eval_batch.assert_called_once_with(7)
         MockPipeline.assert_not_called()
+
+
+class TestMatrixMode:
+    def test_matrix_reuses_identical_source_windows_for_each_variant(self, tmp_path, capsys):
+        """--matrix selects source windows once, then reuses them for every variant."""
+        config = _make_config(embeddings_enabled=False)
+        config.synthesis.num_candidates = 4
+        db = MagicMock()
+        db.create_eval_batch.side_effect = [101, 102]
+        db.get_commits_in_range.side_effect = [
+            [_make_commit(sha="a", message="feat: first window")],
+            [_make_commit(sha="b", message="feat: second window")],
+        ]
+
+        mock_parser = MagicMock()
+        mock_parser.get_messages_since.side_effect = [
+            [_make_prompt("Prompt window 1")],
+            [_make_prompt("Prompt window 2")],
+        ]
+
+        prompt_a = tmp_path / "prompt_a.txt"
+        prompt_b = tmp_path / "prompt_b.txt"
+        prompt_a.write_text("Prompt A {prompts} {commits} {commit_count}")
+        prompt_b.write_text("Prompt B {prompts} {commits} {commit_count}")
+
+        pipeline_a = MagicMock()
+        pipeline_b = MagicMock()
+        for pipeline in (pipeline_a, pipeline_b):
+            pipeline.generator.CONTENT_TYPE_CONFIG = {
+                "x_thread": {"template": "x_thread_v2", "max_tokens": 2000},
+                "x_post": {"template": "x_post_v2", "max_tokens": 150},
+            }
+            pipeline.run.return_value = _make_pipeline_result(
+                candidates=["Candidate 1", "Candidate 2"],
+                final_score=8.0,
+            )
+
+        with patch("eval_pipeline.script_context") as mock_ctx, \
+             patch("eval_pipeline.ClaudeLogParser") as MockLogParser, \
+             patch("eval_pipeline.SynthesisPipeline") as MockPipeline, \
+             patch(
+                 "sys.argv",
+                 [
+                     "eval_pipeline.py",
+                     "--matrix",
+                     "--runs",
+                     "2",
+                     "--label",
+                     "parent",
+                     "--variant",
+                     f"a:{prompt_a}:gen-a:eval-a",
+                     "--variant",
+                     f"b:{prompt_b}:gen-b:eval-b",
+                 ],
+             ):
+
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            MockLogParser.return_value = mock_parser
+            MockPipeline.side_effect = [pipeline_a, pipeline_b]
+
+            import eval_pipeline
+            eval_pipeline.main()
+
+        assert db.get_commits_in_range.call_count == 2
+        assert mock_parser.get_messages_since.call_count == 2
+        assert pipeline_a.run.call_count == 2
+        assert pipeline_b.run.call_count == 2
+
+        for idx in range(2):
+            assert pipeline_a.run.call_args_list[idx][1]["prompts"] == (
+                pipeline_b.run.call_args_list[idx][1]["prompts"]
+            )
+            assert pipeline_a.run.call_args_list[idx][1]["commits"] == (
+                pipeline_b.run.call_args_list[idx][1]["commits"]
+            )
+
+        pipeline_a.generator.set_prompt_file_override.assert_called_once_with(
+            "x_thread_v2", prompt_a
+        )
+        pipeline_b.generator.set_prompt_file_override.assert_called_once_with(
+            "x_thread_v2", prompt_b
+        )
+        assert db.create_eval_batch.call_args_list[0][1]["label"] == "parent/a"
+        assert db.create_eval_batch.call_args_list[1][1]["label"] == "parent/b"
+        assert db.add_eval_result.call_count == 4
+
+        captured = capsys.readouterr()
+        assert "MATRIX SUMMARY" in captured.out
+        assert "Survive" in captured.out
