@@ -12,7 +12,7 @@ import argparse
 import logging
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -21,6 +21,9 @@ from runner import script_context
 from evaluation.topic_extractor import TopicExtractor, TOPIC_TAXONOMY
 
 logger = logging.getLogger(__name__)
+
+UID_DOMAIN = "presence.local"
+DEFAULT_ICS_OUTPUT = "content-calendar.ics"
 
 
 def validate_date(date_value: str, field_name: str = "date") -> None:
@@ -39,6 +42,383 @@ def validate_limit(limit_value: int, field_name: str) -> None:
     if limit_value is not None and limit_value < 1:
         logger.error(f"Invalid {field_name}: must be a positive integer.")
         sys.exit(1)
+
+
+def validate_days(days: int) -> None:
+    """Validate a positive lookahead period."""
+    if days < 1:
+        logger.error("Invalid days: must be a positive integer.")
+        sys.exit(1)
+
+
+def parse_calendar_datetime(value: str) -> datetime | None:
+    """Parse an ISO date or datetime into an aware datetime."""
+    if not value:
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def parse_calendar_date(value: str) -> date | None:
+    """Parse an ISO date or datetime into a calendar date."""
+    if not value:
+        return None
+    return parse_calendar_datetime(value).date()
+
+
+def ics_escape(value: object) -> str:
+    """Escape text for an iCalendar TEXT value."""
+    text = "" if value is None else str(value)
+    return (
+        text.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+    )
+
+
+def fold_ics_line(line: str) -> list[str]:
+    """Fold an iCalendar content line."""
+    if len(line) <= 75:
+        return [line]
+
+    lines = []
+    remaining = line
+    first = True
+    while remaining:
+        width = 75 if first else 74
+        chunk = remaining[:width]
+        remaining = remaining[width:]
+        lines.append(chunk if first else f" {chunk}")
+        first = False
+    return lines
+
+
+def format_ics_datetime(value: datetime) -> str:
+    """Format a datetime as UTC for iCalendar."""
+    return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def format_ics_date(value: date) -> str:
+    """Format a date for iCalendar."""
+    return value.strftime("%Y%m%d")
+
+
+def add_ics_line(lines: list[str], name: str, value: object, params: str = "") -> None:
+    """Append one escaped folded iCalendar content line."""
+    for folded in fold_ics_line(f"{name}{params}:{ics_escape(value)}"):
+        lines.append(folded)
+
+
+def add_ics_list_line(lines: list[str], name: str, values: list[object]) -> None:
+    """Append a folded comma-separated iCalendar value list."""
+    value = ",".join(ics_escape(item) for item in values)
+    for folded in fold_ics_line(f"{name}:{value}"):
+        lines.append(folded)
+
+
+def build_ics_event(event: dict, dtstamp: datetime) -> list[str]:
+    """Build a VEVENT block."""
+    lines = ["BEGIN:VEVENT"]
+    add_ics_line(lines, "UID", event["uid"])
+    lines.append(f"DTSTAMP:{format_ics_datetime(dtstamp)}")
+
+    starts_at = event["starts_at"]
+    if event.get("all_day"):
+        lines.append(f"DTSTART;VALUE=DATE:{format_ics_date(starts_at)}")
+        lines.append(f"DTEND;VALUE=DATE:{format_ics_date(starts_at + timedelta(days=1))}")
+    else:
+        lines.append(f"DTSTART:{format_ics_datetime(starts_at)}")
+
+    if event.get("created_at"):
+        lines.append(f"CREATED:{format_ics_datetime(event['created_at'])}")
+    if event.get("last_modified"):
+        lines.append(f"LAST-MODIFIED:{format_ics_datetime(event['last_modified'])}")
+
+    add_ics_line(lines, "SUMMARY", event["summary"])
+    add_ics_line(lines, "DESCRIPTION", event["description"])
+    if event.get("categories"):
+        add_ics_list_line(lines, "CATEGORIES", event["categories"])
+    for key, value in event.get("metadata", {}).items():
+        if value not in (None, ""):
+            add_ics_line(lines, key, value)
+    lines.append("END:VEVENT")
+    return lines
+
+
+def write_ics(events: list[dict], output: str | Path, now: datetime = None) -> None:
+    """Write a dependency-free iCalendar file."""
+    dtstamp = now or datetime.now(timezone.utc)
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Presence//Content Calendar//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+    ]
+    for event in sorted(events, key=lambda item: (item["starts_at"], item["uid"])):
+        lines.extend(build_ics_event(event, dtstamp))
+    lines.append("END:VCALENDAR")
+
+    Path(output).write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+
+
+def _description_from_pairs(pairs: list[tuple[str, object]]) -> str:
+    """Build a compact multi-line event description."""
+    return "\n".join(f"{label}: {value}" for label, value in pairs if value not in (None, ""))
+
+
+def get_planned_topic_ics_events(db, now: datetime, days: int) -> list[dict]:
+    """Return future planned topic events for the export window."""
+    today = now.astimezone(timezone.utc).date()
+    through = today + timedelta(days=days)
+    events = []
+
+    for plan in db.get_planned_topics(status="planned"):
+        target = plan.get("target_date")
+        target_day = parse_calendar_date(target)
+        if target_day is None or target_day < today or target_day > through:
+            continue
+
+        topic = plan["topic"]
+        campaign_name = plan.get("campaign_name")
+        description = _description_from_pairs([
+            ("Type", "Planned topic"),
+            ("Topic", topic),
+            ("Angle", plan.get("angle")),
+            ("Campaign", campaign_name),
+            ("Campaign goal", plan.get("campaign_goal")),
+            ("Status", plan.get("status")),
+            ("Planned topic ID", plan.get("id")),
+        ])
+
+        categories = ["planned", f"topic:{topic}"]
+        if campaign_name:
+            categories.append(f"campaign:{campaign_name}")
+
+        events.append({
+            "uid": f"planned-topic-{plan['id']}@{UID_DOMAIN}",
+            "starts_at": target_day,
+            "all_day": True,
+            "created_at": parse_calendar_datetime(plan.get("created_at")),
+            "summary": f"Planned: {topic}",
+            "description": description,
+            "categories": categories,
+            "metadata": {
+                "X-PRESENCE-TYPE": "PLANNED_TOPIC",
+                "X-PRESENCE-PLANNED-TOPIC-ID": plan.get("id"),
+                "X-PRESENCE-TOPIC": topic,
+                "X-PRESENCE-CAMPAIGN-ID": plan.get("campaign_id"),
+                "X-PRESENCE-CAMPAIGN": campaign_name,
+            },
+        })
+
+    return events
+
+
+def get_queued_publication_ics_events(db, now: datetime, days: int) -> list[dict]:
+    """Return queued publication events for the export window."""
+    through = now + timedelta(days=days)
+    cursor = db.conn.execute(
+        """SELECT pq.id AS queue_id,
+                  pq.content_id,
+                  pq.scheduled_at,
+                  pq.platform AS queue_platform,
+                  pq.status AS queue_status,
+                  pq.error AS queue_error,
+                  pq.created_at AS queue_created_at,
+                  gc.content,
+                  gc.content_type,
+                  pt.id AS planned_topic_id,
+                  pt.topic AS topic,
+                  pt.angle AS angle,
+                  pt.campaign_id,
+                  cc.name AS campaign_name,
+                  cc.goal AS campaign_goal
+           FROM publish_queue pq
+           INNER JOIN generated_content gc ON gc.id = pq.content_id
+           LEFT JOIN planned_topics pt ON pt.content_id = gc.id
+           LEFT JOIN content_campaigns cc ON cc.id = pt.campaign_id
+           WHERE pq.status IN ('queued', 'failed')
+           ORDER BY pq.scheduled_at ASC, pq.id ASC"""
+    )
+
+    events = []
+    for row in cursor.fetchall():
+        item = dict(row)
+        scheduled_at = parse_calendar_datetime(item.get("scheduled_at"))
+        if scheduled_at is None or scheduled_at > through:
+            continue
+
+        platform = item.get("queue_platform") or "all"
+        platform_label = platform if platform != "all" else "all platforms"
+        topic = item.get("topic")
+        campaign_name = item.get("campaign_name")
+        content_preview = (item.get("content") or "").strip()
+        if len(content_preview) > 280:
+            content_preview = f"{content_preview[:277]}..."
+
+        description = _description_from_pairs([
+            ("Type", "Queued publication"),
+            ("Platform", platform_label),
+            ("Status", item.get("queue_status")),
+            ("Topic", topic),
+            ("Angle", item.get("angle")),
+            ("Campaign", campaign_name),
+            ("Campaign goal", item.get("campaign_goal")),
+            ("Content type", item.get("content_type")),
+            ("Content ID", item.get("content_id")),
+            ("Queue ID", item.get("queue_id")),
+            ("Error", item.get("queue_error")),
+            ("Content", content_preview),
+        ])
+
+        categories = ["queued", f"platform:{platform}"]
+        if topic:
+            categories.append(f"topic:{topic}")
+        if campaign_name:
+            categories.append(f"campaign:{campaign_name}")
+
+        events.append({
+            "uid": f"publish-queue-{item['queue_id']}@{UID_DOMAIN}",
+            "starts_at": scheduled_at,
+            "all_day": False,
+            "created_at": parse_calendar_datetime(item.get("queue_created_at")),
+            "summary": f"Publish ({platform_label}): {item.get('content_type')}",
+            "description": description,
+            "categories": categories,
+            "metadata": {
+                "X-PRESENCE-TYPE": "PUBLISH_QUEUE",
+                "X-PRESENCE-QUEUE-ID": item.get("queue_id"),
+                "X-PRESENCE-CONTENT-ID": item.get("content_id"),
+                "X-PRESENCE-PLATFORM": platform,
+                "X-PRESENCE-TOPIC": topic,
+                "X-PRESENCE-PLANNED-TOPIC-ID": item.get("planned_topic_id"),
+                "X-PRESENCE-CAMPAIGN-ID": item.get("campaign_id"),
+                "X-PRESENCE-CAMPAIGN": campaign_name,
+            },
+        })
+
+    return events
+
+
+def get_content_publication_ics_events(db, now: datetime, days: int) -> list[dict]:
+    """Return durable publication retry events for the export window."""
+    through = now + timedelta(days=days)
+    cursor = db.conn.execute(
+        """SELECT cp.id AS publication_id,
+                  cp.content_id,
+                  cp.platform,
+                  cp.status,
+                  cp.next_retry_at,
+                  cp.updated_at,
+                  cp.error,
+                  cp.error_category,
+                  cp.attempt_count,
+                  gc.content,
+                  gc.content_type,
+                  pt.id AS planned_topic_id,
+                  pt.topic AS topic,
+                  pt.angle AS angle,
+                  pt.campaign_id,
+                  cc.name AS campaign_name,
+                  cc.goal AS campaign_goal
+           FROM content_publications cp
+           INNER JOIN generated_content gc ON gc.id = cp.content_id
+           LEFT JOIN planned_topics pt ON pt.content_id = gc.id
+           LEFT JOIN content_campaigns cc ON cc.id = pt.campaign_id
+           WHERE cp.status = 'failed'
+             AND cp.next_retry_at IS NOT NULL
+           ORDER BY cp.next_retry_at ASC, cp.id ASC"""
+    )
+
+    events = []
+    for row in cursor.fetchall():
+        item = dict(row)
+        retry_at = parse_calendar_datetime(item.get("next_retry_at"))
+        if retry_at is None or retry_at > through:
+            continue
+
+        topic = item.get("topic")
+        campaign_name = item.get("campaign_name")
+        content_preview = (item.get("content") or "").strip()
+        if len(content_preview) > 280:
+            content_preview = f"{content_preview[:277]}..."
+
+        description = _description_from_pairs([
+            ("Type", "Publication retry"),
+            ("Platform", item.get("platform")),
+            ("Status", item.get("status")),
+            ("Topic", topic),
+            ("Angle", item.get("angle")),
+            ("Campaign", campaign_name),
+            ("Campaign goal", item.get("campaign_goal")),
+            ("Content type", item.get("content_type")),
+            ("Content ID", item.get("content_id")),
+            ("Publication ID", item.get("publication_id")),
+            ("Attempt count", item.get("attempt_count")),
+            ("Error category", item.get("error_category")),
+            ("Error", item.get("error")),
+            ("Content", content_preview),
+        ])
+
+        categories = ["retry", f"platform:{item.get('platform')}"]
+        if topic:
+            categories.append(f"topic:{topic}")
+        if campaign_name:
+            categories.append(f"campaign:{campaign_name}")
+
+        events.append({
+            "uid": f"content-publication-{item['publication_id']}@{UID_DOMAIN}",
+            "starts_at": retry_at,
+            "all_day": False,
+            "last_modified": parse_calendar_datetime(item.get("updated_at")),
+            "summary": f"Retry publish ({item.get('platform')}): {item.get('content_type')}",
+            "description": description,
+            "categories": categories,
+            "metadata": {
+                "X-PRESENCE-TYPE": "CONTENT_PUBLICATION",
+                "X-PRESENCE-PUBLICATION-ID": item.get("publication_id"),
+                "X-PRESENCE-CONTENT-ID": item.get("content_id"),
+                "X-PRESENCE-PLATFORM": item.get("platform"),
+                "X-PRESENCE-TOPIC": topic,
+                "X-PRESENCE-PLANNED-TOPIC-ID": item.get("planned_topic_id"),
+                "X-PRESENCE-CAMPAIGN-ID": item.get("campaign_id"),
+                "X-PRESENCE-CAMPAIGN": campaign_name,
+            },
+        })
+
+    return events
+
+
+def cmd_export_ics(
+    db,
+    days: int = 30,
+    output: str = DEFAULT_ICS_OUTPUT,
+    include_queued: bool = True,
+    include_planned: bool = True,
+):
+    """Export planned topics and queued publications to an iCalendar file."""
+    validate_days(days)
+    if not include_queued and not include_planned:
+        logger.error("Nothing to export: enable --include-queued or --include-planned.")
+        sys.exit(1)
+
+    now = datetime.now(timezone.utc)
+    events = []
+    if include_planned:
+        events.extend(get_planned_topic_ics_events(db, now=now, days=days))
+    if include_queued:
+        events.extend(get_queued_publication_ics_events(db, now=now, days=days))
+        events.extend(get_content_publication_ics_events(db, now=now, days=days))
+
+    write_ics(events, output=output, now=now)
+    logger.info(f"Exported {len(events)} calendar events to {output}")
 
 
 def cmd_backfill(db, config):
@@ -367,6 +747,33 @@ def main():
         help="List all planned topics"
     )
 
+    # iCalendar export command
+    export_ics_parser = subparsers.add_parser(
+        "export-ics",
+        help="Export future planned topics and queued publications to .ics"
+    )
+    export_ics_parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Number of future days to export (default: 30)"
+    )
+    export_ics_parser.add_argument(
+        "--output",
+        default=DEFAULT_ICS_OUTPUT,
+        help=f"Output .ics path (default: {DEFAULT_ICS_OUTPUT})"
+    )
+    export_ics_parser.add_argument(
+        "--include-queued",
+        action="store_true",
+        help="Include queued publications and retry events"
+    )
+    export_ics_parser.add_argument(
+        "--include-planned",
+        action="store_true",
+        help="Include planned topic target dates"
+    )
+
     # Campaign commands
     campaign_parser = subparsers.add_parser(
         "campaign",
@@ -422,6 +829,15 @@ def main():
             )
         elif args.command == "list":
             cmd_list(db)
+        elif args.command == "export-ics":
+            include_any = args.include_queued or args.include_planned
+            cmd_export_ics(
+                db,
+                days=args.days,
+                output=args.output,
+                include_queued=args.include_queued if include_any else True,
+                include_planned=args.include_planned if include_any else True
+            )
         elif args.command == "campaign":
             if args.campaign_command == "create":
                 cmd_campaign_create(

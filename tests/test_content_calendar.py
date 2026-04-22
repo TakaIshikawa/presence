@@ -9,6 +9,12 @@ import pytest
 
 from storage.db import Database
 from evaluation.topic_extractor import TopicExtractor, TOPIC_TAXONOMY
+from scripts.content_calendar import (
+    get_content_publication_ics_events,
+    get_planned_topic_ics_events,
+    get_queued_publication_ics_events,
+    write_ics,
+)
 
 
 @pytest.fixture
@@ -490,3 +496,109 @@ class TestContentCalendarIntegration:
         # Verify topic appears in frequency
         frequencies = db.get_topic_frequency(days=30)
         assert any(f["topic"] == "performance" for f in frequencies)
+
+
+# --- iCalendar Export Tests ---
+
+class TestContentCalendarIcsExport:
+    """Test iCalendar export event generation."""
+
+    def test_planned_topics_export_as_all_day_events(self, db, tmp_path):
+        """Future planned topics become stable all-day VEVENTs."""
+        campaign_id = db.create_campaign(name="Testing Arc", goal="Cover testing deeply")
+        planned_id = db.insert_planned_topic(
+            topic="testing",
+            angle="property-based tests",
+            target_date="2026-05-03",
+            campaign_id=campaign_id,
+        )
+        db.insert_planned_topic(topic="architecture", target_date="2026-07-01")
+
+        now = datetime(2026, 5, 1, 12, tzinfo=timezone.utc)
+        events = get_planned_topic_ics_events(db, now=now, days=7)
+        output = tmp_path / "calendar.ics"
+        write_ics(events, output=output, now=now)
+
+        text = output.read_text(encoding="utf-8")
+        assert len(events) == 1
+        assert f"UID:planned-topic-{planned_id}@presence.local" in text
+        assert "DTSTART;VALUE=DATE:20260503" in text
+        assert "DTEND;VALUE=DATE:20260504" in text
+        assert "SUMMARY:Planned: testing" in text
+        assert "X-PRESENCE-TOPIC:testing" in text
+        assert "X-PRESENCE-CAMPAIGN:Testing Arc" in text
+        assert "architecture" not in text
+
+    def test_queued_publications_export_with_platform_and_metadata(self, db, tmp_path):
+        """Queued publish rows become timed VEVENTs with platform labels."""
+        campaign_id = db.create_campaign(name="Launch", goal="Ship the launch arc")
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=["abc"],
+            source_messages=["message"],
+            content="Queued post about escaping, semicolons; and commas, safely.",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.insert_planned_topic(
+            topic="architecture",
+            angle="boundary decisions",
+            target_date="2026-05-04",
+            campaign_id=campaign_id,
+            status="generated",
+        )
+        db.conn.execute(
+            "UPDATE planned_topics SET content_id = ? WHERE topic = 'architecture'",
+            (content_id,),
+        )
+        queue_id = db.queue_for_publishing(
+            content_id=content_id,
+            scheduled_at="2026-05-02T09:30:00+00:00",
+            platform="bluesky",
+        )
+
+        now = datetime(2026, 5, 1, 12, tzinfo=timezone.utc)
+        events = get_queued_publication_ics_events(db, now=now, days=7)
+        output = tmp_path / "queued.ics"
+        write_ics(events, output=output, now=now)
+
+        text = output.read_text(encoding="utf-8")
+        assert len(events) == 1
+        assert f"UID:publish-queue-{queue_id}@presence.local" in text
+        assert "DTSTART:20260502T093000Z" in text
+        assert "SUMMARY:Publish (bluesky): x_post" in text
+        assert "CATEGORIES:queued,platform:bluesky,topic:architecture,campaign:Launch" in text
+        assert "X-PRESENCE-CONTENT-ID:" in text
+        assert "Content: Queued post about escaping\\, semicolons\\; and commas\\, safely." in text
+
+    def test_content_publication_retries_export_as_due_events(self, db):
+        """Failed durable publication rows with retry times become events."""
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=["abc"],
+            source_messages=["message"],
+            content="Retry me",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.conn.execute(
+            """INSERT INTO content_publications
+               (content_id, platform, status, error, error_category, attempt_count,
+                next_retry_at, updated_at)
+               VALUES (?, 'x', 'failed', 'rate limited', 'rate_limit', 2, ?, ?)""",
+            (
+                content_id,
+                "2026-05-02T10:00:00+00:00",
+                "2026-05-01T12:00:00+00:00",
+            ),
+        )
+        db.conn.commit()
+
+        now = datetime(2026, 5, 1, 12, tzinfo=timezone.utc)
+        events = get_content_publication_ics_events(db, now=now, days=7)
+
+        assert len(events) == 1
+        assert events[0]["uid"].startswith("content-publication-")
+        assert events[0]["summary"] == "Retry publish (x): x_post"
+        assert events[0]["metadata"]["X-PRESENCE-PLATFORM"] == "x"
+        assert "Error category: rate_limit" in events[0]["description"]
