@@ -102,6 +102,19 @@ CREATE TABLE IF NOT EXISTS content_claim_checks (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Deterministic persona drift guard summary for generated content
+CREATE TABLE IF NOT EXISTS content_persona_guard (
+    content_id INTEGER PRIMARY KEY REFERENCES generated_content(id) ON DELETE CASCADE,
+    checked INTEGER NOT NULL DEFAULT 0,
+    passed INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL,
+    score REAL NOT NULL DEFAULT 0,
+    reasons TEXT,
+    metrics TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Durable platform-specific copy variants for generated content reuse
 CREATE TABLE IF NOT EXISTS content_variants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

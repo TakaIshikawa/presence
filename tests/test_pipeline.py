@@ -773,6 +773,117 @@ class TestPipelineResult:
         assert summary["unsupported_count"] == 1
         assert summary["annotation_text"] == "metric: unsupported claim"
 
+    def test_pipeline_result_persists_persona_guard_summary(self, db):
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Generated content",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        result = PipelineResult(
+            batch_id="batch123",
+            candidates=[],
+            comparison=_make_comparison(),
+            refinement=None,
+            final_content="Generated content",
+            final_score=8.0,
+            source_prompts=[],
+            source_commits=[],
+            persona_guard_summary={
+                "checked": True,
+                "passed": False,
+                "status": "failed",
+                "score": 0.42,
+                "reasons": ["banned tone markers: unlock"],
+                "metrics": {"banned_marker_count": 1},
+            },
+        )
+
+        result.save_persona_guard_summary(db, content_id)
+
+        summary = db.get_persona_guard_summary(content_id)
+        assert summary["checked"] is True
+        assert summary["passed"] is False
+        assert summary["status"] == "failed"
+        assert summary["score"] == pytest.approx(0.42)
+        assert summary["reasons"] == ["banned tone markers: unlock"]
+        assert summary["metrics"]["banned_marker_count"] == 1
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_persona_guard_rejects_final_content(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+        db.get_recent_published_content_all.return_value = [
+            {"content": "I traced the queue worker timeout in worker.py today."},
+            {"content": "The retry path got easier to test after the fixture change."},
+            {"content": "Debugging the CLI config worked once the error named the file."},
+        ]
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Unlock scalable innovation with revolutionary best-in-class systems."]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5, ranking=[0], improvement=None
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.final_score == 0
+        assert result.persona_guard_summary["status"] == "failed"
+        assert result.filter_stats["persona_guard"]["passed"] is False
+        assert "Persona guard failed" in result.comparison.reject_reason
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_persona_guard_disabled_does_not_reject(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+        db.get_recent_published_content_all.return_value = [
+            {"content": "I traced the queue worker timeout in worker.py today."},
+            {"content": "The retry path got easier to test after the fixture change."},
+            {"content": "Debugging the CLI config worked once the error named the file."},
+        ]
+
+        pipeline = SynthesisPipeline(
+            "key",
+            "gen-model",
+            "eval-model",
+            db,
+            persona_guard_enabled=False,
+        )
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Unlock scalable innovation with revolutionary best-in-class systems."]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5, ranking=[0], improvement=None
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
+
+        assert result.final_score == pytest.approx(9.5)
+        assert result.persona_guard_summary["status"] == "disabled"
+        assert result.filter_stats["persona_guard"]["checked"] is False
+
     @patch("synthesis.pipeline.ContentRefiner")
     @patch("synthesis.pipeline.CrossModelEvaluator")
     @patch("synthesis.pipeline.ContentGenerator")

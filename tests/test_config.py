@@ -464,6 +464,41 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.synthesis.claim_check_enabled is False
 
+    def test_synthesis_persona_guard_defaults(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert cfg.synthesis.persona_guard_enabled is True
+        assert cfg.synthesis.persona_guard_min_score == 0.55
+        assert cfg.synthesis.persona_guard_min_phrase_overlap == 0.08
+        assert cfg.synthesis.persona_guard_max_banned_markers == 0
+        assert cfg.synthesis.persona_guard_max_abstraction_ratio == 0.18
+        assert cfg.synthesis.persona_guard_min_grounding_score == 0.5
+        assert cfg.synthesis.persona_guard_recent_limit == 20
+        assert cfg.synthesis.persona_guard_min_recent_posts == 3
+
+    def test_synthesis_persona_guard_overrides(self, tmp_path):
+        data = _minimal_config_dict()
+        data["synthesis"].update(
+            {
+                "persona_guard_enabled": False,
+                "persona_guard_min_score": 0.7,
+                "persona_guard_min_phrase_overlap": 0.12,
+                "persona_guard_max_banned_markers": 1,
+                "persona_guard_max_abstraction_ratio": 0.25,
+                "persona_guard_min_grounding_score": 1.0,
+                "persona_guard_recent_limit": 12,
+                "persona_guard_min_recent_posts": 5,
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.synthesis.persona_guard_enabled is False
+        assert cfg.synthesis.persona_guard_min_score == 0.7
+        assert cfg.synthesis.persona_guard_min_phrase_overlap == 0.12
+        assert cfg.synthesis.persona_guard_max_banned_markers == 1
+        assert cfg.synthesis.persona_guard_max_abstraction_ratio == 0.25
+        assert cfg.synthesis.persona_guard_min_grounding_score == 1.0
+        assert cfg.synthesis.persona_guard_recent_limit == 12
+        assert cfg.synthesis.persona_guard_min_recent_posts == 5
+
     def test_polling_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert cfg.polling.readiness_token_threshold == 500

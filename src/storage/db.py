@@ -148,6 +148,19 @@ class Database:
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_persona_guard (
+                    content_id INTEGER PRIMARY KEY REFERENCES generated_content(id) ON DELETE CASCADE,
+                    checked INTEGER NOT NULL DEFAULT 0,
+                    passed INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL,
+                    score REAL NOT NULL DEFAULT 0,
+                    reasons TEXT,
+                    metrics TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             # Migrate knowledge licensing for prompt-safety filtering
             k_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(knowledge)")}
             if k_cols and "license" not in k_cols:
@@ -1031,6 +1044,7 @@ class Database:
         image_alt_text: Optional[str] = None,
         source_activity_ids: Optional[list[str]] = None,
         claim_check_summary: Optional[dict] = None,
+        persona_guard_summary: Optional[dict] = None,
     ) -> int:
         cursor = self.conn.execute(
             """INSERT INTO generated_content
@@ -1060,6 +1074,8 @@ class Database:
                 unsupported_count=claim_check_summary.get("unsupported_count", 0),
                 annotation_text=claim_check_summary.get("annotation_text"),
             )
+        if persona_guard_summary:
+            self.save_persona_guard_summary(content_id, persona_guard_summary)
         self.conn.commit()
         return content_id
 
@@ -1106,6 +1122,51 @@ class Database:
             (content_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    def save_persona_guard_summary(
+        self,
+        content_id: int,
+        summary: dict,
+    ) -> None:
+        """Upsert deterministic persona guard summary for generated content."""
+        self.conn.execute(
+            """INSERT INTO content_persona_guard
+               (content_id, checked, passed, status, score, reasons, metrics)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(content_id) DO UPDATE SET
+                   checked = excluded.checked,
+                   passed = excluded.passed,
+                   status = excluded.status,
+                   score = excluded.score,
+                   reasons = excluded.reasons,
+                   metrics = excluded.metrics,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (
+                content_id,
+                1 if summary.get("checked") else 0,
+                1 if summary.get("passed") else 0,
+                summary.get("status", "unknown"),
+                float(summary.get("score") or 0),
+                json.dumps(summary.get("reasons") or []),
+                json.dumps(summary.get("metrics") or {}),
+            ),
+        )
+        self.conn.commit()
+
+    def get_persona_guard_summary(self, content_id: int) -> dict | None:
+        """Return persona guard summary for generated content, if present."""
+        row = self.conn.execute(
+            "SELECT * FROM content_persona_guard WHERE content_id = ?",
+            (content_id,),
+        ).fetchone()
+        if not row:
+            return None
+        summary = dict(row)
+        summary["checked"] = bool(summary.get("checked"))
+        summary["passed"] = bool(summary.get("passed"))
+        summary["reasons"] = self._parse_json_list(summary.get("reasons"))
+        summary["metrics"] = self._parse_json_object(summary.get("metrics")) or {}
+        return summary
 
     def get_source_commits_for_content(self, content_id: int) -> list[dict]:
         """Return source commit references for one generated content item.

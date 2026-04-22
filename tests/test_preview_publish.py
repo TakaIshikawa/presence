@@ -233,3 +233,30 @@ def test_preview_queue_id_includes_claim_check_summary(db):
     assert preview["claim_check"]["checked"] is True
     assert preview["claim_check"]["status"] == "supported"
     assert "Claim check: supported (2 supported, 0 unsupported)" in format_preview(preview)
+
+
+def test_preview_includes_persona_guard_summary(db):
+    content_id = _insert_content(db, "Generic post")
+    db.save_persona_guard_summary(
+        content_id,
+        {
+            "checked": True,
+            "passed": False,
+            "status": "failed",
+            "score": 0.31,
+            "reasons": ["banned tone markers: unlock"],
+            "metrics": {"banned_marker_count": 1},
+        },
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    assert preview["persona_guard"]["checked"] is True
+    assert preview["persona_guard"]["passed"] is False
+    assert preview["persona_guard"]["status"] == "failed"
+    assert preview["persona_guard"]["score"] == pytest.approx(0.31)
+    assert preview["persona_guard"]["reasons"] == ["banned tone markers: unlock"]
+
+    text = format_preview(preview)
+    assert "Persona guard: failed (score 0.31)" in text
+    assert "- banned tone markers: unlock" in text

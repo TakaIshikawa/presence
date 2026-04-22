@@ -54,6 +54,14 @@ class SynthesisConfig:
     num_candidates: int
     format_weighting_enabled: bool = True
     claim_check_enabled: bool = True
+    persona_guard_enabled: bool = True
+    persona_guard_min_score: float = 0.55
+    persona_guard_min_phrase_overlap: float = 0.08
+    persona_guard_max_banned_markers: int = 0
+    persona_guard_max_abstraction_ratio: float = 0.18
+    persona_guard_min_grounding_score: float = 0.5
+    persona_guard_recent_limit: int = 20
+    persona_guard_min_recent_posts: int = 3
 
 
 @dataclass
@@ -635,6 +643,24 @@ def load_config(config_path: Optional[str] = None) -> Config:
             num_candidates=data["synthesis"].get("num_candidates", 3),
             format_weighting_enabled=data["synthesis"].get("format_weighting_enabled", True),
             claim_check_enabled=data["synthesis"].get("claim_check_enabled", True),
+            persona_guard_enabled=data["synthesis"].get("persona_guard_enabled", True),
+            persona_guard_min_score=data["synthesis"].get("persona_guard_min_score", 0.55),
+            persona_guard_min_phrase_overlap=data["synthesis"].get(
+                "persona_guard_min_phrase_overlap", 0.08
+            ),
+            persona_guard_max_banned_markers=data["synthesis"].get(
+                "persona_guard_max_banned_markers", 0
+            ),
+            persona_guard_max_abstraction_ratio=data["synthesis"].get(
+                "persona_guard_max_abstraction_ratio", 0.18
+            ),
+            persona_guard_min_grounding_score=data["synthesis"].get(
+                "persona_guard_min_grounding_score", 0.5
+            ),
+            persona_guard_recent_limit=data["synthesis"].get("persona_guard_recent_limit", 20),
+            persona_guard_min_recent_posts=data["synthesis"].get(
+                "persona_guard_min_recent_posts", 3
+            ),
         ),
         polling=PollingConfig(
             interval_minutes=_require(data, "polling", "interval_minutes", section="polling"),

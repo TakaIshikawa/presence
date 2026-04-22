@@ -19,6 +19,7 @@ from synthesis.presence_context import PresenceContextBuilder
 from synthesis.stale_patterns import STALE_PATTERNS
 from synthesis.claim_checker import ClaimChecker, ClaimCheckResult
 from synthesis.thread_validator import validate_thread
+from synthesis.persona_guard import PersonaGuard, PersonaGuardConfig, PersonaGuardResult
 from evaluation.topic_performance import TopicPerformanceAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -43,11 +44,17 @@ class PipelineResult:
     predictor_override_detail: Optional[dict] = None  # {evaluator_top, predictor_top, margin, ...}
     planned_topic_id: Optional[int] = None  # planned_topics.id used for campaign guidance
     claim_check_summary: Optional[dict] = None  # Persistable final-content claim-check summary
+    persona_guard_summary: Optional[dict] = None  # Persistable persona guard summary
 
     def save_claim_check_summary(self, db: Database, content_id: int) -> None:
         """Persist final claim-check summary after generated content is inserted."""
         if self.claim_check_summary:
             db.save_claim_check_summary(content_id, **self.claim_check_summary)
+
+    def save_persona_guard_summary(self, db: Database, content_id: int) -> None:
+        """Persist final persona guard summary after generated content is inserted."""
+        if self.persona_guard_summary:
+            db.save_persona_guard_summary(content_id, self.persona_guard_summary)
 
 
 def _claim_check_summary(result: ClaimCheckResult) -> dict:
@@ -219,6 +226,14 @@ class SynthesisPipeline:
         engagement_predictor=None,
         format_weighting_enabled: bool = True,
         claim_check_enabled: bool = True,
+        persona_guard_enabled: bool = True,
+        persona_guard_min_score: float = 0.55,
+        persona_guard_min_phrase_overlap: float = 0.08,
+        persona_guard_max_banned_markers: int = 0,
+        persona_guard_max_abstraction_ratio: float = 0.18,
+        persona_guard_min_grounding_score: float = 0.5,
+        persona_guard_recent_limit: int = 20,
+        persona_guard_min_recent_posts: int = 3,
         restricted_prompt_behavior: str = "strict",
     ):
         self.api_key = api_key
@@ -247,6 +262,17 @@ class SynthesisPipeline:
         self.claim_check_enabled = claim_check_enabled
         self.restricted_prompt_behavior = restricted_prompt_behavior
         self.claim_checker = ClaimChecker()
+        self.persona_guard_config = PersonaGuardConfig(
+            enabled=persona_guard_enabled,
+            min_score=persona_guard_min_score,
+            min_phrase_overlap=persona_guard_min_phrase_overlap,
+            max_banned_markers=persona_guard_max_banned_markers,
+            max_abstraction_ratio=persona_guard_max_abstraction_ratio,
+            min_grounding_score=persona_guard_min_grounding_score,
+            recent_limit=persona_guard_recent_limit,
+            min_recent_posts=persona_guard_min_recent_posts,
+        )
+        self.persona_guard = PersonaGuard(self.persona_guard_config)
         self.presence_context_builder = PresenceContextBuilder(db)
 
     # Character limits per content type
@@ -628,6 +654,28 @@ class SynthesisPipeline:
             source_commits=source_commits,
             linked_knowledge=linked_knowledge,
         )
+
+    def _check_persona_guard(
+        self,
+        content: str,
+        content_type: str,
+    ) -> PersonaGuardResult:
+        """Evaluate final content against recent published author voice."""
+        try:
+            recent = self.db.get_recent_published_content_all(
+                limit=self.persona_guard_config.recent_limit
+            )
+        except Exception as e:
+            logger.warning(f"  Persona guard skipped (recent content unavailable): {e}")
+            return PersonaGuardResult(
+                passed=True,
+                score=1.0,
+                reasons=["recent published content unavailable"],
+                metrics={"content_type": content_type},
+                checked=False,
+                status="skipped",
+            )
+        return self.persona_guard.check(content, recent)
 
     @staticmethod
     def _append_reject_reason(
@@ -1107,6 +1155,37 @@ class SynthesisPipeline:
                 final_content = truncated or final_content[:char_limit]
                 logger.warning(f"  Hard truncated to {len(final_content)} chars")
 
+        persona_guard_result = self._check_persona_guard(final_content, content_type)
+        persona_guard_summary = persona_guard_result.to_summary()
+        filter_stats["persona_guard"] = persona_guard_summary
+        if not persona_guard_result.passed:
+            guard_reason = (
+                "Persona guard failed: " + "; ".join(persona_guard_result.reasons)
+            )
+            logger.warning("  %s", guard_reason)
+            comparison = self._append_reject_reason(comparison, guard_reason)
+            knowledge_ids = [(kid, 0.3) for kid in trend_knowledge_ids]
+            return PipelineResult(
+                batch_id=batch_id,
+                candidates=candidate_texts,
+                comparison=comparison,
+                refinement=refinement,
+                final_content=final_content,
+                final_score=0,
+                source_prompts=prompts,
+                source_commits=source_commit_messages,
+                filter_stats=filter_stats,
+                predicted_engagement=None,
+                engagement_prediction_detail=None,
+                knowledge_ids=knowledge_ids,
+                content_format=best_format,
+                predictor_override=predictor_override,
+                predictor_override_detail=predictor_override_detail,
+                planned_topic_id=planned_topic_id,
+                claim_check_summary=None,
+                persona_guard_summary=persona_guard_summary,
+            )
+
         final_claim_check = self._check_final_claims(
             final_content,
             source_prompts=prompts,
@@ -1154,6 +1233,7 @@ class SynthesisPipeline:
                     predictor_override_detail=predictor_override_detail,
                     planned_topic_id=planned_topic_id,
                     claim_check_summary=claim_check_summary,
+                    persona_guard_summary=persona_guard_summary,
                 )
 
         # Stage 6: Engagement prediction logging.
@@ -1219,4 +1299,5 @@ class SynthesisPipeline:
             predictor_override_detail=predictor_override_detail,
             planned_topic_id=planned_topic_id,
             claim_check_summary=claim_check_summary,
+            persona_guard_summary=persona_guard_summary,
         )

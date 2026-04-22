@@ -92,6 +92,26 @@ def _fetch_claim_check_summary(db: Any, content_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def _fetch_persona_guard_summary(db: Any, content_id: int) -> dict | None:
+    getter = getattr(db, "get_persona_guard_summary", None)
+    if callable(getter):
+        summary = getter(content_id)
+        return dict(summary) if summary else None
+
+    row = db.conn.execute(
+        "SELECT * FROM content_persona_guard WHERE content_id = ?",
+        (content_id,),
+    ).fetchone()
+    if not row:
+        return None
+    summary = dict(row)
+    summary["checked"] = bool(summary.get("checked"))
+    summary["passed"] = bool(summary.get("passed"))
+    summary["reasons"] = json.loads(summary.get("reasons") or "[]")
+    summary["metrics"] = json.loads(summary.get("metrics") or "{}")
+    return summary
+
+
 def _claim_check_status(summary: dict | None) -> dict:
     if not summary:
         return {
@@ -109,6 +129,29 @@ def _claim_check_status(summary: dict | None) -> dict:
         "supported_count": summary.get("supported_count") or 0,
         "unsupported_count": unsupported_count,
         "annotation_text": summary.get("annotation_text"),
+        "created_at": summary.get("created_at"),
+        "updated_at": summary.get("updated_at"),
+    }
+
+
+def _persona_guard_status(summary: dict | None) -> dict:
+    if not summary:
+        return {
+            "checked": False,
+            "passed": None,
+            "status": "not_checked",
+            "score": None,
+            "reasons": [],
+            "metrics": {},
+        }
+
+    return {
+        "checked": bool(summary.get("checked")),
+        "passed": bool(summary.get("passed")),
+        "status": summary.get("status") or "unknown",
+        "score": summary.get("score"),
+        "reasons": summary.get("reasons") or [],
+        "metrics": summary.get("metrics") or {},
         "created_at": summary.get("created_at"),
         "updated_at": summary.get("updated_at"),
     }
@@ -228,6 +271,9 @@ def build_publication_preview(
     claim_check = _claim_check_status(
         _fetch_claim_check_summary(db, content["id"])
     )
+    persona_guard = _persona_guard_status(
+        _fetch_persona_guard_summary(db, content["id"])
+    )
 
     platforms = {}
     for platform in ("x", "bluesky"):
@@ -264,6 +310,7 @@ def build_publication_preview(
         },
         "queue": queue,
         "claim_check": claim_check,
+        "persona_guard": persona_guard,
         "platforms": platforms,
     }
 
@@ -306,6 +353,15 @@ def format_preview(preview: dict) -> str:
                 for line in claim_check["annotation_text"].splitlines()
                 if line.strip()
             )
+
+    persona_guard = preview.get("persona_guard")
+    if persona_guard:
+        score = persona_guard.get("score")
+        score_text = "n/a" if score is None else f"{float(score):.2f}"
+        lines.append(f"Persona guard: {persona_guard['status']} (score {score_text})")
+        if persona_guard.get("reasons"):
+            lines.append("Persona guard reasons:")
+            lines.extend(f"- {reason}" for reason in persona_guard["reasons"])
 
     for platform, rendered in preview["platforms"].items():
         status = rendered["status"]

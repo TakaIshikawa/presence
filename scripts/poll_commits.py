@@ -156,6 +156,14 @@ def main() -> None:
             engagement_predictor=engagement_predictor,
             format_weighting_enabled=config.synthesis.format_weighting_enabled,
             claim_check_enabled=config.synthesis.claim_check_enabled,
+            persona_guard_enabled=config.synthesis.persona_guard_enabled,
+            persona_guard_min_score=config.synthesis.persona_guard_min_score,
+            persona_guard_min_phrase_overlap=config.synthesis.persona_guard_min_phrase_overlap,
+            persona_guard_max_banned_markers=config.synthesis.persona_guard_max_banned_markers,
+            persona_guard_max_abstraction_ratio=config.synthesis.persona_guard_max_abstraction_ratio,
+            persona_guard_min_grounding_score=config.synthesis.persona_guard_min_grounding_score,
+            persona_guard_recent_limit=config.synthesis.persona_guard_recent_limit,
+            persona_guard_min_recent_posts=config.synthesis.persona_guard_min_recent_posts,
             restricted_prompt_behavior=getattr(
                 config.curated_sources, "restricted_prompt_behavior", "strict"
             ) if config.curated_sources else "strict",
@@ -426,6 +434,7 @@ def main() -> None:
             content_format=pipeline_result.content_format,
         )
         pipeline_result.save_claim_check_summary(db, content_id)
+        pipeline_result.save_persona_guard_summary(db, content_id)
         if pipeline_result.planned_topic_id and content_id:
             db.mark_planned_topic_generated(pipeline_result.planned_topic_id, content_id)
             logger.info(f"  Linked planned topic {pipeline_result.planned_topic_id}")
