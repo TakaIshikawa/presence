@@ -1588,6 +1588,70 @@ class TestReplyQueue:
         assert "quality_score" in cols
         assert "quality_flags" in cols
 
+    def test_get_expired_reply_drafts_returns_old_pending_x_and_bluesky(self, db):
+        now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+        x_id = self._insert_reply(db, tweet_id="x-old", platform="x")
+        bluesky_id = self._insert_reply(
+            db,
+            tweet_id="bsky-old",
+            platform="bluesky",
+            inbound_url="https://bsky.app/profile/alice/post/abc",
+        )
+        fresh_id = self._insert_reply(db, tweet_id="x-fresh", platform="x")
+        posted_id = self._insert_reply(db, tweet_id="x-posted", platform="x")
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id IN (?, ?)",
+            ("2026-04-20 12:00:00", x_id, bluesky_id),
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-23 10:00:00", fresh_id),
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ?, status = 'posted' WHERE id = ?",
+            ("2026-04-20 12:00:00", posted_id),
+        )
+        db.conn.commit()
+
+        expired = db.get_expired_reply_drafts(48, now=now)
+
+        assert [row["inbound_tweet_id"] for row in expired] == ["x-old", "bsky-old"]
+        assert {row["platform"] for row in expired} == {"x", "bluesky"}
+
+    def test_dismiss_expired_reply_drafts_marks_only_old_pending(self, db):
+        now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+        old_id = self._insert_reply(db, tweet_id="old", platform="x")
+        fresh_id = self._insert_reply(db, tweet_id="fresh", platform="bluesky")
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-20 12:00:00", old_id),
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-23 10:00:00", fresh_id),
+        )
+        db.conn.commit()
+
+        dismissed = db.dismiss_expired_reply_drafts(48, now=now)
+
+        assert dismissed == 1
+        rows = {
+            row["inbound_tweet_id"]: dict(row)
+            for row in db.conn.execute(
+                "SELECT inbound_tweet_id, status, reviewed_at FROM reply_queue"
+            )
+        }
+        assert rows["old"]["status"] == "dismissed"
+        assert rows["old"]["reviewed_at"] == "2026-04-23T12:00:00+00:00"
+        assert rows["fresh"]["status"] == "pending"
+        assert rows["fresh"]["reviewed_at"] is None
+
+    def test_expired_reply_drafts_rejects_non_positive_ttl(self, db):
+        with pytest.raises(ValueError, match="draft_ttl_hours"):
+            db.get_expired_reply_drafts(0)
+        with pytest.raises(ValueError, match="draft_ttl_hours"):
+            db.dismiss_expired_reply_drafts(-1)
+
 
 # ====================================================================
 

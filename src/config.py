@@ -65,6 +65,7 @@ class PollingConfig:
 class RepliesConfig:
     enabled: bool
     max_daily_replies: int
+    draft_ttl_hours: int = 48
 
 
 @dataclass
@@ -245,6 +246,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         replies_config = RepliesConfig(
             enabled=data["replies"].get("enabled", True),
             max_daily_replies=data["replies"].get("max_daily_replies", 10),
+            draft_ttl_hours=data["replies"].get("draft_ttl_hours", 48),
         )
     else:
         replies_config = RepliesConfig(enabled=True, max_daily_replies=10)

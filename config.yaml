@@ -65,6 +65,7 @@ cultivate:
 replies:
   enabled: true
   max_daily_replies: 10  # cap auto-drafted replies per day
+  draft_ttl_hours: 48    # dismiss pending reply drafts after this many hours
 
 # Embeddings for semantic search
 embeddings:

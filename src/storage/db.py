@@ -110,7 +110,19 @@ class Database:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN our_platform_id TEXT")
             if rq_cols and "platform_metadata" not in rq_cols:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN platform_metadata TEXT")
-            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_platform ON reply_queue(platform, inbound_tweet_id)")
+            if rq_cols and "detected_at" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN detected_at TEXT DEFAULT CURRENT_TIMESTAMP")
+            if rq_cols and "reviewed_at" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN reviewed_at TEXT")
+            if rq_cols and "posted_at" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN posted_at TEXT")
+            if rq_cols and "posted_tweet_id" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN posted_tweet_id TEXT")
+            rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
+            if {"platform", "inbound_tweet_id"}.issubset(rq_cols):
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_platform ON reply_queue(platform, inbound_tweet_id)")
+            if {"status", "detected_at"}.issubset(rq_cols):
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_pending_age ON reply_queue(status, detected_at)")
             # Migrate pipeline_runs for outcome tracking
             pr_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pipeline_runs)")}
             if pr_cols and "outcome" not in pr_cols:
@@ -1679,6 +1691,48 @@ class Database:
                ORDER BY detected_at ASC"""
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_expired_reply_drafts(
+        self,
+        draft_ttl_hours: int,
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get pending reply drafts older than the configured TTL."""
+        if draft_ttl_hours <= 0:
+            raise ValueError("draft_ttl_hours must be positive")
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=draft_ttl_hours)
+        cursor = self.conn.execute(
+            """SELECT * FROM reply_queue
+               WHERE status = 'pending'
+                 AND detected_at IS NOT NULL
+                 AND datetime(detected_at) <= datetime(?)
+               ORDER BY detected_at ASC""",
+            (cutoff.isoformat(),),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def dismiss_expired_reply_drafts(
+        self,
+        draft_ttl_hours: int,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Mark pending reply drafts older than the configured TTL as dismissed."""
+        if draft_ttl_hours <= 0:
+            raise ValueError("draft_ttl_hours must be positive")
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=draft_ttl_hours)
+        reviewed_at = now.isoformat()
+        cursor = self.conn.execute(
+            """UPDATE reply_queue
+               SET status = 'dismissed', reviewed_at = ?
+               WHERE status = 'pending'
+                 AND detected_at IS NOT NULL
+                 AND datetime(detected_at) <= datetime(?)""",
+            (reviewed_at, cutoff.isoformat()),
+        )
+        self.conn.commit()
+        return cursor.rowcount
 
     def update_reply_status(
         self,

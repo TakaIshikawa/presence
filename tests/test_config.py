@@ -146,11 +146,18 @@ class TestDataclassParsing:
         assert cfg.polling.weekly_digest_day == "monday"
 
     def test_replies_config_when_present(self, tmp_path):
-        data = _minimal_config_dict(replies={"enabled": False, "max_daily_replies": 5})
+        data = _minimal_config_dict(
+            replies={
+                "enabled": False,
+                "max_daily_replies": 5,
+                "draft_ttl_hours": 24,
+            }
+        )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert isinstance(cfg.replies, RepliesConfig)
         assert cfg.replies.enabled is False
         assert cfg.replies.max_daily_replies == 5
+        assert cfg.replies.draft_ttl_hours == 24
 
     def test_embeddings_config_when_present(self, tmp_path, monkeypatch):
         monkeypatch.setenv("VOYAGE_KEY", "vk-123")
@@ -355,6 +362,7 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert cfg.replies.enabled is True
         assert cfg.replies.max_daily_replies == 10
+        assert cfg.replies.draft_ttl_hours == 48
 
     def test_proactive_account_cooldown_default(self, tmp_path):
         data = _minimal_config_dict(proactive={"enabled": True})
@@ -366,6 +374,7 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.replies.enabled is False
         assert cfg.replies.max_daily_replies == 10  # default preserved
+        assert cfg.replies.draft_ttl_hours == 48
 
     def test_embeddings_none_when_missing(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
