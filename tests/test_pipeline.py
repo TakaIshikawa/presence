@@ -221,6 +221,57 @@ class TestContentTypeRouting:
         pipeline.generator.condense.assert_not_called()
         assert result.final_content == blog
 
+    @patch("evaluation.format_performance.FormatPerformanceAnalyzer")
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_format_recommendations_used_when_weighting_enabled(
+        self, MockFS, MockGen, MockEval, MockRefiner, MockAnalyzer
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+        db.get_recent_published_content_all.return_value = []
+        db.get_engagement_calibration_stats.return_value = {}
+        db.get_meta.return_value = None
+
+        analyzer = MockAnalyzer.return_value
+        analyzer.get_recommended_formats.return_value = ["tip", "question"]
+        analyzer.compute_selection_weights.return_value = {}
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Tip candidate", "Question candidate", "Other candidate"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5,
+            ranking=[0, 1, 2],
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(
+            SAMPLE_PROMPTS,
+            SAMPLE_COMMITS,
+            content_type="x_post",
+            platform="bluesky",
+        )
+
+        analyzer.get_recommended_formats.assert_called_once_with(
+            content_type="x_post",
+            platform="bluesky",
+            limit=3,
+            days=90,
+        )
+        format_directives = pipeline.generator.generate_candidates.call_args.kwargs[
+            "format_directives"
+        ]
+        assert "One actionable tip" in format_directives[0]
+        assert "Open with a genuine question" in format_directives[1]
+        assert result.content_format == "tip"
+
 
 # --- Refinement gating ---
 
