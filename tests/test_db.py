@@ -300,6 +300,33 @@ class TestInitSchemaMigrations:
             assert "idx_content_publications_content" in indexes
             assert "idx_content_publications_platform_status" in indexes
 
+    def test_migration_adds_campaign_id_before_schema_indexes(self, schema_path):
+        """Old DBs without planned_topics.campaign_id should initialize cleanly."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE planned_topics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic TEXT NOT NULL,
+                    angle TEXT,
+                    source_material TEXT,
+                    target_date TEXT,
+                    status TEXT DEFAULT 'planned',
+                    content_id INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(planned_topics)")}
+            assert "campaign_id" in cols
+            indexes = {
+                row[1]
+                for row in db.conn.execute("PRAGMA index_list(planned_topics)")
+            }
+            assert "idx_planned_topics_campaign" in indexes
+
     def test_migration_does_not_re_add_existing_columns(self, schema_path):
         """Test that migration does not attempt to re-add columns that are already present."""
         with Database(":memory:") as db:

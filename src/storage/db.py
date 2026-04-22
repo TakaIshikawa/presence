@@ -55,6 +55,7 @@ class Database:
     def init_schema(self, schema_path: str = "./schema.sql") -> None:
         """Initialize database with schema."""
         try:
+            self._preflight_existing_schema()
             schema = Path(schema_path).read_text()
             self.conn.executescript(schema)
             # Migrate: add columns if missing (existing DBs)
@@ -216,6 +217,38 @@ class Database:
             raise DatabaseError(
                 f"Failed to initialize database schema at {self.db_path}: {e}"
             ) from e
+
+    def _preflight_existing_schema(self) -> None:
+        """Apply migrations needed before running schema.sql against old DBs."""
+        tables = {
+            row[0]
+            for row in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "planned_topics" not in tables:
+            return
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS content_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                goal TEXT,
+                start_date TEXT,
+                end_date TEXT,
+                status TEXT DEFAULT 'planned',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        pt_cols = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(planned_topics)")
+        }
+        if "campaign_id" not in pt_cols:
+            self.conn.execute(
+                "ALTER TABLE planned_topics ADD COLUMN campaign_id INTEGER REFERENCES content_campaigns(id)"
+            )
+        self.conn.commit()
 
     # Claude messages
     def is_message_processed(self, message_uuid: str) -> bool:
