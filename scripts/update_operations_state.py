@@ -5,6 +5,8 @@ This ensures the tact maintainer has accurate data for anomaly detection.
 """
 
 import argparse
+import hashlib
+import json
 import logging
 import sqlite3
 import sys
@@ -13,6 +15,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import requests
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -47,6 +51,13 @@ class OperationsAlertThresholds:
     min_evaluation_pass_rate: float = 0.5
 
 
+@dataclass
+class OperationsWebhookConfig:
+    webhook_url: str = ""
+    webhook_enabled: bool = False
+    webhook_min_level: str = "alert"
+
+
 def alert_thresholds_from_config(config: Any) -> OperationsAlertThresholds:
     """Build alert thresholds from config.operations.alerts."""
     source = getattr(getattr(config, "operations", None), "alerts", None)
@@ -59,6 +70,18 @@ def alert_thresholds_from_config(config: Any) -> OperationsAlertThresholds:
         evaluation_window_hours=source.evaluation_window_hours,
         min_evaluation_runs=source.min_evaluation_runs,
         min_evaluation_pass_rate=source.min_evaluation_pass_rate,
+    )
+
+
+def webhook_config_from_config(config: Any) -> OperationsWebhookConfig:
+    """Build webhook delivery config from config.operations.alerts."""
+    source = getattr(getattr(config, "operations", None), "alerts", None)
+    if source is None:
+        return OperationsWebhookConfig()
+    return OperationsWebhookConfig(
+        webhook_url=getattr(source, "webhook_url", ""),
+        webhook_enabled=getattr(source, "webhook_enabled", False),
+        webhook_min_level=getattr(source, "webhook_min_level", "alert"),
     )
 
 
@@ -151,6 +174,95 @@ def update_operations_yaml(db_path, operations=None, alert_thresholds=None, now=
         yaml.dump(ops_data, f, default_flow_style=False, sort_keys=False)
 
     return synced > 0 or bool(ops_data["alerts"])
+
+
+def build_webhook_payload(summary: dict, source: str, min_level: str = "alert") -> dict:
+    """Build a compact webhook payload for unhealthy checks at or above min_level."""
+    min_rank = _level_rank(min_level)
+    generated_at = summary.get("generatedAt") or summary.get("generated_at")
+    alerts = []
+    for check_id, check in summary.get("checks", {}).items():
+        level = _check_level(check)
+        if _level_rank(level) < min_rank:
+            continue
+        alerts.append(
+            {
+                "id": check_id,
+                "level": level,
+                "summary": _check_summary(check),
+                "fingerprint": alert_fingerprint(source, check_id, check),
+            }
+        )
+    return {
+        "source": source,
+        "status": summary.get("status", "ok"),
+        "generatedAt": generated_at,
+        "alerts": alerts,
+    }
+
+
+def deliver_operations_alerts(
+    conn: sqlite3.Connection,
+    summary: dict,
+    webhook_config: OperationsWebhookConfig,
+    *,
+    source: str,
+    http_timeout: int = 30,
+    dry_run: bool = False,
+) -> dict:
+    """Deliver newly triggered unhealthy checks to the configured webhook."""
+    if not webhook_config.webhook_enabled or not webhook_config.webhook_url:
+        return {"status": "disabled", "sent": False, "payload": None, "dryRun": dry_run}
+
+    payload = build_webhook_payload(
+        summary,
+        source=source,
+        min_level=webhook_config.webhook_min_level,
+    )
+    if dry_run:
+        return {"status": "dry_run", "sent": False, "payload": payload, "dryRun": True}
+
+    new_alerts = []
+    for alert in payload["alerts"]:
+        check_key = _metadata_key(source, alert["id"])
+        previous = _get_metadata(conn, check_key)
+        if previous != alert["fingerprint"]:
+            new_alerts.append(alert)
+
+    _clear_resolved_fingerprints(
+        conn,
+        source=source,
+        active_check_ids=[alert["id"] for alert in payload["alerts"]],
+    )
+
+    if not new_alerts:
+        return {"status": "deduped", "sent": False, "payload": None, "dryRun": dry_run}
+
+    payload = {**payload, "alerts": new_alerts}
+    response = requests.post(webhook_config.webhook_url, json=payload, timeout=http_timeout)
+    response.raise_for_status()
+    for alert in new_alerts:
+        _set_metadata(conn, _metadata_key(source, alert["id"]), alert["fingerprint"])
+    conn.commit()
+    return {"status": "sent", "sent": True, "payload": payload, "dryRun": False}
+
+
+def alert_fingerprint(source: str, check_id: str, check: dict) -> str:
+    """Return a stable fingerprint for one unhealthy check."""
+    body = json.dumps(
+        {
+            "source": source,
+            "check_id": check_id,
+            "level": _check_level(check),
+            "summary": _check_summary(check),
+            "value": check.get("value"),
+            "threshold": check.get("threshold"),
+            "warnings": check.get("warnings", []),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def _consecutive_publish_failures(
@@ -394,12 +506,98 @@ def _age(now: datetime, timestamp: datetime) -> timedelta:
     return now - timestamp
 
 
+def _check_level(check: dict) -> str:
+    status = check.get("status", "ok")
+    if status == "alert":
+        return "alert"
+    if status == "warning":
+        return "warning"
+    return "ok"
+
+
+def _check_summary(check: dict) -> str:
+    if check.get("summary"):
+        return str(check["summary"])
+    warnings = check.get("warnings") or []
+    if warnings:
+        return "; ".join(str(warning) for warning in warnings)
+    return "Operational check is unhealthy"
+
+
+def _level_rank(level: str) -> int:
+    return {"ok": 0, "warning": 1, "alert": 2}.get(str(level).lower(), 2)
+
+
+def _ensure_metadata_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS operations_alert_metadata (
+           key TEXT PRIMARY KEY,
+           value TEXT NOT NULL,
+           updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+
+
+def _get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    _ensure_metadata_table(conn)
+    row = _one(
+        conn,
+        "SELECT value FROM operations_alert_metadata WHERE key = ?",
+        (key,),
+    )
+    return row["value"] if row else None
+
+
+def _set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+    _ensure_metadata_table(conn)
+    conn.execute(
+        """INSERT INTO operations_alert_metadata (key, value, updated_at)
+           VALUES (?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(key) DO UPDATE SET
+             value = excluded.value,
+             updated_at = excluded.updated_at""",
+        (key, value),
+    )
+
+
+def _clear_resolved_fingerprints(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    active_check_ids: list[str],
+) -> None:
+    _ensure_metadata_table(conn)
+    prefix = f"operations_alert:{source}:"
+    rows = _all(
+        conn,
+        "SELECT key FROM operations_alert_metadata WHERE key LIKE ?",
+        (f"{prefix}%",),
+    )
+    active_keys = {_metadata_key(source, check_id) for check_id in active_check_ids}
+    for row in rows:
+        if row["key"] not in active_keys:
+            conn.execute(
+                "DELETE FROM operations_alert_metadata WHERE key = ?",
+                (row["key"],),
+            )
+    conn.commit()
+
+
+def _metadata_key(source: str, check_id: str) -> str:
+    return f"operations_alert:{source}:{check_id}"
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--operation', choices=list(OPERATION_QUERIES.keys()),
                         help='Sync a specific operation (default: all)')
+    parser.add_argument(
+        "--webhook-dry-run",
+        action="store_true",
+        help="Build and log the webhook payload without posting or updating dedupe state",
+    )
     args = parser.parse_args()
 
     operations = [args.operation] if args.operation else None
@@ -410,5 +608,19 @@ if __name__ == '__main__':
             operations,
             alert_thresholds_from_config(config),
         )
+        summary = compute_alert_statuses(
+            db.conn,
+            alert_thresholds_from_config(config),
+        )
+        result = deliver_operations_alerts(
+            db.conn,
+            summary,
+            webhook_config_from_config(config),
+            source="update_operations_state",
+            http_timeout=config.timeouts.http_seconds,
+            dry_run=args.webhook_dry_run,
+        )
+        if args.webhook_dry_run:
+            print(json.dumps(result["payload"] or {}, indent=2))
 
     exit(0 if success else 1)

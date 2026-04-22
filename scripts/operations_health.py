@@ -15,6 +15,7 @@ from evaluation.operations_health import (
     thresholds_from_config,
 )
 from runner import script_context
+from update_operations_state import deliver_operations_alerts, webhook_config_from_config
 
 
 def main() -> None:
@@ -26,6 +27,11 @@ def main() -> None:
         choices=["text", "json"],
         default="text",
         help="Output format (default: text)",
+    )
+    parser.add_argument(
+        "--webhook-dry-run",
+        action="store_true",
+        help="Build and print the webhook payload without posting or updating dedupe state",
     )
     args = parser.parse_args()
 
@@ -40,11 +46,24 @@ def main() -> None:
             db,
             thresholds=thresholds_from_config(config),
         )
+        webhook_result = deliver_operations_alerts(
+            db.conn,
+            summary,
+            webhook_config_from_config(config),
+            source="operations_health",
+            http_timeout=config.timeouts.http_seconds,
+            dry_run=args.webhook_dry_run,
+        )
 
     if args.format == "json":
-        print(json.dumps(summary, indent=2))
+        output = {"summary": summary}
+        if args.webhook_dry_run:
+            output["webhook"] = webhook_result
+        print(json.dumps(output if args.webhook_dry_run else summary, indent=2))
     else:
         print(format_operations_health(summary))
+        if args.webhook_dry_run:
+            print(json.dumps(webhook_result["payload"] or {}, indent=2))
 
     raise SystemExit(0 if summary["status"] == "ok" else 1)
 

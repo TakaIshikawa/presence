@@ -202,6 +202,9 @@ class OperationsAlertsConfig:
     evaluation_window_hours: int = 24
     min_evaluation_runs: int = 3
     min_evaluation_pass_rate: float = 0.5
+    webhook_url: str = ""
+    webhook_enabled: bool = False
+    webhook_min_level: str = "alert"
 
 
 @dataclass
@@ -547,6 +550,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
             min_evaluation_pass_rate=operations_alerts_data.get(
                 "min_evaluation_pass_rate", 0.5
             ),
+            webhook_url=_resolve_env_var(operations_alerts_data.get("webhook_url", "")),
+            webhook_enabled=operations_alerts_data.get("webhook_enabled", False),
+            webhook_min_level=operations_alerts_data.get("webhook_min_level", "alert"),
         )
     )
 

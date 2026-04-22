@@ -1,12 +1,17 @@
 """Tests for operational health summaries."""
 
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from evaluation.operations_health import (
     OperationsHealthThresholds,
     format_operations_health,
     summarize_operations_health,
 )
+from update_operations_state import build_webhook_payload
 
 
 NOW = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
@@ -144,3 +149,26 @@ def test_operations_health_pipeline_rejection_spike(db):
     assert summary["checks"]["pipeline_runs"]["rejected_runs"] == 3
     assert summary["checks"]["pipeline_runs"]["rejection_rate"] == 0.75
     assert any("pipeline rejection rate is high" in warning for warning in summary["warnings"])
+
+
+def test_operations_health_warning_webhook_payload(db):
+    _seed_healthy(db.conn)
+    db.conn.execute(
+        "UPDATE poll_state SET last_poll_time = ?, updated_at = ? WHERE id = 1",
+        (_ts(2), _ts(2)),
+    )
+    db.conn.commit()
+
+    summary = _summary(db.conn)
+    payload = build_webhook_payload(
+        summary,
+        source="operations_health",
+        min_level="warning",
+    )
+
+    assert payload["source"] == "operations_health"
+    assert payload["status"] == "warning"
+    assert len(payload["alerts"]) == 1
+    assert payload["alerts"][0]["id"] == "poll_state"
+    assert payload["alerts"][0]["level"] == "warning"
+    assert "poll_state is stale" in payload["alerts"][0]["summary"]

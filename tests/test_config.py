@@ -566,8 +566,12 @@ class TestDefaults:
         assert cfg.operations.alerts.evaluation_window_hours == 24
         assert cfg.operations.alerts.min_evaluation_runs == 3
         assert cfg.operations.alerts.min_evaluation_pass_rate == 0.5
+        assert cfg.operations.alerts.webhook_enabled is False
+        assert cfg.operations.alerts.webhook_url == ""
+        assert cfg.operations.alerts.webhook_min_level == "alert"
 
-    def test_operations_alerts_overrides(self, tmp_path):
+    def test_operations_alerts_overrides(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPS_WEBHOOK_URL", "https://hooks.example.test/ops")
         data = _minimal_config_dict(
             operations={
                 "alerts": {
@@ -577,6 +581,9 @@ class TestDefaults:
                     "evaluation_window_hours": 12,
                     "min_evaluation_runs": 5,
                     "min_evaluation_pass_rate": 0.8,
+                    "webhook_enabled": True,
+                    "webhook_url": "${OPS_WEBHOOK_URL}",
+                    "webhook_min_level": "warning",
                 }
             }
         )
@@ -587,6 +594,9 @@ class TestDefaults:
         assert cfg.operations.alerts.evaluation_window_hours == 12
         assert cfg.operations.alerts.min_evaluation_runs == 5
         assert cfg.operations.alerts.min_evaluation_pass_rate == 0.8
+        assert cfg.operations.alerts.webhook_enabled is True
+        assert cfg.operations.alerts.webhook_url == "https://hooks.example.test/ops"
+        assert cfg.operations.alerts.webhook_min_level == "warning"
 
     def test_replies_defaults_when_section_missing(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

@@ -15,7 +15,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from update_operations_state import (
     OPERATION_QUERIES,
     OperationsAlertThresholds,
+    OperationsWebhookConfig,
+    build_webhook_payload,
     compute_alert_statuses,
+    deliver_operations_alerts,
     sync_operation,
     update_operations_yaml,
 )
@@ -338,3 +341,114 @@ class TestAlertStatuses:
         assert check["passRate"] == 0.25
         assert check["status"] == "alert"
         assert "evaluation_pass_rate" in summary["triggered"]
+
+
+class TestOperationsAlertWebhook:
+    def _summary(self):
+        return {
+            "status": "alert",
+            "generatedAt": NOW.isoformat(),
+            "checks": {
+                "queue_backlog": {
+                    "status": "alert",
+                    "value": 4,
+                    "threshold": 2,
+                    "summary": "Publish queue backlog has 4 items > 2",
+                },
+                "stale_ingestion": {
+                    "status": "ok",
+                    "summary": "Ingestion freshness within threshold",
+                },
+            },
+        }
+
+    def _webhook(self, **overrides):
+        values = {
+            "webhook_url": "https://hooks.example.test/ops",
+            "webhook_enabled": True,
+            "webhook_min_level": "alert",
+        }
+        values.update(overrides)
+        return OperationsWebhookConfig(**values)
+
+    def test_build_webhook_payload_is_compact(self):
+        payload = build_webhook_payload(
+            self._summary(),
+            source="update_operations_state",
+            min_level="alert",
+        )
+
+        assert payload["source"] == "update_operations_state"
+        assert payload["status"] == "alert"
+        assert payload["generatedAt"] == NOW.isoformat()
+        assert len(payload["alerts"]) == 1
+        alert = payload["alerts"][0]
+        assert alert["id"] == "queue_backlog"
+        assert alert["level"] == "alert"
+        assert alert["summary"] == "Publish queue backlog has 4 items > 2"
+        assert len(alert["fingerprint"]) == 64
+        assert "checks" not in payload
+
+    def test_deliver_webhook_posts_once_per_fingerprint(self, db):
+        with patch("update_operations_state.requests.post") as mock_post:
+            mock_post.return_value.raise_for_status.return_value = None
+
+            first = deliver_operations_alerts(
+                db.conn,
+                self._summary(),
+                self._webhook(),
+                source="update_operations_state",
+                http_timeout=12,
+            )
+            second = deliver_operations_alerts(
+                db.conn,
+                self._summary(),
+                self._webhook(),
+                source="update_operations_state",
+                http_timeout=12,
+            )
+
+        assert first["status"] == "sent"
+        assert second["status"] == "deduped"
+        assert mock_post.call_count == 1
+        assert mock_post.call_args.kwargs["timeout"] == 12
+        assert mock_post.call_args.kwargs["json"]["alerts"][0]["id"] == "queue_backlog"
+
+    def test_deliver_webhook_noops_when_disabled(self, db):
+        with patch("update_operations_state.requests.post") as mock_post:
+            result = deliver_operations_alerts(
+                db.conn,
+                self._summary(),
+                self._webhook(webhook_enabled=False),
+                source="update_operations_state",
+            )
+
+        assert result["status"] == "disabled"
+        assert result["sent"] is False
+        mock_post.assert_not_called()
+
+    def test_deliver_webhook_dry_run_does_not_post_or_persist(self, db):
+        with patch("update_operations_state.requests.post") as mock_post:
+            dry = deliver_operations_alerts(
+                db.conn,
+                self._summary(),
+                self._webhook(),
+                source="update_operations_state",
+                dry_run=True,
+            )
+            metadata_table = db.conn.execute(
+                """SELECT 1 FROM sqlite_master
+                   WHERE type = 'table' AND name = 'operations_alert_metadata'"""
+            ).fetchone()
+            real = deliver_operations_alerts(
+                db.conn,
+                self._summary(),
+                self._webhook(),
+                source="update_operations_state",
+            )
+
+        assert dry["status"] == "dry_run"
+        assert dry["payload"]["alerts"][0]["id"] == "queue_backlog"
+        assert metadata_table is None
+        assert real["status"] == "sent"
+        assert mock_post.call_count == 1

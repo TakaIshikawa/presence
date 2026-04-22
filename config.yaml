@@ -169,6 +169,9 @@ operations:
     evaluation_window_hours: 24
     min_evaluation_runs: 3
     min_evaluation_pass_rate: 0.5
+    webhook_enabled: false
+    webhook_url: ""
+    webhook_min_level: "alert"
 
 # Image generation for visual posts
 image_gen:
