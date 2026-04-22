@@ -35,6 +35,7 @@ class TestSchemaInit:
             "pipeline_runs",
             "content_publications",
             "content_variants",
+            "content_claim_checks",
             "content_ideas",
             "eval_batches",
             "eval_results",
@@ -3556,3 +3557,41 @@ def test_generated_content_stores_image_alt_text(db):
     content = db.get_generated_content(content_id)
 
     assert content["image_alt_text"] == 'Text graphic headed "Launch" with body text: Visual post.'
+
+
+def test_claim_check_summary_upserts_by_generated_content_id(db):
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=[],
+        source_messages=[],
+        content="A post with checked claims",
+        eval_score=8.0,
+        eval_feedback="Good",
+    )
+
+    db.save_claim_check_summary(
+        content_id,
+        supported_count=2,
+        unsupported_count=1,
+        annotation_text="metric: Unsupported metric (metric value not found in sources)",
+    )
+    db.save_claim_check_summary(
+        content_id,
+        supported_count=3,
+        unsupported_count=0,
+        annotation_text=None,
+    )
+
+    summary = db.get_claim_check_summary(content_id)
+
+    assert summary["content_id"] == content_id
+    assert summary["supported_count"] == 3
+    assert summary["unsupported_count"] == 0
+    assert summary["annotation_text"] is None
+    assert (
+        db.conn.execute(
+            "SELECT COUNT(*) FROM content_claim_checks WHERE content_id = ?",
+            (content_id,),
+        ).fetchone()[0]
+        == 1
+    )

@@ -164,6 +164,7 @@ def main():
             image_prompt=result.image_prompt,
             image_alt_text=result.image_alt_text or result.image.alt_text,
         )
+        pr.save_claim_check_summary(db, content_id)
         if pr.planned_topic_id and content_id:
             db.mark_planned_topic_generated(pr.planned_topic_id, content_id)
             logger.info(f"  Linked planned topic {pr.planned_topic_id}")

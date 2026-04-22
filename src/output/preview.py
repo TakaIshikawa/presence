@@ -79,6 +79,41 @@ def _fetch_publication_state(db: Any, content_id: int, platform: str) -> dict | 
     return dict(row) if row else None
 
 
+def _fetch_claim_check_summary(db: Any, content_id: int) -> dict | None:
+    getter = getattr(db, "get_claim_check_summary", None)
+    if callable(getter):
+        summary = getter(content_id)
+        return dict(summary) if summary else None
+
+    row = db.conn.execute(
+        "SELECT * FROM content_claim_checks WHERE content_id = ?",
+        (content_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _claim_check_status(summary: dict | None) -> dict:
+    if not summary:
+        return {
+            "checked": False,
+            "status": "not_checked",
+            "supported_count": 0,
+            "unsupported_count": 0,
+            "annotation_text": None,
+        }
+
+    unsupported_count = summary.get("unsupported_count") or 0
+    return {
+        "checked": True,
+        "status": "unsupported_claims" if unsupported_count else "supported",
+        "supported_count": summary.get("supported_count") or 0,
+        "unsupported_count": unsupported_count,
+        "annotation_text": summary.get("annotation_text"),
+        "created_at": summary.get("created_at"),
+        "updated_at": summary.get("updated_at"),
+    }
+
+
 def _split_x_posts(content: str, content_type: str) -> list[str]:
     if content_type == "x_thread":
         return parse_thread_content(content)
@@ -190,6 +225,9 @@ def build_publication_preview(
     adapter = bluesky_adapter or BlueskyPlatformAdapter()
     requested = set(_requested_platforms(queue.get("queue_platform") if queue else None))
     x_posts = _split_x_posts(content.get("content") or "", content["content_type"])
+    claim_check = _claim_check_status(
+        _fetch_claim_check_summary(db, content["id"])
+    )
 
     platforms = {}
     for platform in ("x", "bluesky"):
@@ -225,6 +263,7 @@ def build_publication_preview(
             "bluesky_uri": content.get("bluesky_uri"),
         },
         "queue": queue,
+        "claim_check": claim_check,
         "platforms": platforms,
     }
 
@@ -253,6 +292,20 @@ def format_preview(preview: dict) -> str:
         lines.append(f"Image: {content['image_path']}")
     if content.get("image_alt_text"):
         lines.append(f"Alt text: {content['image_alt_text']}")
+
+    claim_check = preview.get("claim_check")
+    if claim_check:
+        lines.append(
+            "Claim check: {status} ({supported_count} supported, "
+            "{unsupported_count} unsupported)".format(**claim_check)
+        )
+        if claim_check.get("annotation_text"):
+            lines.append("Unsupported claims:")
+            lines.extend(
+                f"- {line}"
+                for line in claim_check["annotation_text"].splitlines()
+                if line.strip()
+            )
 
     for platform, rendered in preview["platforms"].items():
         status = rendered["status"]

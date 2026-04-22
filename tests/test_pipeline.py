@@ -735,6 +735,43 @@ class TestPipelineResult:
         assert result.filter_stats["stale_pattern_rejected"] == 0
         assert result.filter_stats["stale_patterns_matched"] == []
         assert result.filter_stats["topic_saturated_rejected"] == 0
+        assert result.claim_check_summary == {
+            "supported_count": 0,
+            "unsupported_count": 0,
+            "annotation_text": None,
+        }
+
+    def test_pipeline_result_persists_claim_check_summary(self, db):
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Generated content",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        result = PipelineResult(
+            batch_id="batch123",
+            candidates=[],
+            comparison=_make_comparison(),
+            refinement=None,
+            final_content="Generated content",
+            final_score=8.0,
+            source_prompts=[],
+            source_commits=[],
+            claim_check_summary={
+                "supported_count": 1,
+                "unsupported_count": 1,
+                "annotation_text": "metric: unsupported claim",
+            },
+        )
+
+        result.save_claim_check_summary(db, content_id)
+
+        summary = db.get_claim_check_summary(content_id)
+        assert summary["supported_count"] == 1
+        assert summary["unsupported_count"] == 1
+        assert summary["annotation_text"] == "metric: unsupported claim"
 
     @patch("synthesis.pipeline.ContentRefiner")
     @patch("synthesis.pipeline.CrossModelEvaluator")

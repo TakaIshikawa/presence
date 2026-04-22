@@ -42,6 +42,23 @@ class PipelineResult:
     predictor_override: bool = False  # True when predictor tie-breaker changed best_idx
     predictor_override_detail: Optional[dict] = None  # {evaluator_top, predictor_top, margin, ...}
     planned_topic_id: Optional[int] = None  # planned_topics.id used for campaign guidance
+    claim_check_summary: Optional[dict] = None  # Persistable final-content claim-check summary
+
+    def save_claim_check_summary(self, db: Database, content_id: int) -> None:
+        """Persist final claim-check summary after generated content is inserted."""
+        if self.claim_check_summary:
+            db.save_claim_check_summary(content_id, **self.claim_check_summary)
+
+
+def _claim_check_summary(result: ClaimCheckResult) -> dict:
+    """Convert a claim-check result into the stored generated-content summary."""
+    unsupported_count = len(result.unsupported_claims)
+    supported_count = max(0, len(result.claims) - unsupported_count)
+    return {
+        "supported_count": supported_count,
+        "unsupported_count": unsupported_count,
+        "annotation_text": "\n".join(result.annotations) if result.annotations else None,
+    }
 
 
 class SynthesisPipeline:
@@ -1097,6 +1114,11 @@ class SynthesisPipeline:
             linked_knowledge=linked_knowledge,
         )
         filter_stats["claim_check_final_unsupported"] = final_claim_check.annotations
+        claim_check_summary = (
+            _claim_check_summary(final_claim_check)
+            if self.claim_check_enabled
+            else None
+        )
 
         if content_type == "x_thread":
             thread_validation = validate_thread(final_content)
@@ -1131,6 +1153,7 @@ class SynthesisPipeline:
                     predictor_override=predictor_override,
                     predictor_override_detail=predictor_override_detail,
                     planned_topic_id=planned_topic_id,
+                    claim_check_summary=claim_check_summary,
                 )
 
         # Stage 6: Engagement prediction logging.
@@ -1195,4 +1218,5 @@ class SynthesisPipeline:
             predictor_override=predictor_override,
             predictor_override_detail=predictor_override_detail,
             planned_topic_id=planned_topic_id,
+            claim_check_summary=claim_check_summary,
         )

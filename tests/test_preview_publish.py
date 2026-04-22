@@ -13,6 +13,7 @@ from output.preview import (  # noqa: E402
     PreviewRecordNotFound,
     build_publication_preview,
     format_preview,
+    preview_to_json,
 )
 
 
@@ -144,3 +145,51 @@ def test_preview_publish_cli_outputs_json(db, capsys):
     payload = json.loads(captured.out)
     assert payload["content"]["id"] == content_id
     assert payload["platforms"]["x"]["posts"][0]["text"] == "CLI preview post"
+
+
+def test_preview_includes_claim_check_summary_in_text_and_json(db):
+    content_id = _insert_content(db, "Post with 43% unsupported claim")
+    db.save_claim_check_summary(
+        content_id,
+        supported_count=1,
+        unsupported_count=1,
+        annotation_text="metric: Post with 43% unsupported claim (metric value not found in sources)",
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    assert preview["claim_check"]["status"] == "unsupported_claims"
+    assert preview["claim_check"]["supported_count"] == 1
+    assert preview["claim_check"]["unsupported_count"] == 1
+    assert "metric: Post with 43%" in preview["claim_check"]["annotation_text"]
+
+    text = format_preview(preview)
+    assert "Claim check: unsupported_claims (1 supported, 1 unsupported)" in text
+    assert "Unsupported claims:" in text
+    assert "- metric: Post with 43% unsupported claim" in text
+
+    payload = json.loads(preview_to_json(preview))
+    assert payload["claim_check"]["status"] == "unsupported_claims"
+    assert payload["claim_check"]["unsupported_count"] == 1
+
+
+def test_preview_queue_id_includes_claim_check_summary(db):
+    content_id = _insert_content(db, "Queued post")
+    queue_id = db.queue_for_publishing(
+        content_id,
+        "2026-04-17T12:00:00+00:00",
+        platform="x",
+    )
+    db.save_claim_check_summary(
+        content_id,
+        supported_count=2,
+        unsupported_count=0,
+        annotation_text=None,
+    )
+
+    preview = build_publication_preview(db, queue_id=queue_id)
+
+    assert preview["queue"]["queue_id"] == queue_id
+    assert preview["claim_check"]["checked"] is True
+    assert preview["claim_check"]["status"] == "supported"
+    assert "Claim check: supported (2 supported, 0 unsupported)" in format_preview(preview)

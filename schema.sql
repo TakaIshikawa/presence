@@ -92,6 +92,16 @@ CREATE INDEX IF NOT EXISTS idx_content_feedback_content ON content_feedback(cont
 CREATE INDEX IF NOT EXISTS idx_content_feedback_type_created
     ON content_feedback(feedback_type, created_at);
 
+-- Deterministic claim-check summary for generated content
+CREATE TABLE IF NOT EXISTS content_claim_checks (
+    content_id INTEGER PRIMARY KEY REFERENCES generated_content(id) ON DELETE CASCADE,
+    supported_count INTEGER NOT NULL DEFAULT 0,
+    unsupported_count INTEGER NOT NULL DEFAULT 0,
+    annotation_text TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Durable platform-specific copy variants for generated content reuse
 CREATE TABLE IF NOT EXISTS content_variants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

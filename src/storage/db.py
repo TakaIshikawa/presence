@@ -138,6 +138,16 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_content_feedback_type_created "
                 "ON content_feedback(feedback_type, created_at)"
             )
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_claim_checks (
+                    content_id INTEGER PRIMARY KEY REFERENCES generated_content(id) ON DELETE CASCADE,
+                    supported_count INTEGER NOT NULL DEFAULT 0,
+                    unsupported_count INTEGER NOT NULL DEFAULT 0,
+                    annotation_text TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             # Migrate knowledge licensing for prompt-safety filtering
             k_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(knowledge)")}
             if k_cols and "license" not in k_cols:
@@ -924,6 +934,7 @@ class Database:
         image_prompt: Optional[str] = None,
         image_alt_text: Optional[str] = None,
         source_activity_ids: Optional[list[str]] = None,
+        claim_check_summary: Optional[dict] = None,
     ) -> int:
         cursor = self.conn.execute(
             """INSERT INTO generated_content
@@ -945,8 +956,16 @@ class Database:
                 image_alt_text,
             )
         )
+        content_id = cursor.lastrowid
+        if claim_check_summary:
+            self.save_claim_check_summary(
+                content_id,
+                supported_count=claim_check_summary.get("supported_count", 0),
+                unsupported_count=claim_check_summary.get("unsupported_count", 0),
+                annotation_text=claim_check_summary.get("annotation_text"),
+            )
         self.conn.commit()
-        return cursor.lastrowid
+        return content_id
 
     def get_generated_content(self, content_id: int) -> dict | None:
         """Fetch one generated content item with source JSON fields parsed."""
@@ -961,6 +980,36 @@ class Database:
         content["source_messages"] = self._parse_json_list(content.get("source_messages"))
         content["source_activity_ids"] = self._parse_json_list(content.get("source_activity_ids"))
         return content
+
+    def save_claim_check_summary(
+        self,
+        content_id: int,
+        *,
+        supported_count: int,
+        unsupported_count: int,
+        annotation_text: str | None = None,
+    ) -> None:
+        """Upsert deterministic claim-check summary for generated content."""
+        self.conn.execute(
+            """INSERT INTO content_claim_checks
+               (content_id, supported_count, unsupported_count, annotation_text)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(content_id) DO UPDATE SET
+                   supported_count = excluded.supported_count,
+                   unsupported_count = excluded.unsupported_count,
+                   annotation_text = excluded.annotation_text,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (content_id, supported_count, unsupported_count, annotation_text),
+        )
+        self.conn.commit()
+
+    def get_claim_check_summary(self, content_id: int) -> dict | None:
+        """Return claim-check summary for generated content, if present."""
+        row = self.conn.execute(
+            "SELECT * FROM content_claim_checks WHERE content_id = ?",
+            (content_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
     def get_source_commits_for_content(self, content_id: int) -> list[dict]:
         """Return source commit references for one generated content item.

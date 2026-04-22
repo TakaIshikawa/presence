@@ -425,6 +425,7 @@ def main() -> None:
             eval_feedback=pipeline_result.comparison.best_feedback,
             content_format=pipeline_result.content_format,
         )
+        pipeline_result.save_claim_check_summary(db, content_id)
         if pipeline_result.planned_topic_id and content_id:
             db.mark_planned_topic_generated(pipeline_result.planned_topic_id, content_id)
             logger.info(f"  Linked planned topic {pipeline_result.planned_topic_id}")
