@@ -126,6 +126,7 @@ class TestSchemaInit:
             "priority",
             "status",
             "source",
+            "source_metadata",
             "created_at",
             "updated_at",
         }

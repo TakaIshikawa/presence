@@ -346,10 +346,14 @@ class Database:
                     priority TEXT DEFAULT 'normal',
                     status TEXT DEFAULT 'open',
                     source TEXT,
+                    source_metadata JSON,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            ci_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(content_ideas)")}
+            if ci_cols and "source_metadata" not in ci_cols:
+                self.conn.execute("ALTER TABLE content_ideas ADD COLUMN source_metadata JSON")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_content_ideas_status_priority "
                 "ON content_ideas(status, priority, created_at)"
@@ -4505,17 +4509,23 @@ class Database:
         priority: str = "normal",
         source: str = None,
         status: str = "open",
+        source_metadata: dict | None = None,
     ) -> int:
         """Add a seed note to the manual content idea inbox."""
         if not str(note or "").strip():
             raise ValueError("Content idea note is required")
         priority = self._normalize_content_idea_priority(priority)
         status = self._normalize_content_idea_status(status)
+        metadata_json = (
+            json.dumps(source_metadata, sort_keys=True)
+            if source_metadata is not None
+            else None
+        )
         cursor = self.conn.execute(
             """INSERT INTO content_ideas
-               (note, topic, priority, status, source)
-               VALUES (?, ?, ?, ?, ?)""",
-            (note.strip(), topic, priority, status, source),
+               (note, topic, priority, status, source, source_metadata)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (note.strip(), topic, priority, status, source, metadata_json),
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -4562,6 +4572,47 @@ class Database:
             (*params, limit),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def find_open_content_idea_for_planned_topic(
+        self,
+        planned_topic_id: int,
+    ) -> dict | None:
+        """Return an open gap-seeded idea for a planned topic, if one exists."""
+        return self._find_open_content_idea_by_metadata(
+            "planned_topic_id",
+            int(planned_topic_id),
+        )
+
+    def find_open_content_idea_for_gap_fingerprint(
+        self,
+        gap_fingerprint: str,
+    ) -> dict | None:
+        """Return an open gap-seeded idea for a source gap fingerprint."""
+        return self._find_open_content_idea_by_metadata(
+            "gap_fingerprint",
+            str(gap_fingerprint),
+        )
+
+    def _find_open_content_idea_by_metadata(
+        self,
+        key: str,
+        expected_value: object,
+    ) -> dict | None:
+        cursor = self.conn.execute(
+            """SELECT * FROM content_ideas
+               WHERE status = 'open'
+                 AND source_metadata IS NOT NULL
+               ORDER BY created_at ASC, id ASC"""
+        )
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                metadata = json.loads(item.get("source_metadata") or "{}")
+            except (TypeError, ValueError):
+                continue
+            if metadata.get(key) == expected_value:
+                return item
+        return None
 
     def promote_content_idea(
         self,

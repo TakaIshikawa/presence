@@ -540,6 +540,7 @@ CREATE TABLE IF NOT EXISTS content_ideas (
     priority TEXT DEFAULT 'normal',      -- high | normal | low
     status TEXT DEFAULT 'open',          -- open | promoted | dismissed
     source TEXT,
+    source_metadata JSON,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
