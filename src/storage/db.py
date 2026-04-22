@@ -118,6 +118,10 @@ class Database:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN posted_at TEXT")
             if rq_cols and "posted_tweet_id" not in rq_cols:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN posted_tweet_id TEXT")
+            if rq_cols and "intent" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN intent TEXT DEFAULT 'other'")
+            if rq_cols and "priority" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN priority TEXT DEFAULT 'normal'")
             rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
             if {"platform", "inbound_tweet_id"}.issubset(rq_cols):
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_platform ON reply_queue(platform, inbound_tweet_id)")
@@ -1812,6 +1816,9 @@ class Database:
         inbound_cid: Optional[str] = None,
         our_platform_id: Optional[str] = None,
         platform_metadata: Optional[str] = None,
+        intent: str = "other",
+        priority: str = "normal",
+        status: str = "pending",
     ) -> int:
         """Insert a drafted reply into the queue."""
         cursor = self.conn.execute(
@@ -1819,15 +1826,38 @@ class Database:
                (inbound_tweet_id, platform, inbound_author_handle, inbound_author_id,
                 inbound_text, our_tweet_id, inbound_url, inbound_cid,
                 our_platform_id, platform_metadata, our_content_id, our_post_text,
-                draft_text, relationship_context, quality_score, quality_flags)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                draft_text, intent, priority, relationship_context, quality_score,
+                quality_flags, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (inbound_tweet_id, platform, inbound_author_handle, inbound_author_id,
              inbound_text, our_tweet_id, inbound_url, inbound_cid,
              our_platform_id, platform_metadata, our_content_id, our_post_text,
-             draft_text, relationship_context, quality_score, quality_flags)
+             draft_text, intent, priority, relationship_context, quality_score,
+             quality_flags, status)
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def update_reply_classification(
+        self,
+        reply_id: int,
+        intent: str,
+        priority: str,
+    ) -> None:
+        """Update a queued reply's intent and priority."""
+        self.conn.execute(
+            "UPDATE reply_queue SET intent = ?, priority = ? WHERE id = ?",
+            (intent, priority, reply_id),
+        )
+        self.conn.commit()
+
+    def update_reply_priority(self, reply_id: int, priority: str) -> None:
+        """Update a queued reply's priority."""
+        self.conn.execute(
+            "UPDATE reply_queue SET priority = ? WHERE id = ?",
+            (priority, reply_id),
+        )
+        self.conn.commit()
 
     def get_pending_replies(self) -> list[dict]:
         """Get all reply drafts awaiting review."""

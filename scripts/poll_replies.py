@@ -33,6 +33,7 @@ from output.x_api_guard import (
     mark_x_api_blocked_if_needed,
 )
 from engagement.reply_drafter import ReplyDrafter
+from engagement.reply_classifier import ReplyClassification, ReplyClassifier
 from knowledge.embeddings import VoyageEmbeddings
 from knowledge.store import KnowledgeStore
 
@@ -71,10 +72,62 @@ def _bluesky_reply_refs(notification: dict) -> list[str]:
     return refs
 
 
+def _reply_config_value(config, name: str, default):
+    replies_config = getattr(config, "replies", None)
+    return getattr(replies_config, name, default) if replies_config else default
+
+
+def _low_value_action(config, classification: ReplyClassification) -> str | None:
+    if classification.intent == "spam":
+        return _reply_config_value(config, "spam_action", "dismissed")
+    if classification.intent in {"appreciation", "other"}:
+        return _reply_config_value(config, "low_value_action", "low_priority")
+    return None
+
+
+def _queue_classified_without_draft(
+    db,
+    *,
+    classification: ReplyClassification,
+    status: str,
+    inbound_tweet_id: str,
+    inbound_author_handle: str,
+    inbound_author_id: str,
+    inbound_text: str,
+    our_tweet_id: str,
+    our_content_id: int | None,
+    our_post_text: str,
+    platform: str = "x",
+    inbound_url: str | None = None,
+    inbound_cid: str | None = None,
+    our_platform_id: str | None = None,
+    platform_metadata: str | None = None,
+) -> None:
+    db.insert_reply_draft(
+        inbound_tweet_id=inbound_tweet_id,
+        inbound_author_handle=inbound_author_handle,
+        inbound_author_id=inbound_author_id,
+        inbound_text=inbound_text,
+        our_tweet_id=our_tweet_id,
+        our_content_id=our_content_id,
+        our_post_text=our_post_text,
+        draft_text="",
+        platform=platform,
+        inbound_url=inbound_url,
+        inbound_cid=inbound_cid,
+        our_platform_id=our_platform_id,
+        platform_metadata=platform_metadata,
+        intent=classification.intent,
+        priority="low",
+        status=status,
+    )
+
+
 def _poll_bluesky_replies(
     config,
     db,
     drafter: ReplyDrafter,
+    classifier: ReplyClassifier,
     replies_today: int,
     max_daily: int,
 ) -> tuple[int, int]:
@@ -152,6 +205,43 @@ def _poll_bluesky_replies(
 
         record = notification.get("record") or {}
         inbound_text = record.get("text") or ""
+        classification = classifier.classify(
+            inbound_text,
+            our_post=our_content["content"],
+            author_handle=author_handle,
+        )
+        action = _low_value_action(config, classification)
+        if action in {"dismissed", "low_priority"} and (
+            classification.intent == "spam" or action == "dismissed"
+        ):
+            metadata = {
+                "reason": reason,
+                "reason_subject": notification.get("reason_subject"),
+                "indexed_at": notification.get("indexed_at"),
+                "record_created_at": record.get("created_at"),
+                "reply_refs": _bluesky_reply_refs(notification),
+                "classification_reason": classification.reason,
+            }
+            _queue_classified_without_draft(
+                db,
+                classification=classification,
+                status="dismissed" if action == "dismissed" else "pending",
+                inbound_tweet_id=inbound_uri,
+                inbound_author_handle=author_handle,
+                inbound_author_id=author.get("did") or "",
+                inbound_text=inbound_text,
+                our_tweet_id=our_uri,
+                our_content_id=our_content["id"],
+                our_post_text=our_content["content"],
+                platform="bluesky",
+                inbound_url=_bluesky_post_url(author_handle, inbound_uri),
+                inbound_cid=notification.get("cid"),
+                our_platform_id=our_uri,
+                platform_metadata=json.dumps(metadata),
+            )
+            skipped += 1
+            continue
+
         logger.info(f"  Drafting Bluesky reply to @{author_handle}: \"{inbound_text[:60]}...\"")
 
         try:
@@ -189,6 +279,8 @@ def _poll_bluesky_replies(
             inbound_cid=notification.get("cid"),
             our_platform_id=our_uri,
             platform_metadata=json.dumps(metadata),
+            intent=classification.intent,
+            priority="low" if action == "low_priority" else classification.priority,
         )
 
         if knowledge_ids:
@@ -248,8 +340,16 @@ def main() -> None:
             timeout=config.timeouts.anthropic_seconds,
             knowledge_store=knowledge_store,
             restricted_prompt_behavior=getattr(
-                config.curated_sources, "restricted_prompt_behavior", "strict"
-            ) if config.curated_sources else "strict",
+                getattr(config, "curated_sources", None), "restricted_prompt_behavior", "strict"
+            ),
+        )
+        classifier = ReplyClassifier(
+            api_key=config.anthropic.api_key,
+            model=config.synthesis.model,
+            timeout=config.timeouts.anthropic_seconds,
+            anthropic_fallback=_reply_config_value(
+                config, "classifier_fallback_enabled", False
+            ),
         )
 
         # Cultivate integration (optional — works without it)
@@ -315,6 +415,7 @@ def main() -> None:
                 config,
                 db,
                 drafter,
+                classifier,
                 replies_today,
                 max_daily,
             )
@@ -402,6 +503,30 @@ def main() -> None:
                         logger.warning(f"  Warning: failed to forward mention to cultivate: {e}")
 
                 # Draft reply (enriched with relationship context and knowledge if available)
+                classification = classifier.classify(
+                    mention["text"],
+                    our_post=our_content["content"],
+                    author_handle=author_handle,
+                )
+                action = _low_value_action(config, classification)
+                if action in {"dismissed", "low_priority"} and (
+                    classification.intent == "spam" or action == "dismissed"
+                ):
+                    _queue_classified_without_draft(
+                        db,
+                        classification=classification,
+                        status="dismissed" if action == "dismissed" else "pending",
+                        inbound_tweet_id=tweet_id,
+                        inbound_author_handle=author_handle,
+                        inbound_author_id=author_id,
+                        inbound_text=mention["text"],
+                        our_tweet_id=our_tweet_id,
+                        our_content_id=our_content["id"],
+                        our_post_text=our_content["content"],
+                    )
+                    skipped += 1
+                    continue
+
                 logger.info(f"  Drafting reply to @{author_handle}: \"{mention['text'][:60]}...\"")
                 try:
                     draft_result = drafter.draft_with_lineage(
@@ -453,6 +578,8 @@ def main() -> None:
                     relationship_context=relationship_context,
                     quality_score=quality_score,
                     quality_flags=quality_flags,
+                    intent=classification.intent,
+                    priority="low" if action == "low_priority" else classification.priority,
                 )
 
                 # Store knowledge lineage
@@ -478,6 +605,7 @@ def main() -> None:
             config,
             db,
             drafter,
+            classifier,
             replies_today + drafted,
             max_daily,
         )

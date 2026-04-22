@@ -280,6 +280,8 @@ CREATE TABLE IF NOT EXISTS reply_queue (
     our_content_id INTEGER REFERENCES generated_content(id),
     our_post_text TEXT,                      -- our original post content
     draft_text TEXT,                         -- Claude-drafted reply
+    intent TEXT DEFAULT 'other',             -- question | appreciation | disagreement | bug_report | spam | other
+    priority TEXT DEFAULT 'normal',          -- high | normal | low
     relationship_context TEXT,               -- JSON: cultivate enrichment {stage, tier, strength, ...}
     quality_score REAL,                      -- Reply quality evaluation score (0-10)
     quality_flags TEXT,                      -- JSON array of flags: ["sycophantic", "generic", ...]

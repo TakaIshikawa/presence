@@ -66,6 +66,9 @@ class RepliesConfig:
     enabled: bool
     max_daily_replies: int
     draft_ttl_hours: int = 48
+    classifier_fallback_enabled: bool = False
+    spam_action: str = "dismissed"
+    low_value_action: str = "low_priority"
 
 
 @dataclass
@@ -247,6 +250,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
             enabled=data["replies"].get("enabled", True),
             max_daily_replies=data["replies"].get("max_daily_replies", 10),
             draft_ttl_hours=data["replies"].get("draft_ttl_hours", 48),
+            classifier_fallback_enabled=data["replies"].get("classifier_fallback_enabled", False),
+            spam_action=data["replies"].get("spam_action", "dismissed"),
+            low_value_action=data["replies"].get("low_value_action", "low_priority"),
         )
     else:
         replies_config = RepliesConfig(enabled=True, max_daily_replies=10)

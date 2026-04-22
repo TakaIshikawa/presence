@@ -2,6 +2,8 @@
 
 import sys
 import sqlite3
+import types
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,45 @@ import pytest
 # Add src/ to import path
 # Also configured in pyproject.toml [tool.pytest.ini_options] pythonpath
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+if importlib.util.find_spec("tweepy") is None:
+    tweepy_stub = types.ModuleType("tweepy")
+
+    class TweepyException(Exception):
+        pass
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class API:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class OAuth1UserHandler:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    tweepy_stub.TweepyException = TweepyException
+    tweepy_stub.Client = Client
+    tweepy_stub.API = API
+    tweepy_stub.OAuth1UserHandler = OAuth1UserHandler
+    sys.modules["tweepy"] = tweepy_stub
+
+if importlib.util.find_spec("atproto") is None:
+    atproto_stub = types.ModuleType("atproto")
+    atproto_exceptions_stub = types.ModuleType("atproto.exceptions")
+
+    class AtProtocolError(Exception):
+        pass
+
+    class Client:
+        pass
+
+    atproto_stub.Client = Client
+    atproto_exceptions_stub.AtProtocolError = AtProtocolError
+    sys.modules["atproto"] = atproto_stub
+    sys.modules["atproto.exceptions"] = atproto_exceptions_stub
 
 from storage.db import Database
 

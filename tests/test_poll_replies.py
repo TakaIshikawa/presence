@@ -41,7 +41,12 @@ def _make_config(
     synthesis = SimpleNamespace(model="claude-test")
     paths = SimpleNamespace(database=":memory:")
     replies = SimpleNamespace(
-        enabled=replies_enabled, max_daily_replies=max_daily_replies
+        enabled=replies_enabled,
+        max_daily_replies=max_daily_replies,
+        draft_ttl_hours=48,
+        classifier_fallback_enabled=False,
+        spam_action="dismissed",
+        low_value_action="low_priority",
     )
     bluesky = SimpleNamespace(
         enabled=bluesky_enabled,
@@ -338,6 +343,25 @@ class TestMentionFiltering:
         assert _patches.drafter.draft_with_lineage.call_count == 2
         assert _patches.db.insert_reply_draft.call_count == 2
 
+    def test_spam_mention_is_queued_dismissed_before_drafting(self, _patches):
+        """Spam replies are classified and stored as dismissed without drafting."""
+        mention = _make_mention(
+            tweet_id="spam-1",
+            text="Free crypto giveaway click https://example.com",
+            author_id="user_A",
+        )
+        _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
+
+        main()
+
+        _patches.drafter.draft_with_lineage.assert_not_called()
+        _patches.db.insert_reply_draft.assert_called_once()
+        kwargs = _patches.db.insert_reply_draft.call_args.kwargs
+        assert kwargs["intent"] == "spam"
+        assert kwargs["priority"] == "low"
+        assert kwargs["status"] == "dismissed"
+        assert kwargs["draft_text"] == ""
+
 
 # ---------------------------------------------------------------------------
 # 3. Cursor management
@@ -476,6 +500,8 @@ class TestBlueskyNotifications:
         assert kwargs["our_content_id"] == 2
         assert kwargs["our_post_text"] == "Here is our Bluesky post text."
         assert kwargs["draft_text"] == "It works through notifications."
+        assert kwargs["intent"] == "question"
+        assert kwargs["priority"] == "normal"
         assert kwargs["inbound_cid"] == "bafyreply"
         assert kwargs["our_platform_id"] == "at://did:plc:me/app.bsky.feed.post/root1"
         assert kwargs["inbound_url"] == "https://bsky.app/profile/alice.bsky.social/post/reply42"
@@ -490,6 +516,26 @@ class TestBlueskyNotifications:
             self_handle="me.bsky.social",
             person_context=None,
         )
+
+    def test_bluesky_low_value_can_be_queued_dismissed_before_drafting(self, _patches):
+        """Low-value Bluesky notifications honor the configured queue action."""
+        _patches.config.bluesky.enabled = True
+        _patches.config.replies.low_value_action = "dismissed"
+        notification = _make_bluesky_notification(text="Thanks, helpful!")
+        _patches.bluesky_client.get_notifications.return_value = (
+            [notification],
+            "next-cursor",
+        )
+
+        main()
+
+        _patches.drafter.draft_with_lineage.assert_not_called()
+        _patches.db.insert_reply_draft.assert_called_once()
+        kwargs = _patches.db.insert_reply_draft.call_args.kwargs
+        assert kwargs["platform"] == "bluesky"
+        assert kwargs["intent"] == "appreciation"
+        assert kwargs["priority"] == "low"
+        assert kwargs["status"] == "dismissed"
 
 
 # ---------------------------------------------------------------------------
@@ -781,6 +827,8 @@ class TestInsertReplyDraft:
             relationship_context=None,
             quality_score=None,
             quality_flags=None,
+            intent="other",
+            priority="low",
         )
 
     def test_drafter_receives_correct_arguments(self, _patches):

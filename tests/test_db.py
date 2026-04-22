@@ -266,6 +266,8 @@ class TestInitSchemaMigrations:
             assert "relationship_context" in cols
             assert "quality_score" in cols
             assert "quality_flags" in cols
+            assert "intent" in cols
+            assert "priority" in cols
 
     def test_migration_adds_pipeline_runs_columns_if_missing(self, schema_path):
         """Test that pipeline_runs columns (outcome, rejection_reason) are added when missing."""
@@ -1650,6 +1652,38 @@ class TestReplyQueue:
         assert "relationship_context" in cols
         assert "quality_score" in cols
         assert "quality_flags" in cols
+        assert "intent" in cols
+        assert "priority" in cols
+
+    def test_insert_reply_draft_stores_intent_priority_and_status(self, db):
+        self._insert_reply(
+            db,
+            tweet_id="classified",
+            intent="bug_report",
+            priority="high",
+            status="pending",
+        )
+
+        row = db.conn.execute(
+            "SELECT intent, priority, status FROM reply_queue WHERE inbound_tweet_id = ?",
+            ("classified",),
+        ).fetchone()
+        assert row["intent"] == "bug_report"
+        assert row["priority"] == "high"
+        assert row["status"] == "pending"
+
+    def test_update_reply_classification_helpers(self, db):
+        reply_id = self._insert_reply(db, tweet_id="needs-classification")
+
+        db.update_reply_classification(reply_id, "question", "normal")
+        db.update_reply_priority(reply_id, "high")
+
+        row = db.conn.execute(
+            "SELECT intent, priority FROM reply_queue WHERE id = ?",
+            (reply_id,),
+        ).fetchone()
+        assert row["intent"] == "question"
+        assert row["priority"] == "high"
 
     def test_get_expired_reply_drafts_returns_old_pending_x_and_bluesky(self, db):
         now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
