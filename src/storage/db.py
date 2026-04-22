@@ -2526,6 +2526,7 @@ class Database:
         content_type: str | None = None,
         feedback_types: list[str] | tuple[str, ...] | None = None,
         limit: int = 10,
+        days: int | None = None,
     ) -> list[dict]:
         """Return recent feedback joined to the generated content it refers to."""
         clauses = []
@@ -2537,6 +2538,9 @@ class Database:
             placeholders = ", ".join("?" for _ in feedback_types)
             clauses.append(f"cf.feedback_type IN ({placeholders})")
             params.extend(feedback_types)
+        if days is not None:
+            clauses.append("cf.created_at >= datetime('now', ?)")
+            params.append(f"-{max(0, int(days))} days")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         cursor = self.conn.execute(

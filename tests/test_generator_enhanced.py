@@ -406,6 +406,36 @@ class TestGenerateXPost:
         assert result.knowledge_used == []
         assert result.attributions == []
 
+    def test_includes_feedback_constraints_without_rejected_draft(
+        self, mock_anthropic, db, tmp_path
+    ):
+        _, mock_client = mock_anthropic
+        rejected_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Today's breakthrough: added retries and fixed queue failures.",
+            eval_score=4.0,
+            eval_feedback="",
+        )
+        db.add_content_feedback(rejected_id, "reject", "Too much like a changelog.")
+        gen = EnhancedContentGenerator(api_key="test-key", model="test-model", db=db)
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "x_post.txt").write_text(
+            "Prompt: {prompt}\nCommit: {commit_message}\nRepo: {repo_name}"
+        )
+
+        _mock_llm_response(mock_client, "Generated post")
+
+        with patch.object(EnhancedContentGenerator, "PROMPTS_DIR", prompts_dir):
+            gen.generate_x_post("prompt", "commit", "repo")
+
+        prompt_text = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "RECENT USER FEEDBACK CONSTRAINTS" in prompt_text
+        assert "Too much like a changelog." in prompt_text
+        assert "Today's breakthrough" not in prompt_text
+
     def test_generates_post_with_knowledge_enhancement(self, generator_with_store, tmp_path):
         # Setup enhanced template
         prompts_dir = tmp_path / "prompts"

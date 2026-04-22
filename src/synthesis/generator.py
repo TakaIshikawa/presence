@@ -8,6 +8,7 @@ from typing import Optional
 from dataclasses import dataclass
 
 from model_usage import record_anthropic_usage
+from synthesis.feedback_memory import FeedbackMemory
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,17 @@ class ContentGenerator:
         model: str = "claude-sonnet-4-6",
         timeout: float = 300.0,
         db=None,
+        feedback_lookback_days: int = 30,
+        feedback_max_items: int = 6,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.db = db
+        self.feedback_memory = FeedbackMemory(
+            db=db,
+            lookback_days=feedback_lookback_days,
+            max_items=feedback_max_items,
+        )
         self.prompt_versions: dict[str, dict] = {}
         self.prompt_file_overrides: dict[str, Path] = {}
 
@@ -62,6 +70,19 @@ class ContentGenerator:
     def _prompt_metadata(self, prompt_type: str) -> dict:
         return self.prompt_versions.get(prompt_type, {})
 
+    def _feedback_constraints(self, content_type: str) -> str:
+        return self.feedback_memory.build_prompt_constraints(content_type)
+
+    @staticmethod
+    def _append_context(prompt: str, context: str) -> str:
+        if not context:
+            return prompt
+        return f"{prompt.rstrip()}\n\n{context}\n"
+
+    @staticmethod
+    def _merge_context(*parts: str) -> str:
+        return "\n\n".join(part.strip() for part in parts if part and part.strip())
+
     def generate_x_post(
         self,
         prompt: str,
@@ -75,6 +96,7 @@ class ContentGenerator:
             commit_message=commit_message,
             repo_name=repo_name
         )
+        filled = self._append_context(filled, self._feedback_constraints("x_post"))
 
         try:
             response = self.client.messages.create(
@@ -126,6 +148,7 @@ class ContentGenerator:
             commits=commits_text,
             commit_count=len(commits)
         )
+        filled = self._append_context(filled, self._feedback_constraints("x_post"))
 
         try:
             response = self.client.messages.create(
@@ -188,6 +211,8 @@ class ContentGenerator:
         max_tokens = type_config["max_tokens"]
 
         prompts_text = "\n\n".join(f"- {p[:500]}" for p in prompts[:5])
+        feedback_constraints = self._feedback_constraints(content_type)
+        avoidance_context = self._merge_context(avoidance_context, feedback_constraints)
 
         # Split current vs historical commits
         current_commits = [c for c in commits if not c.get("historical")]
@@ -284,6 +309,7 @@ class ContentGenerator:
         """Condense content to fit character limit."""
         template = self._load_prompt("condense")
         filled = template.format(content=content, char_count=len(content))
+        filled = self._append_context(filled, self._feedback_constraints("x_post"))
 
         try:
             response = self.client.messages.create(
@@ -326,6 +352,7 @@ class ContentGenerator:
             prompts=prompts_text,
             commits=commits_text
         )
+        filled = self._append_context(filled, self._feedback_constraints("x_thread"))
 
         try:
             response = self.client.messages.create(
@@ -376,6 +403,7 @@ class ContentGenerator:
             prompts=prompts_text,
             commits=commits_text
         )
+        filled = self._append_context(filled, self._feedback_constraints("blog_post"))
 
         try:
             response = self.client.messages.create(

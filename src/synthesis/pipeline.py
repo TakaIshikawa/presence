@@ -235,10 +235,17 @@ class SynthesisPipeline:
         persona_guard_recent_limit: int = 20,
         persona_guard_min_recent_posts: int = 3,
         restricted_prompt_behavior: str = "strict",
+        feedback_lookback_days: int = 30,
+        feedback_max_items: int = 6,
     ):
         self.api_key = api_key
         self.generator = ContentGenerator(
-            api_key, generator_model, timeout=anthropic_timeout, db=db
+            api_key,
+            generator_model,
+            timeout=anthropic_timeout,
+            db=db,
+            feedback_lookback_days=feedback_lookback_days,
+            feedback_max_items=feedback_max_items,
         )
         self.evaluator = CrossModelEvaluator(
             api_key, evaluator_model, timeout=anthropic_timeout, db=db

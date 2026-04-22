@@ -82,6 +82,8 @@ def main():
             restricted_prompt_behavior=getattr(
                 config.curated_sources, "restricted_prompt_behavior", "strict"
             ) if config.curated_sources else "strict",
+            feedback_lookback_days=config.synthesis.feedback_lookback_days,
+            feedback_max_items=config.synthesis.feedback_max_items,
         )
         blog_writer = BlogWriter(config.paths.static_site)
 

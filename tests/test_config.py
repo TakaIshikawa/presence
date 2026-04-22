@@ -172,6 +172,18 @@ class TestDataclassParsing:
         assert isinstance(cfg.synthesis, SynthesisConfig)
         assert cfg.synthesis.model == "claude-sonnet-4-5-20250514"
         assert cfg.synthesis.eval_threshold == 0.7
+        assert cfg.synthesis.feedback_lookback_days == 30
+        assert cfg.synthesis.feedback_max_items == 6
+
+    def test_synthesis_feedback_memory_config(self, tmp_path):
+        data = _minimal_config_dict()
+        data["synthesis"]["feedback_lookback_days"] = 14
+        data["synthesis"]["feedback_max_items"] = 4
+
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        assert cfg.synthesis.feedback_lookback_days == 14
+        assert cfg.synthesis.feedback_max_items == 4
 
     def test_polling_config(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

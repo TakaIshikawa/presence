@@ -6,6 +6,7 @@ from typing import Optional
 from dataclasses import dataclass
 
 from knowledge.store import KnowledgeStore, KnowledgeItem, KnowledgeSearchResult
+from synthesis.feedback_memory import FeedbackMemory
 
 
 @dataclass
@@ -36,6 +37,8 @@ class EnhancedContentGenerator:
         max_knowledge_per_author: Optional[int] = None,
         max_knowledge_per_source_type: Optional[int] = None,
         db=None,
+        feedback_lookback_days: int = 30,
+        feedback_max_items: int = 6,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
@@ -45,6 +48,11 @@ class EnhancedContentGenerator:
         self.max_knowledge_per_author = max_knowledge_per_author
         self.max_knowledge_per_source_type = max_knowledge_per_source_type
         self.db = db
+        self.feedback_memory = FeedbackMemory(
+            db=db,
+            lookback_days=feedback_lookback_days,
+            max_items=feedback_max_items,
+        )
         self.prompt_versions: dict[str, dict] = {}
         self.loaded_prompt_types: dict[str, str] = {}
 
@@ -73,6 +81,15 @@ class EnhancedContentGenerator:
 
     def _prompt_metadata(self, prompt_type: str) -> dict:
         return self.prompt_versions.get(prompt_type, {})
+
+    def _feedback_constraints(self, content_type: str) -> str:
+        return self.feedback_memory.build_prompt_constraints(content_type)
+
+    @staticmethod
+    def _append_context(prompt: str, context: str) -> str:
+        if not context:
+            return prompt
+        return f"{prompt.rstrip()}\n\n{context}\n"
 
     def _retrieve_knowledge(
         self,
@@ -198,6 +215,7 @@ class EnhancedContentGenerator:
                 commit_message=commit_message,
                 repo_name=repo_name
             )
+        filled = self._append_context(filled, self._feedback_constraints("x_post"))
 
         response = self.client.messages.create(
             model=self.model,
@@ -269,6 +287,7 @@ class EnhancedContentGenerator:
                 prompts=prompts_text,
                 commits=commits_text
             )
+        filled = self._append_context(filled, self._feedback_constraints("x_thread"))
 
         response = self.client.messages.create(
             model=self.model,

@@ -53,6 +53,8 @@ class SynthesisConfig:
     eval_model: str
     eval_threshold: float
     num_candidates: int
+    feedback_lookback_days: int = 30
+    feedback_max_items: int = 6
     format_weighting_enabled: bool = True
     claim_check_enabled: bool = True
     persona_guard_enabled: bool = True
@@ -664,6 +666,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
             eval_model=data["synthesis"].get("eval_model", _require(data, "synthesis", "model", section="synthesis")),
             eval_threshold=_require(data, "synthesis", "eval_threshold", section="synthesis"),
             num_candidates=data["synthesis"].get("num_candidates", 3),
+            feedback_lookback_days=data["synthesis"].get("feedback_lookback_days", 30),
+            feedback_max_items=data["synthesis"].get("feedback_max_items", 6),
             format_weighting_enabled=data["synthesis"].get("format_weighting_enabled", True),
             claim_check_enabled=data["synthesis"].get("claim_check_enabled", True),
             persona_guard_enabled=data["synthesis"].get("persona_guard_enabled", True),

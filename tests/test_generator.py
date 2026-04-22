@@ -164,6 +164,31 @@ class TestGenerateXPost:
         assert result.source_prompts == ["test prompt"]
         assert result.source_commits == ["feat: add feature"]
 
+    def test_includes_feedback_constraints_without_rejected_draft(self, mock_client, db):
+        rejected_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Today's breakthrough: added retries and fixed queue failures.",
+            eval_score=4.0,
+            eval_feedback="",
+        )
+        db.add_content_feedback(rejected_id, "reject", "Too much like a changelog.")
+        mock_client.messages.create.return_value = _make_mock_response("post")
+
+        with patch("synthesis.generator.anthropic.Anthropic", return_value=mock_client):
+            gen = ContentGenerator(api_key="test-key", db=db)
+        gen._load_prompt = MagicMock(
+            return_value="{prompt}\n{commit_message}\n{repo_name}"
+        )
+
+        gen.generate_x_post("prompt", "commit", "repo")
+
+        prompt_text = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "RECENT USER FEEDBACK CONSTRAINTS" in prompt_text
+        assert "Too much like a changelog." in prompt_text
+        assert "Today's breakthrough" not in prompt_text
+
     def test_registers_prompt_version_when_prompt_file_used(self, mock_client, db, tmp_path):
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir()
@@ -185,6 +210,37 @@ class TestGenerateXPost:
         assert row["prompt_text"] == prompt_text
         assert first.prompt_hash == prompt_hash
         assert second.prompt_version == 1
+
+    def test_generate_candidates_merges_feedback_into_avoidance_context(self, mock_client, db):
+        rejected_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Generic rejected post",
+            eval_score=4.0,
+            eval_feedback="",
+        )
+        db.add_content_feedback(rejected_id, "reject", "Avoid generic agent wisdom.")
+        mock_client.messages.create.return_value = _make_mock_response("post")
+
+        with patch("synthesis.generator.anthropic.Anthropic", return_value=mock_client):
+            gen = ContentGenerator(api_key="test-key", db=db)
+        gen._load_prompt = MagicMock(
+            return_value="{prompts}\n{commits}\n{commit_count}\n{few_shot_section}\n"
+            "{format_directive}\n{avoidance_context}\n{historical_section}\n"
+            "{pattern_context}\n{trend_context}"
+        )
+
+        gen.generate_candidates(
+            SAMPLE_PROMPTS,
+            SAMPLE_COMMITS,
+            avoidance_context="Avoid old phrasing.",
+            num_candidates=1,
+        )
+
+        prompt_text = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "Avoid old phrasing." in prompt_text
+        assert "Avoid generic agent wisdom." in prompt_text
 
 
 # ---------------------------------------------------------------------------

@@ -79,7 +79,12 @@ class TestPipelineConstruction:
             num_candidates=3,
         )
         MockGen.assert_called_once_with(
-            "test-key", "claude-sonnet-4-6", timeout=300.0, db=db
+            "test-key",
+            "claude-sonnet-4-6",
+            timeout=300.0,
+            db=db,
+            feedback_lookback_days=30,
+            feedback_max_items=6,
         )
         MockEval.assert_called_once_with(
             "test-key", "claude-opus-4-7", timeout=300.0, db=db
