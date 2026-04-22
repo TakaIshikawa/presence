@@ -2661,6 +2661,7 @@ class Database:
         target_date: str = None,
         source_material: str = None,
         campaign_id: int = None,
+        status: str = "planned",
     ) -> int:
         """Plan a future topic for content generation.
 
@@ -2670,15 +2671,16 @@ class Database:
             target_date: Target publication date (ISO format)
             source_material: Optional commit SHAs or session IDs to draw from
             campaign_id: Optional campaign to group this planned topic under
+            status: Planned topic status
 
         Returns:
             ID of the planned topic
         """
         cursor = self.conn.execute(
             """INSERT INTO planned_topics
-               (topic, angle, target_date, source_material, campaign_id)
-               VALUES (?, ?, ?, ?, ?)""",
-            (topic, angle, target_date, source_material, campaign_id)
+               (topic, angle, target_date, source_material, campaign_id, status)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (topic, angle, target_date, source_material, campaign_id, status)
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -2736,6 +2738,18 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def get_campaign_by_name(self, name: str) -> dict | None:
+        """Get a single content campaign by name."""
+        cursor = self.conn.execute(
+            """SELECT * FROM content_campaigns
+               WHERE name = ?
+               ORDER BY created_at ASC, id ASC
+               LIMIT 1""",
+            (name,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def get_campaigns(self, status: str = None) -> list[dict]:
         """List content campaigns, optionally filtered by status."""
         if status:
@@ -2751,6 +2765,85 @@ class Database:
                    ORDER BY start_date ASC NULLS LAST, created_at ASC"""
             )
         return [dict(row) for row in cursor.fetchall()]
+
+    def update_campaign(
+        self,
+        campaign_id: int,
+        name: str,
+        goal: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        status: str = "planned",
+    ) -> None:
+        """Update a content campaign."""
+        cursor = self.conn.execute(
+            """UPDATE content_campaigns
+               SET name = ?, goal = ?, start_date = ?, end_date = ?, status = ?
+               WHERE id = ?""",
+            (name, goal, start_date, end_date, status, campaign_id)
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Campaign {campaign_id} does not exist")
+        self.conn.commit()
+
+    def find_planned_topic(
+        self,
+        topic: str,
+        target_date: str = None,
+        campaign_id: int = None,
+    ) -> dict | None:
+        """Find a planned topic by topic, target date, and campaign."""
+        if target_date is None and campaign_id is None:
+            where = "topic = ? AND target_date IS NULL AND campaign_id IS NULL"
+            params = (topic,)
+        elif target_date is None:
+            where = "topic = ? AND target_date IS NULL AND campaign_id = ?"
+            params = (topic, campaign_id)
+        elif campaign_id is None:
+            where = "topic = ? AND target_date = ? AND campaign_id IS NULL"
+            params = (topic, target_date)
+        else:
+            where = "topic = ? AND target_date = ? AND campaign_id = ?"
+            params = (topic, target_date, campaign_id)
+
+        cursor = self.conn.execute(
+            f"""SELECT * FROM planned_topics
+                WHERE {where}
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1""",
+            params
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def update_planned_topic(
+        self,
+        planned_id: int,
+        topic: str,
+        angle: str = None,
+        target_date: str = None,
+        source_material: str = None,
+        campaign_id: int = None,
+        status: str = "planned",
+    ) -> None:
+        """Update a planned topic."""
+        if campaign_id is not None and self.get_campaign(campaign_id) is None:
+            raise ValueError(f"Campaign {campaign_id} does not exist")
+
+        cursor = self.conn.execute(
+            """UPDATE planned_topics
+               SET topic = ?,
+                   angle = ?,
+                   target_date = ?,
+                   source_material = ?,
+                   campaign_id = ?,
+                   status = ?
+               WHERE id = ?""",
+            (topic, angle, target_date, source_material, campaign_id, status, planned_id)
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Planned topic {planned_id} does not exist")
+        self.conn.commit()
 
     def attach_planned_topic_to_campaign(
         self,
