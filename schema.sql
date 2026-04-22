@@ -249,6 +249,8 @@ CREATE TABLE IF NOT EXISTS knowledge (
     attribution_required INTEGER DEFAULT 1,
     license TEXT DEFAULT 'attribution_required',  -- 'open', 'attribution_required', 'restricted'
     approved INTEGER DEFAULT 0,
+    published_at TEXT,        -- original source publication timestamp when known
+    ingested_at TEXT DEFAULT CURRENT_TIMESTAMP,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source_type, source_id)
 );

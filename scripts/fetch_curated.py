@@ -440,7 +440,8 @@ def main():
                             content=tweet["text"],
                             url=tweet["url"],
                             author=account.identifier,
-                            license_type=account.license
+                            license_type=account.license,
+                            published_at=tweet.get("created_at"),
                         )
                         logger.info(f"Ingested tweet {tweet['id']}")
                         time.sleep(1)  # Rate limiting

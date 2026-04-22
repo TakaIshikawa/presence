@@ -134,7 +134,8 @@ def ingest_curated_post(
     content: str,
     url: str,
     author: str,
-    license_type: str = "attribution_required"
+    license_type: str = "attribution_required",
+    published_at: str | None = None,
 ) -> Optional[int]:
     """Ingest a curated external X post into knowledge base."""
     if store.exists("curated_x", post_id):
@@ -154,6 +155,7 @@ def ingest_curated_post(
         attribution_required=(license_type != "open"),
         approved=True,  # Curated = pre-approved
         created_at=None,
+        published_at=published_at,
         license=license_type,
     )
     return store.add_item(item)
@@ -166,7 +168,8 @@ def ingest_curated_article(
     content: str,
     title: str,
     author: str,
-    license_type: str = "attribution_required"
+    license_type: str = "attribution_required",
+    published_at: str | None = None,
 ) -> Optional[int]:
     """Ingest a curated article/blog post into knowledge base."""
     if store.exists("curated_article", url):
@@ -189,6 +192,7 @@ def ingest_curated_article(
         attribution_required=(license_type != "open"),
         approved=True,
         created_at=None,
+        published_at=published_at,
         license=license_type,
     )
     return store.add_item(item)
@@ -201,7 +205,8 @@ def ingest_curated_newsletter(
     content: str,
     title: str,
     author: str,
-    license_type: str = "attribution_required"
+    license_type: str = "attribution_required",
+    published_at: str | None = None,
 ) -> Optional[int]:
     """Ingest a curated newsletter issue into knowledge base."""
     if store.exists("curated_newsletter", url):
@@ -224,6 +229,7 @@ def ingest_curated_newsletter(
         attribution_required=(license_type != "open"),
         approved=True,
         created_at=None,
+        published_at=published_at,
         license=license_type,
     )
     return store.add_item(item)

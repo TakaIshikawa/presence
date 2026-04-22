@@ -1,7 +1,7 @@
 """Tests for source quality scoring system."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -529,3 +529,56 @@ def test_min_uses_filter(db):
     scores = scorer.compute_scores(days=90, min_uses=1)
     assert len(scores) == 1
     assert scores[0].author == "single_author"
+
+
+def test_compute_scores_with_freshness_boost(db):
+    """Fresh source timestamps can boost score without disabling quality ranking."""
+    db.conn.execute("ALTER TABLE knowledge ADD COLUMN published_at TEXT")
+    db.conn.execute("ALTER TABLE knowledge ADD COLUMN ingested_at TEXT")
+    now = datetime.now(timezone.utc)
+
+    sources = [
+        ("evergreen", 20.0, "low_resonance", now - timedelta(days=45)),
+        ("fresh", 10.0, "resonated", now),
+    ]
+    for author, engagement, quality, published_at in sources:
+        for i in range(3):
+            cursor = db.conn.execute(
+                """INSERT INTO knowledge
+                   (source_type, source_id, author, content, approved, published_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    "curated_x",
+                    f"{author}_{i}",
+                    author,
+                    f"Content {i}",
+                    1,
+                    published_at.isoformat(),
+                )
+            )
+            k_id = cursor.lastrowid
+            cursor = db.conn.execute(
+                """INSERT INTO generated_content
+                   (content_type, content, eval_score, published, published_at, auto_quality)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                ("x_post", f"Post {author}_{i}", 8.0, 1, now.isoformat(), quality)
+            )
+            c_id = cursor.lastrowid
+            db.conn.execute(
+                "INSERT INTO content_knowledge_links (content_id, knowledge_id, relevance_score) VALUES (?, ?, ?)",
+                (c_id, k_id, 0.7)
+            )
+            db.conn.execute(
+                "INSERT INTO post_engagement (content_id, tweet_id, engagement_score, fetched_at) VALUES (?, ?, ?, ?)",
+                (c_id, f"tweet_{author}_{i}", engagement, now.isoformat())
+            )
+
+    db.conn.commit()
+
+    scorer = SourceScorer(db)
+    disabled = scorer.compute_scores(days=90, min_uses=2)
+    enabled = scorer.compute_scores(days=90, min_uses=2, freshness_half_life_days=14)
+
+    assert [score.author for score in disabled] == ["evergreen", "fresh"]
+    assert enabled[0].author == "fresh"
+    assert enabled[0].freshness_score > enabled[1].freshness_score

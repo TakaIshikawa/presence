@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
-from knowledge.store import KnowledgeStore, KnowledgeItem
+from knowledge.store import KnowledgeStore, KnowledgeItem, KnowledgeSearchResult
 
 
 @dataclass
@@ -14,7 +14,7 @@ class GeneratedContent:
     content: str
     source_prompts: list[str]
     source_commits: list[str]
-    knowledge_used: list[tuple[KnowledgeItem, float]]  # (item, relevance)
+    knowledge_used: list[tuple[KnowledgeItem, float] | KnowledgeSearchResult]  # (item, relevance)
     attributions: list[str]
     knowledge_ids: list[tuple[int, float]]  # (knowledge_id, relevance_score) for lineage tracking
     prompt_type: Optional[str] = None
@@ -79,7 +79,10 @@ class EnhancedContentGenerator:
         query: str,
         limit_own: int = 3,
         limit_external: int = 2
-    ) -> tuple[list[tuple[KnowledgeItem, float]], list[tuple[KnowledgeItem, float]]]:
+    ) -> tuple[
+        list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
+        list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
+    ]:
         """Retrieve relevant knowledge for synthesis."""
         if not self.knowledge_store:
             return [], []
@@ -116,9 +119,12 @@ class EnhancedContentGenerator:
 
     def _apply_prompt_diversity(
         self,
-        own_insights: list[tuple[KnowledgeItem, float]],
-        external_insights: list[tuple[KnowledgeItem, float]],
-    ) -> tuple[list[tuple[KnowledgeItem, float]], list[tuple[KnowledgeItem, float]]]:
+        own_insights: list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
+        external_insights: list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
+    ) -> tuple[
+        list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
+        list[tuple[KnowledgeItem, float] | KnowledgeSearchResult],
+    ]:
         if (
             self.max_knowledge_per_author is None
             and self.max_knowledge_per_source_type is None
@@ -138,17 +144,25 @@ class EnhancedContentGenerator:
 
     def _format_insights(
         self,
-        insights: list[tuple[KnowledgeItem, float]]
+        insights: list[tuple[KnowledgeItem, float] | KnowledgeSearchResult]
     ) -> str:
         """Format insights for prompt inclusion."""
         if not insights:
             return "(none available)"
 
         formatted = []
-        for item, score in insights:
+        for result in insights:
+            item, score = result
             source_info = f"[{item.author}]" if item.author else ""
             insight_text = item.insight or item.content[:200]
-            formatted.append(f"- {source_info} {insight_text}")
+            score_note = ""
+            if getattr(result, "freshness_score", 0.0) > 0:
+                raw_similarity = getattr(result, "raw_similarity", score)
+                score_note = (
+                    f" (freshness-adjusted relevance {score:.2f}; "
+                    f"semantic similarity {raw_similarity:.2f})"
+                )
+            formatted.append(f"- {source_info} {insight_text}{score_note}")
 
         return "\n".join(formatted)
 

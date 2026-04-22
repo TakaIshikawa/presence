@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synthesis.generator_enhanced import EnhancedContentGenerator, GeneratedContent
-from knowledge.store import KnowledgeItem
+from knowledge.store import KnowledgeItem, KnowledgeSearchResult
 
 
 @pytest.fixture
@@ -128,6 +128,27 @@ class TestFormatInsights:
         assert lines[0] == "-  Insight 1"
         assert lines[1] == "- [alice] Insight 2"
 
+    def test_formats_freshness_adjusted_result_metadata(self, generator_no_store):
+        item = _make_knowledge_item(
+            source_type="curated_x",
+            content="Full content here",
+            author="alice",
+            insight="Fresh insight",
+        )
+        result = KnowledgeSearchResult(
+            item=item,
+            raw_similarity=0.76,
+            adjusted_score=1.21,
+            freshness_score=0.59,
+        )
+
+        formatted = generator_no_store._format_insights([result])
+
+        assert formatted == (
+            "- [alice] Fresh insight "
+            "(freshness-adjusted relevance 1.21; semantic similarity 0.76)"
+        )
+
 
 # -- _retrieve_knowledge tests ------------------------------------------------
 
@@ -168,6 +189,23 @@ class TestRetrieveKnowledge:
         assert calls[1][1]["source_types"] == ["curated_x", "curated_article"]
         assert calls[1][1]["limit"] == 2
         assert calls[1][1]["min_similarity"] == 0.5
+
+    def test_requests_freshness_adjusted_external_insights_when_enabled(
+        self, mock_anthropic, mock_knowledge_store
+    ):
+        _, _ = mock_anthropic
+        gen = EnhancedContentGenerator(
+            api_key="test-key",
+            knowledge_store=mock_knowledge_store,
+            model="test-model",
+            freshness_half_life_days=14,
+        )
+
+        gen._retrieve_knowledge("test query")
+
+        calls = mock_knowledge_store.search_similar.call_args_list
+        assert "freshness_half_life_days" not in calls[0][1]
+        assert calls[1][1]["freshness_half_life_days"] == 14
 
     def test_passes_knowledge_diversity_caps_to_search(self, mock_anthropic, mock_knowledge_store):
         _, _ = mock_anthropic

@@ -35,6 +35,8 @@ class KnowledgeItem:
     attribution_required: bool
     approved: bool
     created_at: Optional[datetime]
+    published_at: Optional[datetime | str] = None
+    ingested_at: Optional[datetime | str] = None
     license: str = "attribution_required"
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,6 +66,7 @@ class KnowledgeSearchResult:
     item: KnowledgeItem
     raw_similarity: float
     adjusted_score: float
+    freshness_score: float = 0.0
 
     def __iter__(self):
         yield self.item
@@ -94,6 +97,7 @@ class KnowledgeStore:
         self.conn = conn
         self.embedder = embedder
         self.freshness_half_life_days = freshness_half_life_days
+        self._knowledge_columns: Optional[set[str]] = None
 
     @staticmethod
     def is_prompt_allowed(
@@ -177,6 +181,20 @@ class KnowledgeStore:
         return "attribution_required"
 
     @staticmethod
+    def _row_value(row: sqlite3.Row, column: str, default: Any = None) -> Any:
+        if column in row.keys():
+            return row[column]
+        return default
+
+    def _has_knowledge_column(self, column: str) -> bool:
+        if self._knowledge_columns is None:
+            self._knowledge_columns = {
+                row[1]
+                for row in self.conn.execute("PRAGMA table_info(knowledge)")
+            }
+        return column in self._knowledge_columns
+
+    @staticmethod
     def _parse_created_at(value: Any) -> Optional[datetime]:
         if value is None:
             return None
@@ -190,26 +208,43 @@ class KnowledgeStore:
         return None
 
     @staticmethod
-    def _freshness_adjusted_score(
-        similarity: float,
-        created_at: Any,
+    def _source_timestamp(row: sqlite3.Row) -> Any:
+        """Return the best source timestamp for freshness scoring."""
+        if "published_at" in row.keys() or "ingested_at" in row.keys():
+            return (
+                KnowledgeStore._row_value(row, "published_at")
+                or KnowledgeStore._row_value(row, "ingested_at")
+            )
+        return KnowledgeStore._row_value(row, "created_at")
+
+    @staticmethod
+    def _freshness_score(
+        timestamp: Any,
         half_life_days: Optional[float],
     ) -> float:
         if half_life_days is None:
-            return similarity
+            return 0.0
         if half_life_days <= 0:
             raise ValueError("freshness_half_life_days must be positive when set")
 
-        created = KnowledgeStore._parse_created_at(created_at)
+        created = KnowledgeStore._parse_created_at(timestamp)
         if created is None:
-            return similarity
+            return 0.0
 
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         age_days = max((now - created.astimezone(timezone.utc)).total_seconds(), 0) / 86400
-        freshness_weight = math.pow(0.5, age_days / half_life_days)
-        return similarity * freshness_weight
+        return math.pow(0.5, age_days / half_life_days)
+
+    @staticmethod
+    def _freshness_adjusted_score(
+        similarity: float,
+        timestamp: Any,
+        half_life_days: Optional[float],
+    ) -> float:
+        freshness_score = KnowledgeStore._freshness_score(timestamp, half_life_days)
+        return similarity * (1.0 + freshness_score)
 
     def add_item(self, item: KnowledgeItem) -> int:
         """Add a knowledge item with embedding.
@@ -227,30 +262,61 @@ class KnowledgeStore:
 
         embedding_blob = serialize_embedding(item.embedding)
 
+        columns = [
+            "source_type",
+            "source_id",
+            "source_url",
+            "author",
+            "content",
+            "insight",
+            "embedding",
+            "attribution_required",
+            "license",
+            "approved",
+        ]
+        values = [
+            item.source_type,
+            item.source_id,
+            item.source_url,
+            item.author,
+            item.content,
+            item.insight,
+            embedding_blob,
+            1 if item.attribution_required else 0,
+            item.license,
+            1 if item.approved else 0,
+        ]
+        if self._has_knowledge_column("published_at"):
+            columns.append("published_at")
+            values.append(item.published_at)
+        if self._has_knowledge_column("ingested_at"):
+            columns.append("ingested_at")
+            values.append(item.ingested_at or datetime.now(timezone.utc).isoformat())
+
+        update_columns = [
+            "content",
+            "insight",
+            "embedding",
+            "attribution_required",
+            "license",
+            "approved",
+        ]
+        if "published_at" in columns:
+            update_columns.append("published_at")
+        if "ingested_at" in columns:
+            update_columns.append("ingested_at")
+
+        placeholders = ", ".join("?" for _ in columns)
+        update_clause = ",\n               ".join(
+            f"{column} = excluded.{column}" for column in update_columns
+        )
         cursor = self.conn.execute(
-            """INSERT INTO knowledge
-               (source_type, source_id, source_url, author, content, insight,
-                embedding, attribution_required, license, approved)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            f"""INSERT INTO knowledge
+               ({', '.join(columns)})
+               VALUES ({placeholders})
                ON CONFLICT(source_type, source_id) DO UPDATE SET
-               content = excluded.content,
-               insight = excluded.insight,
-               embedding = excluded.embedding,
-               attribution_required = excluded.attribution_required,
-               license = excluded.license,
-               approved = excluded.approved""",
-            (
-                item.source_type,
-                item.source_id,
-                item.source_url,
-                item.author,
-                item.content,
-                item.insight,
-                embedding_blob,
-                1 if item.attribution_required else 0,
-                item.license,
-                1 if item.approved else 0
-            )
+               {update_clause}""",
+            values,
         )
         self.conn.commit()
         row_id = cursor.lastrowid
@@ -318,17 +384,20 @@ class KnowledgeStore:
                     attribution_required=bool(row["attribution_required"]),
                     approved=bool(row["approved"]),
                     created_at=row["created_at"],
+                    published_at=self._row_value(row, "published_at"),
+                    ingested_at=self._row_value(row, "ingested_at"),
                     license=self._row_license(row),
                 )
-                adjusted_score = self._freshness_adjusted_score(
-                    similarity,
-                    row["created_at"],
-                    effective_half_life_days,
+                source_timestamp = self._source_timestamp(row)
+                freshness_score = self._freshness_score(
+                    source_timestamp, effective_half_life_days
                 )
+                adjusted_score = similarity * (1.0 + freshness_score)
                 results.append(KnowledgeSearchResult(
                     item=item,
                     raw_similarity=similarity,
                     adjusted_score=adjusted_score,
+                    freshness_score=freshness_score,
                 ))
 
         # Sort by adjusted score and limit. With freshness disabled, this is
@@ -371,6 +440,8 @@ class KnowledgeStore:
             attribution_required=bool(row["attribution_required"]),
             approved=bool(row["approved"]),
             created_at=row["created_at"],
+            published_at=self._row_value(row, "published_at"),
+            ingested_at=self._row_value(row, "ingested_at"),
             license=self._row_license(row),
         )
 
@@ -409,6 +480,8 @@ class KnowledgeStore:
                 attribution_required=bool(row["attribution_required"]),
                 approved=bool(row["approved"]),
                 created_at=row["created_at"],
+                published_at=self._row_value(row, "published_at"),
+                ingested_at=self._row_value(row, "ingested_at"),
                 license=self._row_license(row),
             ))
         return items
@@ -449,6 +522,8 @@ class KnowledgeStore:
                 attribution_required=bool(row["attribution_required"]),
                 approved=bool(row["approved"]),
                 created_at=row["created_at"],
+                published_at=self._row_value(row, "published_at"),
+                ingested_at=self._row_value(row, "ingested_at"),
                 license=self._row_license(row),
             ))
         if not prompt_safe:

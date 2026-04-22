@@ -376,11 +376,11 @@ class TestSearchSimilar:
         store.add_item(fresh_lower)
         now = datetime.now(timezone.utc)
         store.conn.execute(
-            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
             ((now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds"), "old-high"),
         )
         store.conn.execute(
-            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
             (now.isoformat(sep=" ", timespec="seconds"), "fresh-lower"),
         )
         store.conn.commit()
@@ -398,11 +398,11 @@ class TestSearchSimilar:
         store.add_item(fresh_lower)
         now = datetime.now(timezone.utc)
         store.conn.execute(
-            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
             ((now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds"), "old-high"),
         )
         store.conn.execute(
-            "UPDATE knowledge SET created_at = ? WHERE source_id = ?",
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
             (now.isoformat(sep=" ", timespec="seconds"), "fresh-lower"),
         )
         store.conn.commit()
@@ -415,8 +415,53 @@ class TestSearchSimilar:
 
         assert [result.item.source_id for result in results] == ["fresh-lower", "old-high"]
         old_result = next(result for result in results if result.item.source_id == "old-high")
-        assert old_result.adjusted_score < old_result.raw_similarity
+        assert old_result.adjusted_score > old_result.raw_similarity
+        assert old_result.freshness_score > 0
         assert results[0].raw_similarity < old_result.raw_similarity
+
+    def test_freshness_uses_ingested_at_when_published_at_missing(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        old_high = _make_item(source_id="old-high", embedding=[0.98, 0.02])
+        fresh_lower = _make_item(source_id="fresh-lower", embedding=[0.86, 0.14])
+        store.add_item(old_high)
+        store.add_item(fresh_lower)
+        now = datetime.now(timezone.utc)
+        store.conn.execute(
+            "UPDATE knowledge SET published_at = NULL, ingested_at = ? WHERE source_id = ?",
+            ((now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds"), "old-high"),
+        )
+        store.conn.execute(
+            "UPDATE knowledge SET published_at = NULL, ingested_at = ? WHERE source_id = ?",
+            (now.isoformat(sep=" ", timespec="seconds"), "fresh-lower"),
+        )
+        store.conn.commit()
+
+        results = store.search_similar(
+            "query",
+            min_similarity=-1.0,
+            freshness_half_life_days=7,
+        )
+
+        assert [result.item.source_id for result in results] == ["fresh-lower", "old-high"]
+
+    def test_missing_freshness_timestamps_do_not_crash(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        store.add_item(_make_item(source_id="no-timestamp", embedding=[0.95, 0.05]))
+        store.conn.execute(
+            "UPDATE knowledge SET published_at = NULL, ingested_at = NULL WHERE source_id = ?",
+            ("no-timestamp",),
+        )
+        store.conn.commit()
+
+        results = store.search_similar(
+            "query",
+            min_similarity=-1.0,
+            freshness_half_life_days=7,
+        )
+
+        assert results[0].item.source_id == "no-timestamp"
+        assert results[0].adjusted_score == pytest.approx(results[0].raw_similarity)
+        assert results[0].freshness_score == 0.0
 
     def test_min_similarity_filter(self, store):
         self._add_items(store)

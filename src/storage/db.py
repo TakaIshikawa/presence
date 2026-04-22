@@ -167,6 +167,10 @@ class Database:
                 self.conn.execute(
                     "ALTER TABLE knowledge ADD COLUMN license TEXT DEFAULT 'attribution_required'"
                 )
+            if k_cols and "published_at" not in k_cols:
+                self.conn.execute("ALTER TABLE knowledge ADD COLUMN published_at TEXT")
+            if k_cols and "ingested_at" not in k_cols:
+                self.conn.execute("ALTER TABLE knowledge ADD COLUMN ingested_at TEXT")
             # Migrate reply_queue for cultivate enrichment
             rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
             if rq_cols and "relationship_context" not in rq_cols:
