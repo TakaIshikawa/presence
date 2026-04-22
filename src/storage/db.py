@@ -2299,6 +2299,52 @@ class Database:
         )
         return cursor.fetchone() is not None
 
+    def get_recent_proactive_reply_dedup_candidates(
+        self,
+        author_handle: str,
+        platform_target_id: Optional[str],
+        lookback_hours: int,
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get recent proactive reply drafts matching an author or target."""
+        if lookback_hours <= 0:
+            return []
+        normalized_handle = author_handle.lstrip("@").lower() if author_handle else ""
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=lookback_hours)
+        filters = [
+            "action_type = 'reply'",
+            "draft_text IS NOT NULL",
+            "TRIM(draft_text) != ''",
+            "created_at IS NOT NULL",
+            "datetime(created_at) >= datetime(?)",
+        ]
+        params: list[object] = [cutoff.isoformat()]
+        match_filters = []
+        if normalized_handle:
+            match_filters.append("LOWER(LTRIM(target_author_handle, '@')) = ?")
+            params.append(normalized_handle)
+        if platform_target_id:
+            match_filters.append("target_tweet_id = ?")
+            params.append(platform_target_id)
+        if not match_filters:
+            return []
+        filters.append(f"({' OR '.join(match_filters)})")
+        cursor = self.conn.execute(
+            f"""SELECT
+                    'proactive_actions' AS source_table,
+                    id,
+                    target_author_handle AS author_handle,
+                    target_tweet_id AS platform_target_id,
+                    draft_text,
+                    status,
+                    created_at
+                FROM proactive_actions
+                WHERE {' AND '.join(filters)}
+                ORDER BY datetime(created_at) DESC, id DESC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     # Curated sources (account discovery)
     def sync_config_sources(
         self, sources: list[dict], source_type: str
@@ -2929,6 +2975,75 @@ class Database:
             (inbound_tweet_id,)
         )
         return cursor.fetchone() is not None
+
+    def get_recent_inbound_reply_dedup_candidates(
+        self,
+        author_handle: str,
+        platform_target_id: Optional[str],
+        lookback_hours: int,
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get recent inbound reply drafts matching an author or target."""
+        if lookback_hours <= 0:
+            return []
+        normalized_handle = author_handle.lstrip("@").lower() if author_handle else ""
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=lookback_hours)
+        filters = [
+            "draft_text IS NOT NULL",
+            "TRIM(draft_text) != ''",
+            "detected_at IS NOT NULL",
+            "datetime(detected_at) >= datetime(?)",
+        ]
+        params: list[object] = [cutoff.isoformat()]
+        match_filters = []
+        if normalized_handle:
+            match_filters.append("LOWER(LTRIM(inbound_author_handle, '@')) = ?")
+            params.append(normalized_handle)
+        if platform_target_id:
+            match_filters.append(
+                "(inbound_tweet_id = ? OR our_tweet_id = ? OR our_platform_id = ?)"
+            )
+            params.extend([platform_target_id, platform_target_id, platform_target_id])
+        if not match_filters:
+            return []
+        filters.append(f"({' OR '.join(match_filters)})")
+        cursor = self.conn.execute(
+            f"""SELECT
+                    'reply_queue' AS source_table,
+                    id,
+                    inbound_author_handle AS author_handle,
+                    inbound_tweet_id AS platform_target_id,
+                    draft_text,
+                    status,
+                    detected_at AS created_at
+                FROM reply_queue
+                WHERE {' AND '.join(filters)}
+                ORDER BY datetime(detected_at) DESC, id DESC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_reply_dedup_candidates(
+        self,
+        author_handle: str,
+        platform_target_id: Optional[str],
+        lookback_hours: int,
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get recent reply drafts from inbound and proactive queues."""
+        inbound = self.get_recent_inbound_reply_dedup_candidates(
+            author_handle=author_handle,
+            platform_target_id=platform_target_id,
+            lookback_hours=lookback_hours,
+            now=now,
+        )
+        proactive = self.get_recent_proactive_reply_dedup_candidates(
+            author_handle=author_handle,
+            platform_target_id=platform_target_id,
+            lookback_hours=lookback_hours,
+            now=now,
+        )
+        return inbound + proactive
 
     def insert_reply_draft(
         self,

@@ -183,6 +183,25 @@ class TestDiscoverFiltering:
         assert pending[0]["draft_text"] == "Interesting take!"
         assert pending[0]["discovery_source"] == "curated_timeline"
 
+    def test_skips_near_duplicate_draft(self, db):
+        tweet = _make_tweet("t1", "AI agents are transforming workflows")
+        config, x_client, ks, drafter, rel, pt = self._setup_mocks(db, [tweet])
+        db.insert_reply_draft(
+            inbound_tweet_id="prior-inbound",
+            inbound_author_handle="karpathy",
+            inbound_author_id="12345",
+            inbound_text="Prior",
+            our_tweet_id="our-tweet",
+            our_content_id=1,
+            our_post_text="Our post",
+            draft_text="Interesting take!",
+        )
+
+        inserted = self._discover_with_batch_patch(config, db, x_client, ks, drafter, rel, pt)
+
+        assert inserted == 0
+        assert db.get_pending_proactive_actions() == []
+
     def test_fetches_and_stores_conversation_context(self, db):
         tweet = _make_tweet("t1", "Replying into a larger thread")
         tweet["conversation_id"] = "root1"
@@ -264,6 +283,13 @@ class TestDiscoverFiltering:
             _make_tweet("t_high", "AI agents build automation"),
         ]
         config, x_client, ks, drafter, _, _ = self._setup_mocks(db, tweets)
+        first_draft = MagicMock()
+        first_draft.reply_text = "Automation changes the workflow shape."
+        first_draft.knowledge_ids = []
+        second_draft = MagicMock()
+        second_draft.reply_text = "General chat can still be useful."
+        second_draft.knowledge_ids = []
+        drafter.draft_proactive.side_effect = [first_draft, second_draft]
 
         inserted = self._discover_with_batch_patch(
             config, db, x_client, ks, drafter,

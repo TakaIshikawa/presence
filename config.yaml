@@ -87,6 +87,8 @@ replies:
   enabled: true
   max_daily_replies: 10  # cap auto-drafted replies per day
   draft_ttl_hours: 48    # dismiss pending reply drafts after this many hours
+  dedup_lookback_hours: 72        # skip near-identical reply drafts to same author/target within this window
+  dedup_similarity_threshold: 0.90 # normalized text similarity needed to suppress a draft
   classifier_fallback_enabled: false  # use Anthropic only when heuristics are uncertain
   spam_action: dismissed              # dismissed | low_priority | pending
   low_value_action: low_priority      # dismissed | low_priority | pending
@@ -193,6 +195,8 @@ proactive:
   enabled: true
   max_daily_replies: 5          # Cap proactive replies per day
   draft_ttl_hours: 48           # dismiss pending proactive drafts after this many hours
+  dedup_lookback_hours: 72      # skip near-identical drafts to same author/target within this window
+  dedup_similarity_threshold: 0.90
   account_cooldown_hours: 72    # Skip/deny proactive actions to accounts contacted recently
   min_relevance: 0.50           # Minimum semantic relevance to our knowledge base
   max_tweet_age_hours: 24       # Only reply to tweets newer than this

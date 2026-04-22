@@ -330,6 +330,29 @@ class TestMentionFiltering:
         _patches.drafter.draft_with_lineage.assert_called_once()
         _patches.db.insert_reply_draft.assert_called_once()
 
+    def test_skips_near_duplicate_draft(self, _patches):
+        """A near-identical recent draft for the same author is not queued."""
+        mention = _make_mention(tweet_id="42", author_id="user_A")
+        _patches.x_client.get_mentions.return_value = ([mention], USERS_BY_ID)
+        _patches.drafter.draft_with_lineage.return_value = SimpleNamespace(
+            reply_text="Thanks for sharing this.",
+            knowledge_ids=[],
+        )
+        _patches.db.get_recent_reply_dedup_candidates.return_value = [
+            {
+                "source_table": "reply_queue",
+                "id": 7,
+                "author_handle": "alice",
+                "platform_target_id": "other",
+                "draft_text": "thanks for sharing this!",
+            }
+        ]
+
+        main()
+
+        _patches.drafter.draft_with_lineage.assert_called_once()
+        _patches.db.insert_reply_draft.assert_not_called()
+
     def test_mixed_mentions_filters_correctly(self, _patches):
         """Of multiple mentions, only the valid ones are processed."""
         mentions = [

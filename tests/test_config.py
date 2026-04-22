@@ -198,6 +198,8 @@ class TestDataclassParsing:
                 "enabled": False,
                 "max_daily_replies": 5,
                 "draft_ttl_hours": 24,
+                "dedup_lookback_hours": 36,
+                "dedup_similarity_threshold": 0.95,
             }
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
@@ -205,6 +207,8 @@ class TestDataclassParsing:
         assert cfg.replies.enabled is False
         assert cfg.replies.max_daily_replies == 5
         assert cfg.replies.draft_ttl_hours == 24
+        assert cfg.replies.dedup_lookback_hours == 36
+        assert cfg.replies.dedup_similarity_threshold == 0.95
 
     def test_embeddings_config_when_present(self, tmp_path, monkeypatch):
         monkeypatch.setenv("VOYAGE_KEY", "vk-123")
@@ -309,6 +313,8 @@ class TestDataclassParsing:
             proactive={
                 "enabled": True,
                 "max_daily_replies": 3,
+                "dedup_lookback_hours": 96,
+                "dedup_similarity_threshold": 0.93,
                 "account_cooldown_hours": 48,
             }
         )
@@ -317,6 +323,8 @@ class TestDataclassParsing:
         assert cfg.proactive.enabled is True
         assert cfg.proactive.max_daily_replies == 3
         assert cfg.proactive.draft_ttl_hours == 48
+        assert cfg.proactive.dedup_lookback_hours == 96
+        assert cfg.proactive.dedup_similarity_threshold == 0.93
         assert cfg.proactive.account_cooldown_hours == 48
 
     def test_newsletter_utm_config_when_present(self, tmp_path):
@@ -693,12 +701,14 @@ class TestDefaults:
         assert cfg.replies.enabled is True
         assert cfg.replies.max_daily_replies == 10
         assert cfg.replies.draft_ttl_hours == 48
+        assert cfg.replies.dedup_lookback_hours == 72
 
     def test_proactive_account_cooldown_default(self, tmp_path):
         data = _minimal_config_dict(proactive={"enabled": True})
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.proactive.account_cooldown_hours == 72
         assert cfg.proactive.draft_ttl_hours == 48
+        assert cfg.proactive.dedup_lookback_hours == 72
 
     def test_replies_partial_defaults(self, tmp_path):
         data = _minimal_config_dict(replies={"enabled": False})
@@ -706,6 +716,7 @@ class TestDefaults:
         assert cfg.replies.enabled is False
         assert cfg.replies.max_daily_replies == 10  # default preserved
         assert cfg.replies.draft_ttl_hours == 48
+        assert cfg.replies.dedup_lookback_hours == 72
 
     def test_embeddings_none_when_missing(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

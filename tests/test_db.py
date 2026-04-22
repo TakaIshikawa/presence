@@ -2361,6 +2361,53 @@ class TestReplyQueue:
         assert row["intent"] == "question"
         assert row["priority"] == "high"
 
+    def test_recent_reply_dedup_candidates_include_inbound_and_proactive(self, db):
+        now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+        inbound_id = self._insert_reply(
+            db,
+            tweet_id="inbound-dedup",
+            inbound_author_handle="Alice",
+            draft_text="Thanks for sharing this.",
+        )
+        proactive_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="target-dedup",
+            target_tweet_text="Thread",
+            target_author_handle="alice",
+            draft_text="This is useful.",
+        )
+        stale_id = self._insert_reply(
+            db,
+            tweet_id="stale-dedup",
+            inbound_author_handle="Alice",
+            draft_text="Old draft.",
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id IN (?, ?)",
+            ("2026-04-23T10:00:00+00:00", inbound_id, stale_id),
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-20T10:00:00+00:00", stale_id),
+        )
+        db.conn.execute(
+            "UPDATE proactive_actions SET created_at = ? WHERE id = ?",
+            ("2026-04-23T10:00:00+00:00", proactive_id),
+        )
+        db.conn.commit()
+
+        rows = db.get_recent_reply_dedup_candidates(
+            author_handle="@alice",
+            platform_target_id=None,
+            lookback_hours=72,
+            now=now,
+        )
+
+        ids_by_table = {(row["source_table"], row["id"]) for row in rows}
+        assert ("reply_queue", inbound_id) in ids_by_table
+        assert ("proactive_actions", proactive_id) in ids_by_table
+        assert ("reply_queue", stale_id) not in ids_by_table
+
     def test_get_expired_reply_drafts_returns_old_pending_x_and_bluesky(self, db):
         now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
         x_id = self._insert_reply(db, tweet_id="x-old", platform="x")

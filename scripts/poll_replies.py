@@ -34,6 +34,11 @@ from output.x_api_guard import (
 )
 from output.api_rate_guard import should_skip_optional_api_call
 from engagement.reply_drafter import ReplyDrafter
+from engagement.reply_dedup import (
+    DEFAULT_LOOKBACK_HOURS,
+    DEFAULT_SIMILARITY_THRESHOLD,
+    find_duplicate_reply_draft,
+)
 from engagement.reply_classifier import ReplyClassification, ReplyClassifier
 from knowledge.embeddings import VoyageEmbeddings
 from knowledge.store import KnowledgeStore
@@ -134,6 +139,21 @@ def _x_platform_metadata(
 def _reply_config_value(config, name: str, default):
     replies_config = getattr(config, "replies", None)
     return getattr(replies_config, name, default) if replies_config else default
+
+
+def _reply_dedup_match(config, db, draft_text: str, author_handle: str, target_id: str | None):
+    return find_duplicate_reply_draft(
+        db=db,
+        draft_text=draft_text,
+        author_handle=author_handle,
+        platform_target_id=target_id,
+        lookback_hours=_reply_config_value(
+            config, "dedup_lookback_hours", DEFAULT_LOOKBACK_HOURS
+        ),
+        similarity_threshold=_reply_config_value(
+            config, "dedup_similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD
+        ),
+    )
 
 
 def _low_value_action(config, classification: ReplyClassification) -> str | None:
@@ -350,6 +370,26 @@ def _poll_bluesky_replies(
         }
         metadata.update(_bluesky_reply_ref_metadata(notification))
         metadata.update(_conversation_context_metadata(conversation_context))
+        duplicate = _reply_dedup_match(
+            config,
+            db,
+            draft,
+            author_handle,
+            inbound_uri,
+        )
+        if duplicate:
+            logger.info(
+                "  Skipping near-duplicate Bluesky draft for @%s "
+                "(%s #%s, similarity %.2f, %s)",
+                author_handle,
+                duplicate.source_table,
+                duplicate.id,
+                duplicate.similarity,
+                duplicate.reason,
+            )
+            skipped += 1
+            continue
+
         reply_queue_id = db.insert_reply_draft(
             inbound_tweet_id=inbound_uri,
             inbound_author_handle=author_handle,
@@ -706,6 +746,26 @@ def main() -> None:
                         logger.info(f"  Quality flag: {eval_result.score:.1f}/10 ({flag_str})")
 
                 # Store in queue
+                duplicate = _reply_dedup_match(
+                    config,
+                    db,
+                    draft,
+                    author_handle,
+                    tweet_id,
+                )
+                if duplicate:
+                    logger.info(
+                        "  Skipping near-duplicate draft for @%s "
+                        "(%s #%s, similarity %.2f, %s)",
+                        author_handle,
+                        duplicate.source_table,
+                        duplicate.id,
+                        duplicate.similarity,
+                        duplicate.reason,
+                    )
+                    skipped += 1
+                    continue
+
                 reply_queue_id = db.insert_reply_draft(
                     inbound_tweet_id=tweet_id,
                     inbound_author_handle=author_handle,

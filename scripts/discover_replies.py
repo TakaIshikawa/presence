@@ -16,6 +16,11 @@ from output.x_api_guard import (
     mark_x_api_blocked_if_needed,
 )
 from engagement.reply_drafter import ReplyDrafter
+from engagement.reply_dedup import (
+    DEFAULT_LOOKBACK_HOURS,
+    DEFAULT_SIMILARITY_THRESHOLD,
+    find_duplicate_reply_draft,
+)
 from knowledge.embeddings import VoyageEmbeddings, deserialize_embedding, cosine_similarity
 from knowledge.store import KnowledgeStore
 from knowledge.curated_accounts import get_active_x_accounts
@@ -74,6 +79,22 @@ def _conversation_context_metadata(context: dict | None) -> dict:
         if value:
             metadata[key] = value
     return metadata
+
+
+def _proactive_dedup_match(config, db, draft_text: str, author_handle: str, target_id: str):
+    proactive = config.proactive
+    return find_duplicate_reply_draft(
+        db=db,
+        draft_text=draft_text,
+        author_handle=author_handle,
+        platform_target_id=target_id,
+        lookback_hours=getattr(
+            proactive, "dedup_lookback_hours", DEFAULT_LOOKBACK_HOURS
+        ),
+        similarity_threshold=getattr(
+            proactive, "dedup_similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD
+        ),
+    )
 
 
 def _batch_score_relevance(
@@ -353,6 +374,25 @@ def discover(config, db, x_client, knowledge_store, drafter, bridge=None):
             "created_at": c.get("created_at"),
         }
         platform_metadata.update(_conversation_context_metadata(conversation_context))
+
+        duplicate = _proactive_dedup_match(
+            config,
+            db,
+            draft.reply_text,
+            c["author_handle"],
+            c["id"],
+        )
+        if duplicate:
+            logger.info(
+                "  Skipping near-duplicate proactive draft for @%s "
+                "(%s #%s, similarity %.2f, %s)",
+                c["author_handle"],
+                duplicate.source_table,
+                duplicate.id,
+                duplicate.similarity,
+                duplicate.reason,
+            )
+            continue
 
         db.insert_proactive_action(
             action_type="reply",

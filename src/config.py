@@ -84,6 +84,8 @@ class RepliesConfig:
     enabled: bool
     max_daily_replies: int
     draft_ttl_hours: int = 48
+    dedup_lookback_hours: int = 72
+    dedup_similarity_threshold: float = 0.90
     classifier_fallback_enabled: bool = False
     spam_action: str = "dismissed"
     low_value_action: str = "low_priority"
@@ -249,6 +251,8 @@ class ProactiveConfig:
     enabled: bool = False
     max_daily_replies: int = 5
     draft_ttl_hours: int = 48
+    dedup_lookback_hours: int = 72
+    dedup_similarity_threshold: float = 0.90
     account_cooldown_hours: int = 72
     min_relevance: float = 0.50
     max_tweet_age_hours: int = 24
@@ -358,6 +362,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
             enabled=data["replies"].get("enabled", True),
             max_daily_replies=data["replies"].get("max_daily_replies", 10),
             draft_ttl_hours=data["replies"].get("draft_ttl_hours", 48),
+            dedup_lookback_hours=data["replies"].get("dedup_lookback_hours", 72),
+            dedup_similarity_threshold=data["replies"].get("dedup_similarity_threshold", 0.90),
             classifier_fallback_enabled=data["replies"].get("classifier_fallback_enabled", False),
             spam_action=data["replies"].get("spam_action", "dismissed"),
             low_value_action=data["replies"].get("low_value_action", "low_priority"),
@@ -606,6 +612,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
             enabled=data["proactive"].get("enabled", False),
             max_daily_replies=data["proactive"].get("max_daily_replies", 5),
             draft_ttl_hours=data["proactive"].get("draft_ttl_hours", 48),
+            dedup_lookback_hours=data["proactive"].get("dedup_lookback_hours", 72),
+            dedup_similarity_threshold=data["proactive"].get("dedup_similarity_threshold", 0.90),
             account_cooldown_hours=data["proactive"].get("account_cooldown_hours", 72),
             min_relevance=data["proactive"].get("min_relevance", 0.50),
             max_tweet_age_hours=data["proactive"].get("max_tweet_age_hours", 24),
