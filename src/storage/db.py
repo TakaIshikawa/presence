@@ -425,6 +425,24 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     # Generated content
+    def _parse_json_list(self, value: str | None) -> list:
+        if not value:
+            return []
+        try:
+            parsed = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+
+    def _parse_json_object(self, value: str | None) -> dict | None:
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
     def insert_generated_content(
         self,
         content_type: str,
@@ -456,6 +474,134 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def get_generated_content(self, content_id: int) -> dict | None:
+        """Fetch one generated content item with source JSON fields parsed."""
+        row = self.conn.execute(
+            "SELECT * FROM generated_content WHERE id = ?",
+            (content_id,),
+        ).fetchone()
+        if not row:
+            return None
+        content = dict(row)
+        content["source_commits"] = self._parse_json_list(content.get("source_commits"))
+        content["source_messages"] = self._parse_json_list(content.get("source_messages"))
+        return content
+
+    def get_source_commits_for_content(self, content_id: int) -> list[dict]:
+        """Return source commit references for one generated content item.
+
+        Each returned row preserves the order from generated_content.source_commits
+        and includes matched=False when no github_commits row exists for the
+        stored reference.
+        """
+        content = self.get_generated_content(content_id)
+        if not content:
+            return []
+        refs = [str(ref) for ref in content["source_commits"]]
+        if not refs:
+            return []
+        placeholders = ",".join("?" for _ in refs)
+        rows = self.conn.execute(
+            f"""SELECT * FROM github_commits
+                WHERE commit_sha IN ({placeholders})""",
+            tuple(refs),
+        ).fetchall()
+        by_sha = {row["commit_sha"]: dict(row) for row in rows}
+        commits = []
+        for index, ref in enumerate(refs):
+            commit = by_sha.get(ref, {"commit_sha": ref})
+            commit["source_index"] = index
+            commit["matched"] = ref in by_sha
+            commits.append(commit)
+        return commits
+
+    def get_source_messages_for_content(self, content_id: int) -> list[dict]:
+        """Return source Claude message references for one generated content item."""
+        content = self.get_generated_content(content_id)
+        if not content:
+            return []
+        refs = [str(ref) for ref in content["source_messages"]]
+        if not refs:
+            return []
+        placeholders = ",".join("?" for _ in refs)
+        rows = self.conn.execute(
+            f"""SELECT * FROM claude_messages
+                WHERE message_uuid IN ({placeholders})""",
+            tuple(refs),
+        ).fetchall()
+        by_uuid = {row["message_uuid"]: dict(row) for row in rows}
+        messages = []
+        for index, ref in enumerate(refs):
+            message = by_uuid.get(ref, {"message_uuid": ref})
+            message["source_index"] = index
+            message["matched"] = ref in by_uuid
+            messages.append(message)
+        return messages
+
+    def get_engagement_snapshots_for_content(self, content_id: int) -> list[dict]:
+        """Return X and Bluesky engagement snapshots for one generated item."""
+        snapshots = []
+        x_rows = self.conn.execute(
+            """SELECT id, content_id, tweet_id, like_count, retweet_count,
+                      reply_count, quote_count, engagement_score, fetched_at,
+                      created_at
+               FROM post_engagement
+               WHERE content_id = ?
+               ORDER BY fetched_at ASC, id ASC""",
+            (content_id,),
+        ).fetchall()
+        for row in x_rows:
+            snapshot = dict(row)
+            snapshot["platform"] = "x"
+            snapshots.append(snapshot)
+
+        bluesky_rows = self.conn.execute(
+            """SELECT id, content_id, bluesky_uri, like_count, repost_count,
+                      reply_count, quote_count, engagement_score, fetched_at,
+                      created_at
+               FROM bluesky_engagement
+               WHERE content_id = ?
+               ORDER BY fetched_at ASC, id ASC""",
+            (content_id,),
+        ).fetchall()
+        for row in bluesky_rows:
+            snapshot = dict(row)
+            snapshot["platform"] = "bluesky"
+            snapshots.append(snapshot)
+
+        return sorted(snapshots, key=lambda row: (row.get("fetched_at") or "", row["platform"], row["id"]))
+
+    def get_pipeline_runs_for_content(self, content_id: int) -> list[dict]:
+        """Return pipeline run metadata for one generated content item."""
+        cursor = self.conn.execute(
+            """SELECT * FROM pipeline_runs
+               WHERE content_id = ?
+               ORDER BY created_at DESC, id DESC""",
+            (content_id,),
+        )
+        runs = []
+        for row in cursor.fetchall():
+            run = dict(row)
+            run["filter_stats"] = self._parse_json_object(run.get("filter_stats"))
+            runs.append(run)
+        return runs
+
+    def get_content_provenance(self, content_id: int) -> dict | None:
+        """Return provenance details for one generated content item."""
+        content = self.get_generated_content(content_id)
+        if not content:
+            return None
+        return {
+            "content": content,
+            "source_commits": self.get_source_commits_for_content(content_id),
+            "source_messages": self.get_source_messages_for_content(content_id),
+            "knowledge_links": self.get_content_lineage(content_id),
+            "variants": self.list_content_variants(content_id),
+            "publications": self.get_latest_publication_states(content_id),
+            "engagement_snapshots": self.get_engagement_snapshots_for_content(content_id),
+            "pipeline_runs": self.get_pipeline_runs_for_content(content_id),
+        }
 
     def mark_published(self, content_id: int, url: str, tweet_id: str = None) -> None:
         now = datetime.now(timezone.utc).isoformat()

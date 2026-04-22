@@ -984,6 +984,69 @@ class TestGeneratedContent:
 
         assert db.get_content_variant(content_id, "blog", "draft") is None
 
+    def test_get_content_provenance_returns_single_item_details(self, db):
+        commit_id = db.insert_commit(
+            "presence",
+            "sha1",
+            "fix: tighten retry provenance",
+            "2026-04-22T12:00:00+00:00",
+            "taka",
+        )
+        message_id = db.insert_claude_message(
+            "session-1",
+            "uuid1",
+            "/repo",
+            "2026-04-22T11:58:00+00:00",
+            "Add provenance reporting",
+        )
+        content_id = self._insert_content(db)
+        db.upsert_content_variant(content_id, "x", "post", "Variant copy")
+        db.upsert_publication_success(
+            content_id,
+            "x",
+            platform_post_id="tweet-1",
+            platform_url="https://x.test/tweet-1",
+            published_at="2026-04-22T13:00:00+00:00",
+        )
+        db.insert_engagement(content_id, "tweet-1", 5, 2, 1, 0, 9.0)
+        db.insert_pipeline_run(
+            batch_id="batch-1",
+            content_type="x_post",
+            candidates_generated=3,
+            best_candidate_index=1,
+            best_score_before_refine=7.8,
+            final_score=8.0,
+            published=True,
+            content_id=content_id,
+            outcome="published",
+            filter_stats={"kept": 1},
+        )
+        knowledge_id = db.conn.execute(
+            """INSERT INTO knowledge
+               (source_type, source_id, source_url, author, content, insight)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ("curated_article", "article-1", "https://example.test/a", "Ada", "Long source", "Sharp insight"),
+        ).lastrowid
+        db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.91)])
+
+        provenance = db.get_content_provenance(content_id)
+
+        assert provenance["content"]["id"] == content_id
+        assert provenance["content"]["source_commits"] == ["sha1", "sha2"]
+        assert provenance["source_commits"][0]["id"] == commit_id
+        assert provenance["source_commits"][0]["matched"] is True
+        assert provenance["source_commits"][1]["commit_sha"] == "sha2"
+        assert provenance["source_commits"][1]["matched"] is False
+        assert provenance["source_messages"][0]["id"] == message_id
+        assert provenance["knowledge_links"][0]["insight"] == "Sharp insight"
+        assert provenance["variants"][0]["content"] == "Variant copy"
+        assert provenance["publications"][0]["platform_post_id"] == "tweet-1"
+        assert provenance["engagement_snapshots"][0]["platform"] == "x"
+        assert provenance["pipeline_runs"][0]["filter_stats"] == {"kept": 1}
+
+    def test_get_content_provenance_missing_content_returns_none(self, db):
+        assert db.get_content_provenance(9999) is None
+
 
 # --- Poll state ---
 
