@@ -1021,6 +1021,31 @@ class Database:
         )
         return [self._content_variant_from_row(row) for row in cursor.fetchall()]
 
+    def list_generated_content_for_variant_refresh(
+        self,
+        limit: int = 50,
+        content_types: tuple[str, ...] = ("x_post", "x_thread", "blog_seed"),
+    ) -> list[dict]:
+        """Return recent generated content rows suitable for durable variant refresh."""
+        if limit <= 0 or not content_types:
+            return []
+
+        placeholders = ",".join("?" for _ in content_types)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM generated_content
+                WHERE content_type IN ({placeholders})
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?""",
+            (*content_types, limit),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            content = dict(row)
+            content["source_commits"] = self._parse_json_list(content.get("source_commits"))
+            content["source_messages"] = self._parse_json_list(content.get("source_messages"))
+            rows.append(content)
+        return rows
+
     def get_unpublished_content(self, content_type: str, min_score: float) -> list[dict]:
         cursor = self.conn.execute(
             """SELECT * FROM generated_content

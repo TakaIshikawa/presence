@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS generated_content (
 CREATE TABLE IF NOT EXISTS content_variants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content_id INTEGER NOT NULL REFERENCES generated_content(id),
-    platform TEXT NOT NULL,      -- 'x', 'bluesky', 'newsletter', 'blog'
+    platform TEXT NOT NULL,      -- 'x', 'bluesky', 'linkedin', 'newsletter', 'blog'
     variant_type TEXT NOT NULL,  -- e.g. 'post', 'thread', 'summary', 'seed'
     content TEXT NOT NULL,
     metadata JSON,

@@ -970,6 +970,7 @@ class TestGeneratedContent:
 
         db.upsert_content_variant(content_id, "x", "post", "X copy")
         db.upsert_content_variant(content_id, "bluesky", "post", "Bluesky copy")
+        db.upsert_content_variant(content_id, "linkedin", "post", "LinkedIn copy")
         db.upsert_content_variant(content_id, "x", "thread", "X thread")
 
         variants = db.list_content_variants(content_id)
@@ -977,9 +978,22 @@ class TestGeneratedContent:
         assert keys == {
             ("x", "post"),
             ("bluesky", "post"),
+            ("linkedin", "post"),
             ("x", "thread"),
         }
-        assert len(variants) == 3
+        assert len(variants) == 4
+
+    def test_list_generated_content_for_variant_refresh_returns_supported_content(self, db):
+        x_post_id = self._insert_content(db, content_type="x_post", content="X post")
+        thread_id = self._insert_content(db, content_type="x_thread", content="Thread")
+        blog_seed_id = self._insert_content(db, content_type="blog_seed", content="Seed")
+        self._insert_content(db, content_type="newsletter", content="Newsletter")
+
+        rows = db.list_generated_content_for_variant_refresh(limit=10)
+
+        ids = {row["id"] for row in rows}
+        assert {x_post_id, thread_id, blog_seed_id}.issubset(ids)
+        assert all(row["content_type"] in {"x_post", "x_thread", "blog_seed"} for row in rows)
 
     def test_missing_content_variant_lookup_returns_none(self, db):
         content_id = self._insert_content(db)

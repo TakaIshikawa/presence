@@ -145,6 +145,68 @@ class TestMainExitsEarlyNoCandidates:
         mock_monitoring.assert_called_once_with("repurpose")
 
 
+class TestLinkedInVariantRefresh:
+    def test_cli_refreshes_linkedin_variants_without_publishing(self):
+        config = _make_config()
+        db = MagicMock()
+        db.list_generated_content_for_variant_refresh.return_value = [
+            {
+                "id": 42,
+                "content_type": "x_post",
+                "content": "Tweeting this on X. #python #ai #launch #ops #build #extra",
+            }
+        ]
+
+        import repurpose_content
+
+        with patch("repurpose_content.script_context") as mock_ctx, \
+             patch("repurpose_content.ContentRepurposer") as MockRepurposer, \
+             patch("repurpose_content.CrossModelEvaluator") as MockEvaluator, \
+             patch("repurpose_content.XClient") as MockXClient, \
+             patch("repurpose_content.update_monitoring") as mock_monitoring:
+            mock_ctx.return_value = _mock_script_context(config, db)()
+
+            repurpose_content.main(["--linkedin-variants", "--limit", "25"])
+
+        db.list_generated_content_for_variant_refresh.assert_called_once_with(limit=25)
+        db.upsert_content_variant.assert_called_once()
+        _, kwargs = db.upsert_content_variant.call_args
+        assert kwargs["content_id"] == 42
+        assert kwargs["platform"] == "linkedin"
+        assert kwargs["variant_type"] == "post"
+        assert "Tweeting" not in kwargs["content"]
+        assert " X" not in kwargs["content"]
+        assert "#extra" not in kwargs["content"]
+        MockRepurposer.assert_not_called()
+        MockEvaluator.assert_not_called()
+        MockXClient.assert_not_called()
+        mock_monitoring.assert_called_once_with("repurpose")
+
+    def test_cli_refreshes_single_linkedin_variant_by_content_id(self):
+        config = _make_config()
+        db = MagicMock()
+        db.get_generated_content.return_value = {
+            "id": 99,
+            "content_type": "x_thread",
+            "content": "TWEET 1: First point\nTWEET 2: Second point",
+        }
+
+        import repurpose_content
+
+        with patch("repurpose_content.script_context") as mock_ctx, \
+             patch("repurpose_content.parse_thread_content") as mock_parse_thread, \
+             patch("repurpose_content.update_monitoring"):
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            mock_parse_thread.return_value = ["First point", "Second point"]
+
+            repurpose_content.main(["--linkedin-variants", "--content-id", "99"])
+
+        db.get_generated_content.assert_called_once_with(99)
+        db.list_generated_content_for_variant_refresh.assert_not_called()
+        db.upsert_content_variant.assert_called_once()
+        mock_parse_thread.assert_called_once_with("TWEET 1: First point\nTWEET 2: Second point")
+
+
 class TestMainRoutesToExpandPostToThread:
     @_repurpose_patches
     def test_routes_to_expand_post_to_thread_for_x_thread_target(

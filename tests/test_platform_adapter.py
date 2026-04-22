@@ -2,7 +2,10 @@
 
 from output.platform_adapter import (
     BLUESKY_GRAPHEME_LIMIT,
+    LINKEDIN_GRAPHEME_LIMIT,
+    LINKEDIN_MAX_HASHTAGS,
     BlueskyPlatformAdapter,
+    LinkedInPlatformAdapter,
     count_graphemes,
 )
 
@@ -78,3 +81,43 @@ class TestBlueskyPlatformAdapter:
 
         assert provider.called is True
         assert result == "Shipping today #python #buildinpublic"
+
+
+class TestLinkedInPlatformAdapter:
+    def test_formats_thread_as_linkedin_paragraphs_and_removes_thread_markers(self):
+        adapter = LinkedInPlatformAdapter()
+        text = (
+            "TWEET 1: Tweeting this on X about a launch. #python #ai\n"
+            "TWEET 2: Retweet if this Twitter thread helps. #buildinpublic"
+        )
+
+        result = adapter.adapt(text, content_type="x_thread")
+
+        assert "TWEET" not in result
+        assert "tweet" not in result.lower()
+        assert "Twitter" not in result
+        assert "LinkedIn" in result
+        assert "\n\n" in result
+        assert result.endswith("#python #ai #buildinpublic")
+
+    def test_limits_hashtags_for_linkedin_conventions(self):
+        adapter = LinkedInPlatformAdapter()
+        text = "Shipping today #one #two #three #four #five #six #seven"
+
+        result = adapter.adapt(text)
+
+        hashtags = [word for word in result.split() if word.startswith("#")]
+        assert hashtags == ["#one", "#two", "#three", "#four", "#five"]
+        assert len(hashtags) == LINKEDIN_MAX_HASHTAGS
+
+    def test_truncates_to_linkedin_limit_without_splitting_graphemes(self):
+        adapter = LinkedInPlatformAdapter()
+        text = ("This is a complete sentence. " * 180) + "https://example.com/details " + (
+            "👩‍💻" * 200
+        )
+
+        result = adapter.adapt(text)
+
+        assert count_graphemes(result) <= LINKEDIN_GRAPHEME_LIMIT
+        assert result.endswith("https://example.com/details")
+        assert "\u200d..." not in result

@@ -9,12 +9,18 @@ from typing import Protocol
 
 
 BLUESKY_GRAPHEME_LIMIT = 300
+LINKEDIN_GRAPHEME_LIMIT = 3000
+LINKEDIN_MAX_HASHTAGS = 5
+LINKEDIN_PARAGRAPH_GRAPHEME_LIMIT = 700
 ELLIPSIS = "..."
 
 _URL_RE = re.compile(r"https?://[^\s<>()]+")
 _WHITESPACE_RE = re.compile(r"\s+")
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])(?:[\"')\]]+)?\s+")
 _HASHTAG_RE = re.compile(r"(?<!\w)#[A-Za-z][A-Za-z0-9_]*")
+_THREAD_MARKER_RE = re.compile(
+    r"(?im)^\s*(?:(?:tweet|post)\s*\d+|thread)\s*[:.)-]\s*|^\s*\d+\s*[/.)-]\s*"
+)
 
 _X_PHRASE_REPLACEMENTS = (
     (re.compile(r"\bTwitter/X\b", re.IGNORECASE), "Bluesky"),
@@ -236,3 +242,177 @@ class BlueskyPlatformAdapter:
         text = _WHITESPACE_RE.sub(" ", text).strip()
         text = re.sub(r"\s+([,.;:!?])", r"\1", text)
         return text
+
+
+class LinkedInPlatformAdapter:
+    """Deterministically adapt generated text for LinkedIn text posts."""
+
+    def __init__(self, grapheme_limit: int = LINKEDIN_GRAPHEME_LIMIT):
+        self.grapheme_limit = grapheme_limit
+
+    def adapt(self, text: str, content_type: str = "x_post") -> str:
+        """Return a LinkedIn-specific text variant without publishing it."""
+        adapted = self._cleanup_x_wording(text)
+        paragraphs = self._paragraphs_from_text(adapted, content_type)
+        body, hashtags = self._extract_hashtags(paragraphs)
+        body = self._shape_paragraphs(body)
+
+        if hashtags:
+            body.append(" ".join(hashtags[:LINKEDIN_MAX_HASHTAGS]))
+
+        adapted = "\n\n".join(paragraph for paragraph in body if paragraph).strip()
+        return self._fit_to_limit(adapted)
+
+    def _cleanup_x_wording(self, text: str) -> str:
+        adapted = unicodedata.normalize("NFC", text)
+
+        for pattern in _X_CLEANUP_PATTERNS:
+            adapted = pattern.sub("", adapted)
+
+        replacements = (
+            (re.compile(r"\bTwitter/X\b", re.IGNORECASE), "LinkedIn"),
+            (re.compile(r"\bX/Twitter\b", re.IGNORECASE), "LinkedIn"),
+            (re.compile(r"\bTwitter\b", re.IGNORECASE), "LinkedIn"),
+            (re.compile(r"\bX\b"), "LinkedIn"),
+            (re.compile(r"\btweets\b", re.IGNORECASE), "posts"),
+            (re.compile(r"\btweet\b", re.IGNORECASE), "post"),
+            (re.compile(r"\btweeted\b", re.IGNORECASE), "posted"),
+            (re.compile(r"\btweeting\b", re.IGNORECASE), "posting"),
+            (re.compile(r"\bretweets\b", re.IGNORECASE), "shares"),
+            (re.compile(r"\bretweet\b", re.IGNORECASE), "share"),
+            (re.compile(r"\bretweeted\b", re.IGNORECASE), "shared"),
+            (re.compile(r"\bquote tweets\b", re.IGNORECASE), "quoted posts"),
+            (re.compile(r"\bquote tweet\b", re.IGNORECASE), "quoted post"),
+        )
+        for pattern, replacement in replacements:
+            adapted = pattern.sub(
+                lambda match: self._match_case(replacement, match.group(0)),
+                adapted,
+            )
+
+        return adapted
+
+    def _match_case(self, replacement: str, original: str) -> str:
+        if original.isupper() and replacement.lower() != "linkedin":
+            return replacement.upper()
+        if original[:1].isupper():
+            return replacement[:1].upper() + replacement[1:]
+        return replacement
+
+    def _paragraphs_from_text(self, text: str, content_type: str) -> list[str]:
+        text = _THREAD_MARKER_RE.sub("", text)
+        raw_paragraphs = [line.strip() for line in re.split(r"\n{1,}", text) if line.strip()]
+        if not raw_paragraphs:
+            return []
+
+        if content_type == "x_thread":
+            return [self._normalize_inline_spacing(paragraph) for paragraph in raw_paragraphs]
+
+        joined = " ".join(self._normalize_inline_spacing(paragraph) for paragraph in raw_paragraphs)
+        return [joined]
+
+    def _extract_hashtags(self, paragraphs: list[str]) -> tuple[list[str], list[str]]:
+        hashtags: list[str] = []
+        seen: set[str] = set()
+        body: list[str] = []
+
+        for paragraph in paragraphs:
+            for match in _HASHTAG_RE.finditer(paragraph):
+                key = match.group(0).lower()
+                if key not in seen:
+                    seen.add(key)
+                    hashtags.append(match.group(0))
+            cleaned = self._normalize_inline_spacing(_HASHTAG_RE.sub("", paragraph))
+            if cleaned:
+                body.append(cleaned)
+
+        return body, hashtags
+
+    def _shape_paragraphs(self, paragraphs: list[str]) -> list[str]:
+        shaped: list[str] = []
+        for paragraph in paragraphs:
+            shaped.extend(self._split_long_paragraph(paragraph))
+        return shaped
+
+    def _split_long_paragraph(self, paragraph: str) -> list[str]:
+        if count_graphemes(paragraph) <= LINKEDIN_PARAGRAPH_GRAPHEME_LIMIT:
+            return [paragraph]
+
+        remaining = paragraph
+        parts: list[str] = []
+        while count_graphemes(remaining) > LINKEDIN_PARAGRAPH_GRAPHEME_LIMIT:
+            sliced = slice_graphemes(remaining, LINKEDIN_PARAGRAPH_GRAPHEME_LIMIT).rstrip()
+            split_at = self._last_sentence_boundary(sliced)
+            if not split_at or count_graphemes(sliced[:split_at]) < 80:
+                split_at = sliced.rfind(" ")
+            if split_at < 80:
+                split_at = len(sliced)
+            parts.append(sliced[:split_at].rstrip())
+            remaining = remaining[split_at:].lstrip()
+
+        if remaining:
+            parts.append(remaining)
+        return parts
+
+    def _fit_to_limit(self, text: str) -> str:
+        if count_graphemes(text) <= self.grapheme_limit:
+            return text
+
+        links = self._links_in_order(text)
+        link_suffix = ""
+        body = text
+
+        if links:
+            preserved_links: list[str] = []
+            for link in links:
+                candidate = " ".join(preserved_links + [link])
+                if count_graphemes(candidate) + count_graphemes(ELLIPSIS) + 2 <= self.grapheme_limit:
+                    preserved_links.append(link)
+            if preserved_links:
+                link_suffix = "\n\n" + " ".join(preserved_links)
+                body = self._normalize_paragraph_spacing(_URL_RE.sub("", text))
+
+        suffix = ELLIPSIS + link_suffix
+        body_limit = self.grapheme_limit - count_graphemes(suffix)
+        if body_limit <= 0:
+            return slice_graphemes(suffix, self.grapheme_limit)
+
+        truncated = slice_graphemes(body, body_limit).rstrip()
+        paragraph_break = truncated.rfind("\n\n")
+        if paragraph_break >= max(80, body_limit // 2):
+            truncated = truncated[:paragraph_break].rstrip()
+        else:
+            word_end = truncated.rfind(" ")
+            if word_end >= max(80, body_limit // 2):
+                truncated = truncated[:word_end].rstrip()
+
+        return self._normalize_paragraph_spacing(truncated + suffix)
+
+    def _last_sentence_boundary(self, text: str) -> int | None:
+        last_end = None
+        for match in _SENTENCE_BOUNDARY_RE.finditer(text):
+            last_end = match.start()
+        if last_end is None and text.endswith((".", "!", "?")):
+            last_end = len(text)
+        return last_end
+
+    def _links_in_order(self, text: str) -> list[str]:
+        links: list[str] = []
+        for match in _URL_RE.finditer(text):
+            link = match.group(0).rstrip(".,;:!?")
+            if link and link not in links:
+                links.append(link)
+        return links
+
+    def _normalize_inline_spacing(self, text: str) -> str:
+        text = _WHITESPACE_RE.sub(" ", text).strip()
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        return text
+
+    def _normalize_paragraph_spacing(self, text: str) -> str:
+        paragraphs = [
+            self._normalize_inline_spacing(paragraph)
+            for paragraph in re.split(r"\n{2,}", text.strip())
+            if paragraph.strip()
+        ]
+        return "\n\n".join(paragraphs)

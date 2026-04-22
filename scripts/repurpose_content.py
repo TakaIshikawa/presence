@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Repurpose high-performing posts into different content formats."""
 
+import argparse
 import sys
 import logging
 from pathlib import Path
@@ -12,15 +13,89 @@ from runner import script_context, update_monitoring
 from synthesis.repurposer import ContentRepurposer
 from synthesis.evaluator_v2 import CrossModelEvaluator
 from output.blog_writer import BlogWriter
+from output.platform_adapter import LinkedInPlatformAdapter, count_graphemes
 from output.x_client import XClient, parse_thread_content
 
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Repurpose content or refresh platform-specific text variants.",
+    )
+    parser.add_argument(
+        "--linkedin-variants",
+        action="store_true",
+        help="Create or refresh durable LinkedIn variants for existing generated content.",
+    )
+    parser.add_argument(
+        "--content-id",
+        type=int,
+        help="Refresh the LinkedIn variant for one generated_content id.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum generated content rows to refresh when --content-id is omitted.",
+    )
+    if argv is None:
+        args, _unknown = parser.parse_known_args(argv)
+        return args
+    return parser.parse_args(argv)
+
+
+def _source_text_for_linkedin(row: dict) -> str:
+    content = row.get("content") or ""
+    if row.get("content_type") == "x_thread":
+        return "\n\n".join(parse_thread_content(content))
+    return content
+
+
+def refresh_linkedin_variants(db, content_id: int | None = None, limit: int = 50) -> int:
+    """Create or refresh LinkedIn text variants for generated content."""
+    if content_id is not None:
+        row = db.get_generated_content(content_id)
+        rows = [row] if row else []
+    else:
+        rows = db.list_generated_content_for_variant_refresh(limit=limit)
+
+    adapter = LinkedInPlatformAdapter()
+    refreshed = 0
+
+    for row in rows:
+        variant = adapter.adapt(_source_text_for_linkedin(row), row.get("content_type", "x_post"))
+        db.upsert_content_variant(
+            content_id=row["id"],
+            platform="linkedin",
+            variant_type="post",
+            content=variant,
+            metadata={
+                "source_content_type": row.get("content_type"),
+                "adapter": "LinkedInPlatformAdapter",
+                "graphemes": count_graphemes(variant),
+            },
+        )
+        refreshed += 1
+
+    return refreshed
+
+
+def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    args = parse_args(argv)
 
     with script_context() as (config, db):
+        if args.linkedin_variants:
+            refreshed = refresh_linkedin_variants(
+                db,
+                content_id=args.content_id,
+                limit=args.limit,
+            )
+            logger.info(f"Refreshed {refreshed} LinkedIn content variants")
+            update_monitoring("repurpose")
+            return
+
         # Check if we've already hit the daily post cap
         daily_posts = db.count_posts_today("x_thread")
         daily_cap = getattr(config.synthesis, "daily_post_cap", 3)
@@ -160,4 +235,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
