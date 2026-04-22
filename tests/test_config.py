@@ -18,6 +18,7 @@ from config import (
     ImageGenConfig,
     ProactiveConfig,
     PublishQueueConfig,
+    RateLimitsConfig,
     OperationsHealthConfig,
     NewsletterConfig,
     CuratedSource,
@@ -393,6 +394,26 @@ class TestDefaults:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.publish_queue.max_retry_delay_minutes == 45
+
+    def test_rate_limits_defaults(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert isinstance(cfg.rate_limits, RateLimitsConfig)
+        assert cfg.rate_limits.x_min_remaining == 10
+        assert cfg.rate_limits.bluesky_min_remaining == 10
+        assert cfg.rate_limits.anthropic_min_remaining == 5
+
+    def test_rate_limits_overrides(self, tmp_path):
+        data = _minimal_config_dict(
+            rate_limits={
+                "x_min_remaining": 3,
+                "bluesky_min_remaining": 4,
+                "anthropic_min_remaining": 2,
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.rate_limits.x_min_remaining == 3
+        assert cfg.rate_limits.bluesky_min_remaining == 4
+        assert cfg.rate_limits.anthropic_min_remaining == 2
 
     def test_operations_health_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

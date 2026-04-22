@@ -21,6 +21,7 @@ from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
 )
+from output.api_rate_guard import should_skip_optional_api_call
 
 DEFAULT_MAX_X_ACCOUNTS_PER_RUN = 25
 DEFAULT_X_TWEETS_PER_ACCOUNT = 5
@@ -226,6 +227,14 @@ def main():
         block_reason = get_x_api_block_reason(db)
         if block_reason:
             logger.warning(f"X API circuit breaker active; skipping curated X fetch: {block_reason}")
+        elif should_skip_optional_api_call(
+            config,
+            db,
+            "x",
+            operation="curated X account fetch",
+            logger=logger,
+        ):
+            pass
         else:
             x_client = XClient(
                 config.x.api_key,

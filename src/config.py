@@ -150,6 +150,13 @@ class PublishQueueConfig:
 
 
 @dataclass
+class RateLimitsConfig:
+    x_min_remaining: int = 10
+    bluesky_min_remaining: int = 10
+    anthropic_min_remaining: int = 5
+
+
+@dataclass
 class OperationsHealthConfig:
     max_poll_age_minutes: int = 30
     max_reply_state_age_hours: int = 6
@@ -203,6 +210,7 @@ class Config:
     timeouts: TimeoutsConfig
     scheduling: Optional[SchedulingConfig]
     publish_queue: PublishQueueConfig
+    rate_limits: RateLimitsConfig
     operations_health: OperationsHealthConfig
     proactive: Optional[ProactiveConfig]
     image_gen: Optional[ImageGenConfig]
@@ -406,6 +414,15 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_retry_delay_minutes=data["publish_queue"].get("max_retry_delay_minutes", 360),
         )
 
+    rate_limits_config = RateLimitsConfig()
+    if "rate_limits" in data:
+        rate_data = data["rate_limits"]
+        rate_limits_config = RateLimitsConfig(
+            x_min_remaining=rate_data.get("x_min_remaining", 10),
+            bluesky_min_remaining=rate_data.get("bluesky_min_remaining", 10),
+            anthropic_min_remaining=rate_data.get("anthropic_min_remaining", 5),
+        )
+
     default_poll_health_minutes = data["polling"].get("interval_minutes", 10) * 3
     operations_health_config = OperationsHealthConfig(
         max_poll_age_minutes=default_poll_health_minutes,
@@ -507,6 +524,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         timeouts=timeouts_config,
         scheduling=scheduling_config,
         publish_queue=publish_queue_config,
+        rate_limits=rate_limits_config,
         operations_health=operations_health_config,
         proactive=proactive_config,
         image_gen=image_gen_config,

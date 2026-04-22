@@ -404,6 +404,36 @@ class TestMain:
         call_kwargs = mock_db.insert_engagement.call_args[1]
         assert call_kwargs["tweet_id"] == "100"
 
+    @patch("output.x_client.XClient")
+    @patch("fetch_engagement.compute_engagement_score")
+    @patch("fetch_engagement.tweepy.Client")
+    @patch("fetch_engagement.get_bearer_token", return_value="bearer-token")
+    @patch("fetch_engagement.script_context")
+    def test_low_x_rate_budget_skips_optional_x_metrics(
+        self, mock_ctx, mock_bearer, MockTweepy, mock_scorer, MockXClient, caplog
+    ):
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        config = _make_config()
+        config.rate_limits.x_min_remaining = 5
+        mock_db = MagicMock()
+        mock_db.get_meta.side_effect = lambda key: {
+            "api_rate_limit:x:remaining": "4",
+        }.get(key)
+        mock_db.auto_classify_posts.return_value = {"resonated": 0, "low_resonance": 0}
+        mock_ctx.return_value = _mock_script_context(config, mock_db)()
+
+        from fetch_engagement import main
+        main()
+
+        mock_bearer.assert_not_called()
+        MockTweepy.assert_not_called()
+        MockXClient.assert_not_called()
+        mock_db.get_posts_needing_metrics.assert_not_called()
+        mock_db.auto_classify_posts.assert_called_once_with(min_age_hours=48)
+        assert "skipping X engagement metrics fetch" in caplog.text
+
 
 # --- TestFetchBlueskyProfileMetrics ---
 
@@ -454,6 +484,18 @@ class TestFetchBlueskyProfileMetrics:
 
         assert stored is False
         assert db.get_latest_profile_metrics("bluesky") is None
+
+    @patch("output.bluesky_client.BlueskyClient")
+    def test_low_bluesky_rate_budget_skips_profile_metrics(self, MockBlueskyClient, db):
+        config = _make_config()
+        config.bluesky.enabled = True
+        config.rate_limits = SimpleNamespace(bluesky_min_remaining=5)
+        db.set_meta("api_rate_limit:bluesky:remaining", "5")
+
+        stored = fetch_bluesky_profile_metrics(config, db)
+
+        assert stored is False
+        MockBlueskyClient.assert_not_called()
 
 
 # --- TestGetBearerToken ---

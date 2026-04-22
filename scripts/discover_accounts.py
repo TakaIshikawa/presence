@@ -17,6 +17,7 @@ from runner import script_context, update_monitoring
 from output.x_client import XClient
 from knowledge.embeddings import VoyageEmbeddings, EmbeddingError
 from knowledge.store import KnowledgeStore
+from output.api_rate_guard import should_skip_optional_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,15 @@ def discover(config, db, x_client, knowledge_store) -> int:
     """Run account discovery. Returns count of candidates inserted."""
     proactive = config.proactive
 
+    if should_skip_optional_api_call(
+        config,
+        db,
+        "x",
+        operation="account discovery scoring",
+        logger=logger,
+    ):
+        return 0
+
     # 1. Get candidate handles from proactive_actions
     handles = _get_candidate_handles(db)
     logger.info(f"Found {len(handles)} distinct authors in proactive_actions")
@@ -133,13 +143,22 @@ def discover(config, db, x_client, knowledge_store) -> int:
     return inserted
 
 
-def sync_following(db, x_client) -> int:
+def sync_following(db, x_client, config=None) -> int:
     """Sync the authenticated user's following list into curated_sources.
 
     Accounts the user follows are auto-activated (no review needed).
     Existing entries (from config, mining, or prior syncs) are left untouched.
     Returns count of newly inserted accounts.
     """
+    if config is not None and should_skip_optional_api_call(
+        config,
+        db,
+        "x",
+        operation="following-list sync",
+        logger=logger,
+    ):
+        return 0
+
     following = x_client.get_following()
     if not following:
         logger.info("No following accounts returned (or API error)")
@@ -175,7 +194,7 @@ def main():
         )
 
         # Phase 1: Sync following list (auto-activate)
-        sync_following(db, x_client)
+        sync_following(db, x_client, config=config)
 
         # Phase 2: Mine proactive_actions for new candidates
         knowledge_store = None

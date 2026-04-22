@@ -32,6 +32,7 @@ from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
 )
+from output.api_rate_guard import should_skip_optional_api_call
 from engagement.reply_drafter import ReplyDrafter
 from engagement.reply_classifier import ReplyClassification, ReplyClassifier
 from knowledge.embeddings import VoyageEmbeddings
@@ -134,6 +135,14 @@ def _poll_bluesky_replies(
     """Poll Bluesky notifications and queue draft replies."""
     bluesky_config = getattr(config, "bluesky", None)
     if not bluesky_config or not getattr(bluesky_config, "enabled", False):
+        return 0, 0
+    if should_skip_optional_api_call(
+        config,
+        db,
+        "bluesky",
+        operation="Bluesky reply notification polling",
+        logger=logger,
+    ):
         return 0, 0
 
     remaining_cap = max_daily - replies_today
@@ -377,6 +386,40 @@ def main() -> None:
             if bridge:
                 bridge.close()
             update_monitoring("poll-replies")
+            return
+
+        if should_skip_optional_api_call(
+            config,
+            db,
+            "anthropic",
+            operation="reply drafting",
+            logger=logger,
+        ):
+            if bridge:
+                bridge.close()
+            update_monitoring("poll-replies")
+            return
+
+        x_polling_allowed = not should_skip_optional_api_call(
+            config,
+            db,
+            "x",
+            operation="X reply mention polling",
+            logger=logger,
+        )
+        if not x_polling_allowed:
+            bsky_drafted, bsky_skipped = _poll_bluesky_replies(
+                config,
+                db,
+                drafter,
+                classifier,
+                replies_today,
+                max_daily,
+            )
+            if bridge:
+                bridge.close()
+            update_monitoring("poll-replies")
+            logger.info(f"Done. {bsky_drafted} drafted, {bsky_skipped} skipped.")
             return
 
         # Get our user ID for filtering

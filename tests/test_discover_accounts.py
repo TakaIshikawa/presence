@@ -35,6 +35,7 @@ def _make_config(**proactive_overrides):
     return SimpleNamespace(
         proactive=SimpleNamespace(**proactive_defaults),
         curated_sources=SimpleNamespace(x_accounts=[], blogs=[]),
+        rate_limits=SimpleNamespace(x_min_remaining=10),
     )
 
 
@@ -274,6 +275,18 @@ class TestDiscover:
         inserted = discover(config, db, MagicMock(), MagicMock())
         assert inserted == 0
 
+    def test_low_x_rate_budget_skips_discovery_scoring(self, db):
+        _insert_posted_action(db, "relevant_user", "t1")
+        db.set_meta("api_rate_limit:x:remaining", "10")
+
+        config = _make_config()
+        x_client = MagicMock()
+
+        inserted = discover(config, db, x_client, MagicMock())
+
+        assert inserted == 0
+        x_client.get_user_id.assert_not_called()
+
 
 class TestSyncFollowing:
     def test_inserts_following_as_active(self, db):
@@ -357,3 +370,13 @@ class TestSyncFollowing:
 
         active = db.get_active_curated_sources("x_account")
         assert len(active) == 2
+
+    def test_low_x_rate_budget_skips_following_sync(self, db):
+        db.set_meta("api_rate_limit:x:remaining", "9")
+        config = _make_config()
+        x_client = MagicMock()
+
+        inserted = sync_following(db, x_client, config=config)
+
+        assert inserted == 0
+        x_client.get_following.assert_not_called()

@@ -16,6 +16,7 @@ from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
 )
+from output.api_rate_guard import should_skip_optional_api_call
 
 # Max tweets to fetch per batch (X API limit for GET /2/tweets)
 BATCH_SIZE = 100
@@ -65,6 +66,14 @@ def fetch_bluesky_profile_metrics(config, db) -> bool:
     """Fetch and store a Bluesky profile metrics snapshot when enabled."""
     if not config.bluesky or getattr(config.bluesky, "enabled", False) is not True:
         return False
+    if should_skip_optional_api_call(
+        config,
+        db,
+        "bluesky",
+        operation="Bluesky profile metrics fetch",
+        logger=logger,
+    ):
+        return False
 
     try:
         from output.bluesky_client import BlueskyClient
@@ -101,87 +110,103 @@ def main() -> None:
         if block_reason:
             logger.warning(f"X API circuit breaker active; skipping engagement fetch: {block_reason}")
             return
+        x_polling_allowed = not should_skip_optional_api_call(
+            config,
+            db,
+            "x",
+            operation="X engagement metrics fetch",
+            logger=logger,
+        )
 
         # Backfill tweet_ids from URLs for pre-pipeline posts
         backfilled = backfill_tweet_ids(db)
         if backfilled:
             logger.info(f"Backfilled {backfilled} tweet_ids from URLs")
 
-        # Use bearer token for read endpoints (OAuth 2.0 App-Only)
-        try:
-            bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
-        except Exception as e:
-            mark_x_api_blocked_if_needed(db, e)
-            logger.error(f"Failed to get X bearer token: {e}")
-            return
-        client = tweepy.Client(bearer_token=bearer_token)
-
-        # Get posts that need metrics (published in last 30 days, not fetched in 6h)
-        posts = db.get_posts_needing_metrics(max_age_days=30)
-        if not posts:
-            logger.info("No posts need metrics fetching")
-            return
-
-        logger.info(f"Fetching metrics for {len(posts)} posts")
-
-        # Batch tweet IDs for efficient API usage
-        tweet_id_to_post = {p["tweet_id"]: p for p in posts}
-        tweet_ids = list(tweet_id_to_post.keys())
-
         fetched = 0
-        for i in range(0, len(tweet_ids), BATCH_SIZE):
-            batch = tweet_ids[i : i + BATCH_SIZE]
-
+        if x_polling_allowed:
+            # Use bearer token for read endpoints (OAuth 2.0 App-Only)
             try:
-                response = client.get_tweets(
-                    ids=batch, tweet_fields=["public_metrics"]
-                )
-            except tweepy.TweepyException as e:
-                blocked_until = mark_x_api_blocked_if_needed(db, e)
-                logger.error(f"API error fetching batch {i // BATCH_SIZE + 1}: {e}")
-                if blocked_until:
-                    break
-                continue
+                bearer_token = get_bearer_token(config.x.api_key, config.x.api_secret)
+            except Exception as e:
+                mark_x_api_blocked_if_needed(db, e)
+                logger.error(f"Failed to get X bearer token: {e}")
+                return
+            client = tweepy.Client(bearer_token=bearer_token)
 
-            if not response.data:
-                logger.warning(f"No data returned for batch {i // BATCH_SIZE + 1}")
-                continue
+            # Get posts that need metrics (published in last 30 days, not fetched in 6h)
+            posts = db.get_posts_needing_metrics(max_age_days=30)
+            if not posts:
+                logger.info("No posts need metrics fetching")
+            else:
+                logger.info(f"Fetching metrics for {len(posts)} posts")
 
-            for tweet in response.data:
-                post = tweet_id_to_post.get(str(tweet.id))
-                if not post:
+            # Batch tweet IDs for efficient API usage
+            tweet_id_to_post = {p["tweet_id"]: p for p in posts}
+            tweet_ids = list(tweet_id_to_post.keys())
+
+            for i in range(0, len(tweet_ids), BATCH_SIZE):
+                batch = tweet_ids[i : i + BATCH_SIZE]
+
+                try:
+                    response = client.get_tweets(
+                        ids=batch, tweet_fields=["public_metrics"]
+                    )
+                except tweepy.TweepyException as e:
+                    blocked_until = mark_x_api_blocked_if_needed(db, e)
+                    logger.error(f"API error fetching batch {i // BATCH_SIZE + 1}: {e}")
+                    if blocked_until:
+                        break
                     continue
 
-                metrics = tweet.public_metrics or {}
-                like_count = metrics.get("like_count", 0)
-                retweet_count = metrics.get("retweet_count", 0)
-                reply_count = metrics.get("reply_count", 0)
-                quote_count = metrics.get("quote_count", 0)
+                if not response.data:
+                    logger.warning(f"No data returned for batch {i // BATCH_SIZE + 1}")
+                    continue
 
-                score = compute_engagement_score(
-                    like_count, retweet_count, reply_count, quote_count
-                )
+                for tweet in response.data:
+                    post = tweet_id_to_post.get(str(tweet.id))
+                    if not post:
+                        continue
 
-                db.insert_engagement(
-                    content_id=post["id"],
-                    tweet_id=post["tweet_id"],
-                    like_count=like_count,
-                    retweet_count=retweet_count,
-                    reply_count=reply_count,
-                    quote_count=quote_count,
-                    engagement_score=score,
-                )
-                db.backfill_prediction_actuals(post["id"], score)
-                fetched += 1
-                logger.info(
-                    f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}"
-                )
+                    metrics = tweet.public_metrics or {}
+                    like_count = metrics.get("like_count", 0)
+                    retweet_count = metrics.get("retweet_count", 0)
+                    reply_count = metrics.get("reply_count", 0)
+                    quote_count = metrics.get("quote_count", 0)
+
+                    score = compute_engagement_score(
+                        like_count, retweet_count, reply_count, quote_count
+                    )
+
+                    db.insert_engagement(
+                        content_id=post["id"],
+                        tweet_id=post["tweet_id"],
+                        like_count=like_count,
+                        retweet_count=retweet_count,
+                        reply_count=reply_count,
+                        quote_count=quote_count,
+                        engagement_score=score,
+                    )
+                    db.backfill_prediction_actuals(post["id"], score)
+                    fetched += 1
+                    logger.info(
+                        f"  {post['tweet_id']}: {like_count}L {retweet_count}RT {reply_count}R {quote_count}Q = {score:.1f}"
+                    )
 
         # Fetch Bluesky engagement metrics if enabled
         bluesky_fetched = 0
         if config.bluesky and getattr(config.bluesky, "enabled", False) is True:
             logger.info("\n--- Fetching Bluesky engagement ---")
-            bluesky_posts = db.get_content_needing_bluesky_engagement(max_age_days=7)
+            if should_skip_optional_api_call(
+                config,
+                db,
+                "bluesky",
+                operation="Bluesky engagement metrics fetch",
+                logger=logger,
+            ):
+                bluesky_posts = []
+            else:
+                bluesky_posts = db.get_content_needing_bluesky_engagement(max_age_days=7)
 
             if bluesky_posts:
                 logger.info(f"Fetching Bluesky metrics for {len(bluesky_posts)} posts")
@@ -234,19 +259,20 @@ def main() -> None:
         try:
             from output.x_client import XClient
 
-            x_client = XClient(
-                config.x.api_key,
-                config.x.api_secret,
-                config.x.access_token,
-                config.x.access_token_secret,
-            )
-            metrics = x_client.get_profile_metrics()
-            if metrics:
-                db.insert_profile_metrics("x", **metrics)
-                logger.info(f"Profile: {metrics['follower_count']} followers, "
-                            f"{metrics['following_count']} following")
-            else:
-                mark_x_api_blocked_if_needed(db, x_client.last_error)
+            if x_polling_allowed:
+                x_client = XClient(
+                    config.x.api_key,
+                    config.x.api_secret,
+                    config.x.access_token,
+                    config.x.access_token_secret,
+                )
+                metrics = x_client.get_profile_metrics()
+                if metrics:
+                    db.insert_profile_metrics("x", **metrics)
+                    logger.info(f"Profile: {metrics['follower_count']} followers, "
+                                f"{metrics['following_count']} following")
+                else:
+                    mark_x_api_blocked_if_needed(db, x_client.last_error)
         except Exception as e:
             mark_x_api_blocked_if_needed(db, e)
             logger.warning(f"Profile metrics fetch failed (non-fatal): {e}")

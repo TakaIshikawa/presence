@@ -88,6 +88,11 @@ def _make_config(
         cultivate=cultivate,
         embeddings=embeddings,
         timeouts=timeouts,
+        rate_limits=SimpleNamespace(
+            x_min_remaining=10,
+            bluesky_min_remaining=10,
+            anthropic_min_remaining=5,
+        ),
     )
 
 
@@ -771,6 +776,48 @@ class TestErrorHandling:
         # With script_context, DB is always initialized, but X operations should be skipped
         _patches.MockXClient.assert_not_called()
         _patches.update_monitoring.assert_called_with("poll-replies")
+
+    def test_low_anthropic_budget_skips_optional_reply_drafting(self, _patches, caplog):
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        _patches.db.get_meta.side_effect = lambda key: {
+            "api_rate_limit:anthropic:remaining": "5",
+        }.get(key)
+
+        main()
+
+        _patches.x_client.get_authenticated_user.assert_not_called()
+        _patches.x_client.get_mentions.assert_not_called()
+        _patches.bluesky_client.get_notifications.assert_not_called()
+        _patches.update_monitoring.assert_called_with("poll-replies")
+        assert "skipping reply drafting" in caplog.text
+
+    def test_low_x_budget_skips_mentions_but_allows_bluesky_polling(self, _patches):
+        _patches.config.bluesky.enabled = True
+        _patches.db.get_meta.side_effect = lambda key: {
+            "api_rate_limit:x:remaining": "5",
+        }.get(key)
+
+        main()
+
+        _patches.x_client.get_authenticated_user.assert_not_called()
+        _patches.x_client.get_mentions.assert_not_called()
+        _patches.bluesky_client.get_notifications.assert_called_once_with(
+            cursor=None,
+            limit=50,
+        )
+
+    def test_low_bluesky_budget_skips_notification_polling(self, _patches):
+        _patches.config.bluesky.enabled = True
+        _patches.db.get_meta.side_effect = lambda key: {
+            "api_rate_limit:bluesky:remaining": "8",
+        }.get(key)
+
+        main()
+
+        _patches.x_client.get_mentions.assert_called_once()
+        _patches.bluesky_client.get_notifications.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

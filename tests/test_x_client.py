@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from output.x_client import XClient, PostResult, parse_thread_content
+from output.api_rate_guard import optional_api_skip_reason
 
 
 # --- Helpers ---
@@ -83,6 +84,24 @@ class TestPost:
         assert result.tweet_id is None
         assert result.url is None
 
+    def test_low_stored_budget_does_not_block_posting_path(self):
+        client, mock_tweepy = make_x_client()
+        mock_get_me(mock_tweepy, username="alice")
+        mock_create_tweet(mock_tweepy, tweet_id="111")
+        db = MagicMock()
+        db.get_meta.side_effect = lambda key: {
+            "api_rate_limit:x:remaining": "0",
+        }.get(key)
+        config = MagicMock()
+        config.rate_limits.x_min_remaining = 10
+
+        assert optional_api_skip_reason(config, db, "x", operation="polling")
+
+        result = client.post("Critical publish")
+
+        assert result.success is True
+        mock_tweepy.create_tweet.assert_called_once_with(text="Critical publish")
+
 
 # --- XClient.reply() ---
 
@@ -120,6 +139,27 @@ class TestReply:
 
         assert result.success is False
         assert "Forbidden" in result.error
+
+    def test_low_stored_budget_does_not_block_reply_posting_path(self):
+        client, mock_tweepy = make_x_client()
+        mock_get_me(mock_tweepy, username="alice")
+        mock_create_tweet(mock_tweepy, tweet_id="222")
+        db = MagicMock()
+        db.get_meta.side_effect = lambda key: {
+            "api_rate_limit:x:remaining": "0",
+        }.get(key)
+        config = MagicMock()
+        config.rate_limits.x_min_remaining = 10
+
+        assert optional_api_skip_reason(config, db, "x", operation="polling")
+
+        result = client.reply("Critical reply", reply_to_tweet_id="100")
+
+        assert result.success is True
+        mock_tweepy.create_tweet.assert_called_once_with(
+            text="Critical reply",
+            in_reply_to_tweet_id="100",
+        )
 
 
 # --- XClient.post_thread() ---

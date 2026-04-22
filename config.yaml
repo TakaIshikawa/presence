@@ -112,6 +112,13 @@ scheduling:
 publish_queue:
   max_retry_delay_minutes: 360  # Cap exponential backoff at 6 hours
 
+# Optional polling is skipped when stored remaining API budget is this low.
+# Publish/reply posting paths are not guarded by these thresholds.
+rate_limits:
+  x_min_remaining: 10
+  bluesky_min_remaining: 10
+  anthropic_min_remaining: 5
+
 # Operational health warning thresholds
 operations_health:
   max_poll_age_minutes: 30

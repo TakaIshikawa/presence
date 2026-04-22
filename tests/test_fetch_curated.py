@@ -406,3 +406,45 @@ class TestMainFiltering:
             main()
 
         MockXClient.assert_not_called()
+
+    @patch("fetch_curated.InsightExtractor")
+    @patch("fetch_curated.KnowledgeStore")
+    @patch("fetch_curated.get_embedding_provider")
+    @patch("fetch_curated.script_context")
+    def test_low_x_rate_budget_skips_curated_x_fetch(
+        self, mock_script_context, mock_embedder, MockStore, MockExtractor, caplog
+    ):
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        config = MagicMock()
+        config.embeddings.provider = "voyage"
+        config.embeddings.api_key = "key"
+        config.embeddings.model = "model"
+        config.anthropic.api_key = "key"
+        config.synthesis.model = "model"
+        config.curated_sources.x_accounts = [
+            SimpleNamespace(identifier="testuser", license="open")
+        ]
+        config.curated_sources.blogs = []
+        config.curated_sources.newsletters = []
+        config.rate_limits.x_min_remaining = 5
+
+        db = MagicMock()
+        db.get_meta.side_effect = lambda key: {
+            "api_rate_limit:x:remaining": "5",
+        }.get(key)
+        db.get_active_curated_sources.return_value = []
+        mock_script_context.return_value.__enter__.return_value = (config, db)
+
+        with (
+            patch("fetch_curated.XClient") as MockXClient,
+            patch("fetch_curated.fetch_user_tweets") as mock_fetch,
+        ):
+            from fetch_curated import main
+
+            main()
+
+        MockXClient.assert_not_called()
+        mock_fetch.assert_not_called()
+        assert "skipping curated X account fetch" in caplog.text
