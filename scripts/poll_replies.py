@@ -247,6 +247,9 @@ def main() -> None:
             model=config.synthesis.model,
             timeout=config.timeouts.anthropic_seconds,
             knowledge_store=knowledge_store,
+            restricted_prompt_behavior=getattr(
+                config.curated_sources, "restricted_prompt_behavior", "strict"
+            ) if config.curated_sources else "strict",
         )
 
         # Cultivate integration (optional — works without it)

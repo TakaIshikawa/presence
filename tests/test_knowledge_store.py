@@ -45,6 +45,7 @@ def _make_item(
     attribution_required=False,
     source_url=None,
     author="tester",
+    license="attribution_required",
 ) -> KnowledgeItem:
     return KnowledgeItem(
         id=None,
@@ -58,6 +59,7 @@ def _make_item(
         attribution_required=attribution_required,
         approved=approved,
         created_at=None,
+        license=license,
     )
 
 
@@ -170,7 +172,7 @@ class TestKnowledgeItemToDict:
 
         expected_keys = {
             "id", "source_type", "source_id", "source_url", "author",
-            "content", "insight", "attribution_required", "approved"
+            "content", "insight", "attribution_required", "license", "approved"
         }
         assert set(result.keys()) == expected_keys
 
@@ -209,6 +211,7 @@ class TestKnowledgeItemToDict:
         assert result["content"] == "test content here"
         assert result["insight"] == "key insight here"
         assert result["attribution_required"] is True
+        assert result["license"] == "attribution_required"
         assert result["approved"] is False
 
     def test_to_dict_with_none_optional_fields(self):
@@ -242,11 +245,11 @@ class TestKnowledgeItemToDict:
 
         result = item.to_dict()
 
-        # Verify all 9 expected fields are present and populated
-        assert len(result) == 9
+        # Verify all 10 expected fields are present and populated
+        assert len(result) == 10
         assert all(key in result for key in [
             "id", "source_type", "source_id", "source_url", "author",
-            "content", "insight", "attribution_required", "approved"
+            "content", "insight", "attribution_required", "license", "approved"
         ])
         assert result["id"] == 100
         assert result["source_type"] == "curated_article"
@@ -311,6 +314,15 @@ class TestAddItem:
 
         stored = store.get_by_source("curated_x", "src-1")
         assert stored.content == "updated"
+
+    def test_add_item_persists_license(self, store):
+        item = _make_item(source_id="restricted-1", license="restricted")
+        store.add_item(item)
+
+        stored = store.get_by_source("curated_x", "restricted-1")
+
+        assert stored is not None
+        assert stored.license == "restricted"
 
 
 class TestSearchSimilar:
@@ -398,6 +410,34 @@ class TestSearchSimilar:
         assert "has-embedding" in result_ids
         assert "no-embedding" not in result_ids
         assert len(results) == 1
+
+    def test_restricted_sources_searchable_for_review(self, store):
+        store.add_item(_make_item(source_id="open-1", content="AI agents", license="open"))
+        store.add_item(_make_item(source_id="restricted-1", content="AI agents", license="restricted"))
+
+        results = store.search_similar("AI agents", min_similarity=-1.0, approved_only=True)
+        result_ids = {item.source_id for item, _ in results}
+
+        assert "open-1" in result_ids
+        assert "restricted-1" in result_ids
+
+    def test_filter_prompt_safe_excludes_restricted_by_default(self, store):
+        allowed = _make_item(source_id="allowed", license="attribution_required")
+        restricted = _make_item(source_id="restricted", license="restricted")
+
+        filtered = KnowledgeStore.filter_prompt_safe([(allowed, 0.8), (restricted, 0.9)])
+
+        assert filtered == [(allowed, 0.8)]
+
+    def test_filter_prompt_safe_permissive_allows_restricted(self, store):
+        restricted = _make_item(source_id="restricted", license="restricted")
+
+        filtered = KnowledgeStore.filter_prompt_safe(
+            [(restricted, 0.9)],
+            restricted_behavior="permissive",
+        )
+
+        assert filtered == [(restricted, 0.9)]
 
 
 class TestGetBySource:

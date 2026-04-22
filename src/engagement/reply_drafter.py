@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from engagement.cultivate_bridge import PersonContext
     from knowledge.store import KnowledgeStore, KnowledgeItem
 
+from knowledge.store import KnowledgeStore
+
 
 PROACTIVE_SYSTEM_PROMPT = """\
 You are helping a developer engage authentically on X (Twitter). \
@@ -86,11 +88,13 @@ class ReplyDrafter:
         api_key: str,
         model: str,
         timeout: float = 300.0,
-        knowledge_store: Optional["KnowledgeStore"] = None
+        knowledge_store: Optional["KnowledgeStore"] = None,
+        restricted_prompt_behavior: str = KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.knowledge_store = knowledge_store
+        self.restricted_prompt_behavior = restricted_prompt_behavior
 
     def draft(
         self,
@@ -200,6 +204,10 @@ class ReplyDrafter:
                     limit=3,
                     min_similarity=0.40,
                 )
+        knowledge_items = KnowledgeStore.filter_prompt_safe(
+            knowledge_items,
+            self.restricted_prompt_behavior,
+        )
 
         knowledge_section = ""
         if knowledge_items:
@@ -265,7 +273,10 @@ class ReplyDrafter:
             min_similarity=0.45
         )
 
-        return results
+        return KnowledgeStore.filter_prompt_safe(
+            results,
+            self.restricted_prompt_behavior,
+        )
 
     def _build_knowledge_section(
         self, items: list[tuple["KnowledgeItem", float]]

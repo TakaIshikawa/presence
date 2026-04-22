@@ -56,7 +56,8 @@ def _make_knowledge_item(
     source_type: str,
     content: str,
     author: str | None = None,
-    insight: str | None = None
+    insight: str | None = None,
+    license: str = "attribution_required",
 ) -> KnowledgeItem:
     """Create a test KnowledgeItem."""
     return KnowledgeItem(
@@ -70,7 +71,8 @@ def _make_knowledge_item(
         embedding=[0.1, 0.2, 0.3],
         attribution_required=True,
         approved=True,
-        created_at=None
+        created_at=None,
+        license=license,
     )
 
 
@@ -181,6 +183,43 @@ class TestRetrieveKnowledge:
         assert len(external) == 1
         assert own[0][0] == own_item
         assert external[0][0] == external_item
+
+    def test_filters_restricted_external_insights_from_prompt_context(self, generator_with_store):
+        attribution_item = _make_knowledge_item(
+            "curated_x", "Attribution needed", "alice", "Allowed insight",
+            license="attribution_required"
+        )
+        restricted_item = _make_knowledge_item(
+            "curated_x", "Restricted", "bob", "Blocked insight",
+            license="restricted"
+        )
+        generator_with_store.knowledge_store.search_similar.side_effect = [
+            [],
+            [(attribution_item, 0.8), (restricted_item, 0.9)]
+        ]
+
+        own, external = generator_with_store._retrieve_knowledge("test query")
+
+        assert own == []
+        assert external == [(attribution_item, 0.8)]
+
+    def test_permissive_mode_allows_restricted_insights(self, mock_anthropic, mock_knowledge_store):
+        _, _ = mock_anthropic
+        gen = EnhancedContentGenerator(
+            api_key="test-key",
+            knowledge_store=mock_knowledge_store,
+            model="test-model",
+            restricted_prompt_behavior="permissive",
+        )
+        restricted_item = _make_knowledge_item(
+            "curated_x", "Restricted", "bob", "Allowed in permissive",
+            license="restricted"
+        )
+        mock_knowledge_store.search_similar.side_effect = [[], [(restricted_item, 0.9)]]
+
+        _, external = gen._retrieve_knowledge("test query")
+
+        assert external == [(restricted_item, 0.9)]
 
 
 # -- _load_prompt tests -------------------------------------------------------

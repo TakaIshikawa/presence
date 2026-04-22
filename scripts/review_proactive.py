@@ -202,6 +202,9 @@ def main():
             api_key=config.anthropic.api_key,
             model=config.synthesis.model,
             timeout=config.timeouts.anthropic_seconds,
+            restricted_prompt_behavior=getattr(
+                config.curated_sources, "restricted_prompt_behavior", "strict"
+            ) if config.curated_sources else "strict",
         )
 
         my_handle = x_client.username

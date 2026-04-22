@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS knowledge (
     insight TEXT,               -- extracted insight/summary
     embedding BLOB,             -- serialized embedding vector
     attribution_required INTEGER DEFAULT 1,
+    license TEXT DEFAULT 'attribution_required',  -- 'open', 'attribution_required', 'restricted'
     approved INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source_type, source_id)

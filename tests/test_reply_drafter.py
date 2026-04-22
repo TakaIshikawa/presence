@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from engagement.reply_drafter import ReplyDrafter, SYSTEM_PROMPT, PROACTIVE_SYSTEM_PROMPT
+from knowledge.store import KnowledgeItem
 
 
 # --- SYSTEM_PROMPT content ---
@@ -349,6 +350,49 @@ class TestDraftProactive:
         call_kwargs = mock_ks.search_similar.call_args
         assert call_kwargs[0][0] == "tweet about testing"
         assert result.knowledge_ids == [(42, 0.8)]
+
+    def test_excludes_restricted_prefetched_knowledge_from_prompt(self, drafter):
+        allowed = KnowledgeItem(
+            id=1,
+            source_type="curated_x",
+            source_id="allowed",
+            source_url=None,
+            author="alice",
+            content="allowed content",
+            insight="Allowed insight",
+            embedding=None,
+            attribution_required=True,
+            approved=True,
+            created_at=None,
+            license="attribution_required",
+        )
+        restricted = KnowledgeItem(
+            id=2,
+            source_type="curated_x",
+            source_id="restricted",
+            source_url=None,
+            author="bob",
+            content="restricted content",
+            insight="Blocked insight",
+            embedding=None,
+            attribution_required=True,
+            approved=True,
+            created_at=None,
+            license="restricted",
+        )
+
+        self._set_reply(drafter, "Good point")
+        result = drafter.draft_proactive(
+            "their tweet",
+            "them",
+            "me",
+            knowledge_items=[(allowed, 0.8), (restricted, 0.9)],
+        )
+
+        prompt = drafter._mock_client.messages.create.call_args[1]["messages"][0]["content"]
+        assert "Allowed insight" in prompt
+        assert "Blocked insight" not in prompt
+        assert result.knowledge_ids == [(1, 0.8)]
 
     def test_includes_person_context(self, drafter):
         self._set_reply(drafter, "Good insight")

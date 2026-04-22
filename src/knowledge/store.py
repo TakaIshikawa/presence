@@ -34,6 +34,7 @@ class KnowledgeItem:
     attribution_required: bool
     approved: bool
     created_at: Optional[datetime]
+    license: str = "attribution_required"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,14 +46,56 @@ class KnowledgeItem:
             "content": self.content,
             "insight": self.insight,
             "attribution_required": self.attribution_required,
+            "license": self.license,
             "approved": self.approved,
         }
 
 
 class KnowledgeStore:
+    STRICT_LICENSE_BEHAVIOR = "strict"
+    PERMISSIVE_LICENSE_BEHAVIOR = "permissive"
+    RESTRICTED_LICENSE = "restricted"
+
     def __init__(self, conn: sqlite3.Connection, embedder: EmbeddingProvider) -> None:
         self.conn = conn
         self.embedder = embedder
+
+    @staticmethod
+    def is_prompt_allowed(
+        item: KnowledgeItem,
+        restricted_behavior: str = STRICT_LICENSE_BEHAVIOR,
+    ) -> bool:
+        """Return whether a knowledge item may be injected into prompts."""
+        if restricted_behavior not in {
+            KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
+            KnowledgeStore.PERMISSIVE_LICENSE_BEHAVIOR,
+        }:
+            raise ValueError(
+                "restricted_behavior must be 'strict' or 'permissive'"
+            )
+
+        if restricted_behavior == KnowledgeStore.PERMISSIVE_LICENSE_BEHAVIOR:
+            return True
+
+        return item.license != KnowledgeStore.RESTRICTED_LICENSE
+
+    @staticmethod
+    def filter_prompt_safe(
+        items: list[tuple[KnowledgeItem, float]],
+        restricted_behavior: str = STRICT_LICENSE_BEHAVIOR,
+    ) -> list[tuple[KnowledgeItem, float]]:
+        """Filter search results down to knowledge allowed in prompt context."""
+        return [
+            (item, score)
+            for item, score in items
+            if KnowledgeStore.is_prompt_allowed(item, restricted_behavior)
+        ]
+
+    @staticmethod
+    def _row_license(row: sqlite3.Row) -> str:
+        if "license" in row.keys():
+            return row["license"] or "attribution_required"
+        return "attribution_required"
 
     def add_item(self, item: KnowledgeItem) -> int:
         """Add a knowledge item with embedding.
@@ -73,12 +116,15 @@ class KnowledgeStore:
         cursor = self.conn.execute(
             """INSERT INTO knowledge
                (source_type, source_id, source_url, author, content, insight,
-                embedding, attribution_required, approved)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                embedding, attribution_required, license, approved)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source_type, source_id) DO UPDATE SET
                content = excluded.content,
                insight = excluded.insight,
-               embedding = excluded.embedding""",
+               embedding = excluded.embedding,
+               attribution_required = excluded.attribution_required,
+               license = excluded.license,
+               approved = excluded.approved""",
             (
                 item.source_type,
                 item.source_id,
@@ -88,6 +134,7 @@ class KnowledgeStore:
                 item.insight,
                 embedding_blob,
                 1 if item.attribution_required else 0,
+                item.license,
                 1 if item.approved else 0
             )
         )
@@ -147,7 +194,8 @@ class KnowledgeStore:
                     embedding=embedding,
                     attribution_required=bool(row["attribution_required"]),
                     approved=bool(row["approved"]),
-                    created_at=row["created_at"]
+                    created_at=row["created_at"],
+                    license=self._row_license(row),
                 )
                 results.append((item, similarity))
 
@@ -184,7 +232,8 @@ class KnowledgeStore:
             embedding=embedding,
             attribution_required=bool(row["attribution_required"]),
             approved=bool(row["approved"]),
-            created_at=row["created_at"]
+            created_at=row["created_at"],
+            license=self._row_license(row),
         )
 
     def exists(self, source_type: str, source_id: str) -> bool:
@@ -221,7 +270,8 @@ class KnowledgeStore:
                 embedding=embedding,
                 attribution_required=bool(row["attribution_required"]),
                 approved=bool(row["approved"]),
-                created_at=row["created_at"]
+                created_at=row["created_at"],
+                license=self._row_license(row),
             ))
         return items
 
@@ -230,6 +280,8 @@ class KnowledgeStore:
         source_type: str,
         limit: int = 20,
         max_age_hours: int = 72,
+        prompt_safe: bool = False,
+        restricted_behavior: str = STRICT_LICENSE_BEHAVIOR,
     ) -> list[KnowledgeItem]:
         """Get recent knowledge items by source type, ordered by recency.
 
@@ -259,8 +311,16 @@ class KnowledgeStore:
                 attribution_required=bool(row["attribution_required"]),
                 approved=bool(row["approved"]),
                 created_at=row["created_at"],
+                license=self._row_license(row),
             ))
-        return items
+        if not prompt_safe:
+            return items
+
+        return [
+            item
+            for item in items
+            if self.is_prompt_allowed(item, restricted_behavior)
+        ]
 
     def link_to_content(self, content_id: int, knowledge_id: int, relevance: float) -> None:
         """Track which knowledge was used in generated content."""

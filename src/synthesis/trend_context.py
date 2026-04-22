@@ -23,11 +23,13 @@ class TrendContextBuilder:
         model: str = "claude-sonnet-4-6",
         timeout: float = 300.0,
         db=None,
+        restricted_prompt_behavior: str = KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
     ):
         self.store = knowledge_store
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.db = db  # Optional Database for caching
+        self.restricted_prompt_behavior = restricted_prompt_behavior
 
     def build_context(
         self,
@@ -50,6 +52,8 @@ class TrendContextBuilder:
             source_type="curated_x",
             limit=max_items,
             max_age_hours=max_age_hours,
+            prompt_safe=True,
+            restricted_behavior=self.restricted_prompt_behavior,
         )
 
         if len(items) < 3:
@@ -97,6 +101,8 @@ class TrendContextBuilder:
             source_type="curated_x",
             limit=max_items,
             max_age_hours=max_age_hours,
+            prompt_safe=True,
+            restricted_behavior=self.restricted_prompt_behavior,
         )
 
         if len(items) < 3:
@@ -130,6 +136,8 @@ class TrendContextBuilder:
             source_type="curated_x",
             limit=max_items,
             max_age_hours=max_age_hours,
+            prompt_safe=True,
+            restricted_behavior=self.restricted_prompt_behavior,
         )
 
         if len(items) < 3 or (not prompts and not commits):
