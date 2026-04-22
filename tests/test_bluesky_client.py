@@ -370,6 +370,56 @@ class TestReply:
         assert "UnauthorizedError" in result.error
         assert "Token expired" in result.error
 
+    def test_reply_from_queue_metadata_uses_inbound_as_parent(self):
+        client, mock_client = make_bluesky_client()
+        mock_send_post(
+            mock_client,
+            uri="at://did:plc:me/app.bsky.feed.post/reply123",
+            cid="replycid",
+        )
+
+        result = client.reply_from_queue_metadata(
+            "Thanks!",
+            inbound_uri="at://did:plc:alice/app.bsky.feed.post/inbound1",
+            inbound_cid="inbound-cid",
+            platform_metadata={
+                "reply_root": {
+                    "uri": "at://did:plc:me/app.bsky.feed.post/root1",
+                    "cid": "root-cid",
+                }
+            },
+            our_platform_id="at://did:plc:me/app.bsky.feed.post/root1",
+        )
+
+        assert result.success is True
+        call_kwargs = mock_client.send_post.call_args.kwargs
+        assert call_kwargs["text"] == "Thanks!"
+        assert call_kwargs["reply_to"] == {
+            "root": {
+                "uri": "at://did:plc:me/app.bsky.feed.post/root1",
+                "cid": "root-cid",
+            },
+            "parent": {
+                "uri": "at://did:plc:alice/app.bsky.feed.post/inbound1",
+                "cid": "inbound-cid",
+            },
+        }
+
+    def test_reply_from_queue_metadata_missing_root_cid_returns_failure(self):
+        client, mock_client = make_bluesky_client()
+
+        result = client.reply_from_queue_metadata(
+            "Thanks!",
+            inbound_uri="at://did:plc:alice/app.bsky.feed.post/inbound1",
+            inbound_cid="inbound-cid",
+            platform_metadata={"parent_post_uri": "at://did:plc:me/app.bsky.feed.post/root1"},
+            our_platform_id="at://did:plc:me/app.bsky.feed.post/root1",
+        )
+
+        assert result.success is False
+        assert "Missing Bluesky reply references" in result.error
+        mock_client.send_post.assert_not_called()
+
 
 # --- BlueskyClient.get_notifications() ---
 

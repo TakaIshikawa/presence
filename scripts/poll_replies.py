@@ -80,6 +80,22 @@ def _bluesky_parent_uri(notification: dict) -> str | None:
     return parent.get("uri")
 
 
+def _bluesky_reply_ref_metadata(notification: dict) -> dict:
+    record = notification.get("record") or {}
+    reply = record.get("reply") or {}
+    metadata = {}
+    for name in ("root", "parent"):
+        ref = reply.get(name) or {}
+        if ref.get("uri") or ref.get("cid"):
+            metadata[f"reply_{name}"] = {
+                k: v for k, v in {
+                    "uri": ref.get("uri"),
+                    "cid": ref.get("cid"),
+                }.items() if v
+            }
+    return metadata
+
+
 def _conversation_context_metadata(context: dict | None) -> dict:
     if not isinstance(context, dict) or not context:
         return {}
@@ -286,6 +302,7 @@ def _poll_bluesky_replies(
                 "reply_refs": _bluesky_reply_refs(notification),
                 "classification_reason": classification.reason,
             }
+            metadata.update(_bluesky_reply_ref_metadata(notification))
             metadata.update(_conversation_context_metadata(conversation_context))
             _queue_classified_without_draft(
                 db,
@@ -331,6 +348,7 @@ def _poll_bluesky_replies(
             "record_created_at": record.get("created_at"),
             "reply_refs": _bluesky_reply_refs(notification),
         }
+        metadata.update(_bluesky_reply_ref_metadata(notification))
         metadata.update(_conversation_context_metadata(conversation_context))
         reply_queue_id = db.insert_reply_draft(
             inbound_tweet_id=inbound_uri,

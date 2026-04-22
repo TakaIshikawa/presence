@@ -170,6 +170,8 @@ class Database:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN posted_at TEXT")
             if rq_cols and "posted_tweet_id" not in rq_cols:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN posted_tweet_id TEXT")
+            if rq_cols and "posted_platform_id" not in rq_cols:
+                self.conn.execute("ALTER TABLE reply_queue ADD COLUMN posted_platform_id TEXT")
             if rq_cols and "intent" not in rq_cols:
                 self.conn.execute("ALTER TABLE reply_queue ADD COLUMN intent TEXT DEFAULT 'other'")
             if rq_cols and "priority" not in rq_cols:
@@ -2618,15 +2620,21 @@ class Database:
         reply_id: int,
         status: str,
         posted_tweet_id: Optional[str] = None,
+        posted_platform_id: Optional[str] = None,
     ) -> None:
         """Update a reply's status (approved, posted, dismissed)."""
         now = datetime.now(timezone.utc).isoformat()
-        if status == "posted" and posted_tweet_id:
+        if status == "posted" and (posted_tweet_id or posted_platform_id):
+            platform_id = posted_platform_id or posted_tweet_id
             self.conn.execute(
                 """UPDATE reply_queue
-                   SET status = ?, posted_tweet_id = ?, posted_at = ?, reviewed_at = ?
+                   SET status = ?,
+                       posted_tweet_id = ?,
+                       posted_platform_id = ?,
+                       posted_at = ?,
+                       reviewed_at = ?
                    WHERE id = ?""",
-                (status, posted_tweet_id, now, now, reply_id)
+                (status, posted_tweet_id, platform_id, now, now, reply_id)
             )
         elif status == "dismissed":
             self.conn.execute(

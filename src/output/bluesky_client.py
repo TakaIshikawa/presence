@@ -1,6 +1,7 @@
 """Bluesky (AT Protocol) API client for posting content."""
 
 import logging
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -199,6 +200,64 @@ class BlueskyClient:
             )
         except AtProtocolError as e:
             return self._failure_result(e)
+
+    def reply_from_queue_metadata(
+        self,
+        text: str,
+        *,
+        inbound_uri: str,
+        inbound_cid: str,
+        platform_metadata: str | dict | None = None,
+        our_platform_id: Optional[str] = None,
+    ) -> BlueskyPostResult:
+        """Reply to a queued Bluesky inbound post using stored queue metadata."""
+        metadata = self._parse_queue_metadata(platform_metadata)
+        root_ref = self._queue_ref(metadata, "root")
+        root_uri = (
+            root_ref.get("uri")
+            or metadata.get("root_uri")
+            or metadata.get("parent_post_uri")
+            or our_platform_id
+        )
+        root_cid = root_ref.get("cid") or metadata.get("root_cid")
+
+        if not inbound_uri or not inbound_cid or not root_uri or not root_cid:
+            return BlueskyPostResult(
+                success=False,
+                error=(
+                    "Missing Bluesky reply references: inbound_uri, "
+                    "inbound_cid, root_uri, and root_cid are required"
+                ),
+                error_category="unknown",
+            )
+
+        return self.reply(
+            text,
+            parent_uri=inbound_uri,
+            parent_cid=inbound_cid,
+            root_uri=root_uri,
+            root_cid=root_cid,
+        )
+
+    @staticmethod
+    def _parse_queue_metadata(platform_metadata: str | dict | None) -> dict:
+        if isinstance(platform_metadata, dict):
+            return platform_metadata
+        if not platform_metadata:
+            return {}
+        try:
+            parsed = json.loads(platform_metadata)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _queue_ref(metadata: dict, name: str) -> dict:
+        for key in (f"reply_{name}", name):
+            value = metadata.get(key)
+            if isinstance(value, dict):
+                return value
+        return {}
 
     def get_notifications(
         self,

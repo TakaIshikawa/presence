@@ -1911,6 +1911,7 @@ class TestReplyQueue:
         assert "relationship_context" in cols
         assert "quality_score" in cols
         assert "quality_flags" in cols
+        assert "posted_platform_id" in cols
         assert "intent" in cols
         assert "priority" in cols
 
