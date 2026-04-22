@@ -19,6 +19,7 @@ from config import (
     ProactiveConfig,
     PublishQueueConfig,
     OperationsHealthConfig,
+    NewsletterConfig,
     CuratedSource,
     CuratedSourcesConfig,
     TimeoutsConfig,
@@ -248,6 +249,40 @@ class TestDataclassParsing:
         assert cfg.proactive.enabled is True
         assert cfg.proactive.max_daily_replies == 3
         assert cfg.proactive.account_cooldown_hours == 48
+
+    def test_newsletter_utm_config_when_present(self, tmp_path):
+        data = _minimal_config_dict(
+            newsletter={
+                "enabled": True,
+                "provider": "buttondown",
+                "api_key": "${BUTTONDOWN_KEY}",
+                "send_day": "monday",
+                "send_hour": 9,
+                "utm_source": "newsletter",
+                "utm_medium": "email",
+                "utm_campaign_template": "weekly-{week_end_compact}",
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert isinstance(cfg.newsletter, NewsletterConfig)
+        assert cfg.newsletter.utm_source == "newsletter"
+        assert cfg.newsletter.utm_medium == "email"
+        assert cfg.newsletter.utm_campaign_template == "weekly-{week_end_compact}"
+
+    def test_newsletter_utm_defaults_disabled(self, tmp_path):
+        data = _minimal_config_dict(
+            newsletter={
+                "enabled": True,
+                "provider": "buttondown",
+                "api_key": "key",
+                "send_day": "monday",
+                "send_hour": 9,
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.newsletter.utm_source == ""
+        assert cfg.newsletter.utm_medium == ""
+        assert cfg.newsletter.utm_campaign_template == ""
 
 
 # ---------------------------------------------------------------------------

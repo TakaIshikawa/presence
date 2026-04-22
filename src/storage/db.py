@@ -249,6 +249,9 @@ class Database:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_retry ON content_publications(status, next_retry_at)")
             # Migrate: create newsletter_engagement table if missing
+            ns_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(newsletter_sends)")}
+            if ns_cols and "metadata" not in ns_cols:
+                self.conn.execute("ALTER TABLE newsletter_sends ADD COLUMN metadata JSON")
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS newsletter_engagement (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2058,14 +2061,23 @@ class Database:
         content_ids: list[int],
         subscriber_count: int = 0,
         status: str = "sent",
+        metadata: Optional[dict] = None,
     ) -> int:
         """Record a newsletter send."""
         now = datetime.now(timezone.utc).isoformat()
         cursor = self.conn.execute(
             """INSERT INTO newsletter_sends
-               (issue_id, subject, source_content_ids, subscriber_count, status, sent_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (issue_id, subject, json.dumps(content_ids), subscriber_count, status, now)
+               (issue_id, subject, source_content_ids, subscriber_count, status, metadata, sent_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                issue_id,
+                subject,
+                json.dumps(content_ids),
+                subscriber_count,
+                status,
+                json.dumps(metadata or {}),
+                now,
+            )
         )
         self.conn.commit()
         return cursor.lastrowid

@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS newsletter_sends (
     source_content_ids TEXT,   -- JSON array of generated_content IDs
     subscriber_count INTEGER,
     status TEXT DEFAULT 'sent',
+    metadata JSON,
     sent_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

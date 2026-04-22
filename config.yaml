@@ -43,6 +43,9 @@ newsletter:
   api_key: "${BUTTONDOWN_API_KEY}"
   send_day: "monday"
   send_hour: 9  # UTC
+  utm_source: "newsletter"
+  utm_medium: "email"
+  utm_campaign_template: "weekly-{week_end_compact}"
 
 # Historical theme injection
 historical:

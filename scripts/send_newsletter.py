@@ -41,7 +41,15 @@ def main():
         logger.info(f"Assembling newsletter for {week_start.date()} to {week_end.date()}")
 
         # Assemble content
-        assembler = NewsletterAssembler(db, site_url="https://takaishikawa.com")
+        assembler = NewsletterAssembler(
+            db,
+            site_url="https://takaishikawa.com",
+            utm_source=getattr(config.newsletter, "utm_source", ""),
+            utm_medium=getattr(config.newsletter, "utm_medium", ""),
+            utm_campaign_template=getattr(
+                config.newsletter, "utm_campaign_template", ""
+            ),
+        )
         content = assembler.assemble(week_start, week_end)
 
         if not content.body_markdown.strip():
@@ -65,12 +73,15 @@ def main():
         result = client.send(content.subject, content.body_markdown)
 
         if result.success:
-            db.insert_newsletter_send(
-                issue_id=result.issue_id or "",
-                subject=content.subject,
-                content_ids=content.source_content_ids,
-                subscriber_count=subscriber_count,
-            )
+            send_kwargs = {
+                "issue_id": result.issue_id or "",
+                "subject": content.subject,
+                "content_ids": content.source_content_ids,
+                "subscriber_count": subscriber_count,
+            }
+            if content.metadata:
+                send_kwargs["metadata"] = content.metadata
+            db.insert_newsletter_send(**send_kwargs)
             logger.info(f"Newsletter sent: {result.url}")
         else:
             logger.error(f"Send failed: {result.error}")

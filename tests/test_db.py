@@ -2680,6 +2680,23 @@ class TestNewsletterMethods:
         assert row["subscriber_count"] == 250
         assert row["status"] == "sent"
 
+    def test_insert_newsletter_send_stores_metadata(self, db):
+        """insert_newsletter_send should persist optional metadata JSON."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-meta",
+            subject="Attributed Digest",
+            content_ids=[10],
+            subscriber_count=25,
+            metadata={"utm_campaign": "weekly-20260423"},
+        )
+
+        row = db.conn.execute(
+            "SELECT metadata FROM newsletter_sends WHERE id = ?",
+            (send_id,),
+        ).fetchone()
+
+        assert json.loads(row["metadata"]) == {"utm_campaign": "weekly-20260423"}
+
     def test_get_last_newsletter_send_returns_none_when_empty(self, db):
         """get_last_newsletter_send should return None when no newsletters exist."""
         assert db.get_last_newsletter_send() is None

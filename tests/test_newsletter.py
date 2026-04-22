@@ -1,7 +1,9 @@
 """Tests for newsletter assembly and delivery."""
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -44,6 +46,12 @@ def _set_content_format(db, content_id, content_format):
         (content_format, content_id),
     )
     db.conn.commit()
+
+
+def _first_markdown_url(markdown: str) -> str:
+    match = re.search(r"\]\(([^)]+)\)", markdown)
+    assert match is not None
+    return match.group(1)
 
 
 # --- NewsletterAssembler ---
@@ -192,6 +200,104 @@ class TestNewsletterAssembler:
         content = assembler.assemble(week_start, now)
 
         assert "[Read the full post](https://takaishikawa.com/blog/test.html)" in content.body_markdown
+
+    def test_internal_links_get_utm_and_content_id(self, db):
+        """Internal content links are rewritten with newsletter attribution."""
+        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        week_start = now - timedelta(days=7)
+        content_id = _insert_published_content(
+            db,
+            "blog_post",
+            "TITLE: Test Post\n\nSome content here.",
+            days_ago=1,
+            url="https://takaishikawa.com/blog/test.html",
+        )
+
+        assembler = NewsletterAssembler(
+            db,
+            utm_source="newsletter",
+            utm_medium="email",
+            utm_campaign_template="weekly-{week_end_compact}",
+        )
+        content = assembler.assemble(week_start, now)
+
+        url = _first_markdown_url(content.body_markdown)
+        query = parse_qs(urlparse(url).query)
+        assert query["utm_source"] == ["newsletter"]
+        assert query["utm_medium"] == ["email"]
+        assert query["utm_campaign"] == ["weekly-20260423"]
+        assert query["content_id"] == [str(content_id)]
+        assert content.metadata == {"utm_campaign": "weekly-20260423"}
+
+    def test_internal_links_preserve_existing_query_strings(self, db):
+        """UTM parameters are appended without dropping existing query params."""
+        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        week_start = now - timedelta(days=7)
+        content_id = _insert_published_content(
+            db,
+            "blog_post",
+            "TITLE: Test Post\n\nSome content here.",
+            days_ago=1,
+            url="https://takaishikawa.com/blog/test.html?ref=site#notes",
+        )
+
+        assembler = NewsletterAssembler(
+            db,
+            utm_source="newsletter",
+            utm_medium="email",
+            utm_campaign_template="weekly-{week_start}",
+        )
+        content = assembler.assemble(week_start, now)
+
+        url = _first_markdown_url(content.body_markdown)
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+        assert query["ref"] == ["site"]
+        assert query["utm_campaign"] == ["weekly-2026-04-16"]
+        assert query["content_id"] == [str(content_id)]
+        assert parsed.fragment == "notes"
+
+    def test_utm_rewrite_skips_external_links(self, db):
+        """External published URLs are not modified for attribution."""
+        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        week_start = now - timedelta(days=7)
+        _insert_published_content(
+            db,
+            "x_post",
+            "External post.",
+            days_ago=1,
+            url="https://x.com/taka/status/123?ref=feed",
+        )
+
+        assembler = NewsletterAssembler(
+            db,
+            utm_source="newsletter",
+            utm_medium="email",
+            utm_campaign_template="weekly-{week_end}",
+        )
+        content = assembler.assemble(week_start, now)
+
+        assert "https://x.com/taka/status/123?ref=feed" in content.body_markdown
+        assert "utm_campaign" not in content.body_markdown
+        assert content.metadata == {"utm_campaign": "weekly-2026-04-23"}
+
+    def test_utm_rewrite_disabled_by_default(self, db):
+        """Default assembler behavior leaves existing links untouched."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+        _insert_published_content(
+            db,
+            "blog_post",
+            "TITLE: Test Post\n\nSome content here.",
+            days_ago=1,
+            url="https://takaishikawa.com/blog/test.html?ref=site",
+        )
+
+        content = NewsletterAssembler(db).assemble(week_start, now)
+
+        assert "[Test Post](https://takaishikawa.com/blog/test.html?ref=site)" in content.body_markdown
+        assert "utm_campaign" not in content.body_markdown
+        assert content.metadata == {}
 
     def test_custom_site_url(self, db):
         """Custom site_url is used in footer."""

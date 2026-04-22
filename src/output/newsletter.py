@@ -6,6 +6,7 @@ import requests
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from storage.db import Database
 
@@ -35,6 +36,7 @@ class NewsletterContent:
     subject: str
     body_markdown: str
     source_content_ids: list[int] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -48,9 +50,19 @@ class NewsletterMetrics:
 class NewsletterAssembler:
     """Assembles newsletter content from the week's published posts."""
 
-    def __init__(self, db: Database, site_url: str = "https://takaishikawa.com"):
+    def __init__(
+        self,
+        db: Database,
+        site_url: str = "https://takaishikawa.com",
+        utm_source: str = "",
+        utm_medium: str = "",
+        utm_campaign_template: str = "",
+    ):
         self.db = db
-        self.site_url = site_url
+        self.site_url = site_url.rstrip("/")
+        self.utm_source = utm_source
+        self.utm_medium = utm_medium
+        self.utm_campaign_template = utm_campaign_template
 
     def assemble(
         self, week_start: datetime, week_end: datetime
@@ -59,6 +71,7 @@ class NewsletterAssembler:
         content_ids = []
         sections = []
         source_preferences = self._load_resonant_source_preferences()
+        utm_campaign = self._build_utm_campaign(week_start, week_end)
 
         # 1. Blog post (if published this week)
         blog_posts = self.db.get_published_content_in_range(
@@ -71,6 +84,7 @@ class NewsletterAssembler:
             title = self._extract_blog_title(post["content"])
             excerpt = self._extract_blog_excerpt(post["content"], max_lines=3)
             url = post.get("published_url", "")
+            url = self._rewrite_internal_link(url, post["id"], utm_campaign)
             sections.append((
                 "blog_post",
                 f"## This Week's Post\n\n"
@@ -90,6 +104,7 @@ class NewsletterAssembler:
                 content_ids.append(thread["id"])
                 first_tweet = self._extract_first_tweet(thread["content"])
                 url = thread.get("published_url", "")
+                url = self._rewrite_internal_link(url, thread["id"], utm_campaign)
                 link = f" ([thread]({url}))" if url else ""
                 thread_items.append(f"- {first_tweet}{link}")
             sections.append(
@@ -106,6 +121,7 @@ class NewsletterAssembler:
             for post in posts[:3]:
                 content_ids.append(post["id"])
                 url = post.get("published_url", "")
+                url = self._rewrite_internal_link(url, post["id"], utm_campaign)
                 link = f" ([link]({url}))" if url else ""
                 post_items.append(f"> {post['content']}{link}")
             sections.append(
@@ -133,7 +149,53 @@ class NewsletterAssembler:
             subject=subject,
             body_markdown=body,
             source_content_ids=content_ids,
+            metadata={"utm_campaign": utm_campaign} if utm_campaign else {},
         )
+
+    def _build_utm_campaign(
+        self, week_start: datetime, week_end: datetime
+    ) -> str:
+        """Render configured UTM campaign template for this issue."""
+        if not (
+            self.utm_source
+            and self.utm_medium
+            and self.utm_campaign_template
+        ):
+            return ""
+        context = {
+            "week_start": week_start.strftime("%Y-%m-%d"),
+            "week_end": week_end.strftime("%Y-%m-%d"),
+            "week_start_compact": week_start.strftime("%Y%m%d"),
+            "week_end_compact": week_end.strftime("%Y%m%d"),
+        }
+        try:
+            return self.utm_campaign_template.format(**context)
+        except (KeyError, ValueError) as e:
+            logger.debug(f"Newsletter UTM campaign template failed: {e}")
+            return self.utm_campaign_template
+
+    def _rewrite_internal_link(
+        self, url: str, content_id: int, utm_campaign: str
+    ) -> str:
+        """Add UTM/click attribution to internal links only."""
+        if not url or not utm_campaign:
+            return url
+
+        parsed_url = urlparse(url)
+        parsed_site = urlparse(self.site_url)
+        if parsed_url.netloc and parsed_url.netloc != parsed_site.netloc:
+            return url
+        if parsed_url.scheme and parsed_url.scheme not in ("http", "https"):
+            return url
+
+        query = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
+        query.update({
+            "utm_source": self.utm_source,
+            "utm_medium": self.utm_medium,
+            "utm_campaign": utm_campaign,
+            "content_id": str(content_id),
+        })
+        return urlunparse(parsed_url._replace(query=urlencode(query)))
 
     def _load_resonant_source_preferences(self) -> list[dict]:
         """Load content type/format patterns from prior resonant sends."""
