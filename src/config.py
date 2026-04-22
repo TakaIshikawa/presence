@@ -114,6 +114,7 @@ class NewsletterConfig:
     api_key: str
     send_day: str
     send_hour: int
+    subject_override: str = ""
     utm_source: str = ""
     utm_medium: str = ""
     utm_campaign_template: str = ""
@@ -359,6 +360,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             api_key=_resolve_env_var(data["newsletter"].get("api_key", "")),
             send_day=data["newsletter"].get("send_day", "monday"),
             send_hour=data["newsletter"].get("send_hour", 9),
+            subject_override=data["newsletter"].get("subject_override", ""),
             utm_source=data["newsletter"].get("utm_source", ""),
             utm_medium=data["newsletter"].get("utm_medium", ""),
             utm_campaign_template=data["newsletter"].get("utm_campaign_template", ""),

@@ -173,6 +173,31 @@ class TestNewsletterAssembler:
         expected_date = week_start.strftime("%b %d")
         assert content.subject == f"Building with AI — Week of {expected_date}"
 
+    def test_generates_ranked_subject_candidates(self, db):
+        """Assembled newsletters include scored subject alternatives."""
+        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        _insert_published_content(
+            db,
+            "blog_post",
+            "TITLE: Shipping Better AI Tools\n\nSpecific release notes.",
+            days_ago=1,
+        )
+
+        content = NewsletterAssembler(db).assemble(week_start, now)
+
+        assert len(content.subject_candidates) >= 3
+        assert content.subject_candidates == sorted(
+            content.subject_candidates,
+            key=lambda item: (-item.score, item.subject.lower()),
+        )
+        assert any(
+            candidate.subject == "Shipping Better AI Tools"
+            for candidate in content.subject_candidates
+        )
+        assert all(candidate.score > 0 for candidate in content.subject_candidates)
+
     def test_includes_site_url_footer(self, db):
         """Newsletter footer includes site URL."""
         now = datetime.now(timezone.utc)

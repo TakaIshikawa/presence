@@ -37,6 +37,16 @@ class NewsletterContent:
     body_markdown: str
     source_content_ids: list[int] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    subject_candidates: list["NewsletterSubjectCandidate"] = field(default_factory=list)
+
+
+@dataclass
+class NewsletterSubjectCandidate:
+    subject: str
+    score: float
+    rationale: str = ""
+    source: str = "heuristic"
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -81,6 +91,12 @@ class NewsletterAssembler:
         """Gather this week's blog post + top threads + top posts into a newsletter."""
         content_ids = []
         sections = []
+        subject_context = {
+            "blog_titles": [],
+            "thread_hooks": [],
+            "post_hooks": [],
+            "content_types": [],
+        }
         source_preferences = self._load_resonant_source_preferences()
         utm_campaign = self._build_utm_campaign(week_start, week_end)
 
@@ -96,6 +112,8 @@ class NewsletterAssembler:
             excerpt = self._extract_blog_excerpt(post["content"], max_lines=3)
             url = post.get("published_url", "")
             url = self._rewrite_internal_link(url, post["id"], utm_campaign)
+            subject_context["blog_titles"].append(title)
+            subject_context["content_types"].append("blog_post")
             sections.append((
                 "blog_post",
                 f"## This Week's Post\n\n"
@@ -118,6 +136,8 @@ class NewsletterAssembler:
                 url = self._rewrite_internal_link(url, thread["id"], utm_campaign)
                 link = f" ([thread]({url}))" if url else ""
                 thread_items.append(f"- {first_tweet}{link}")
+                subject_context["thread_hooks"].append(first_tweet)
+                subject_context["content_types"].append("x_thread")
             sections.append(
                 ("x_thread", "## Threads\n\n" + "\n\n".join(thread_items))
             )
@@ -135,6 +155,8 @@ class NewsletterAssembler:
                 url = self._rewrite_internal_link(url, post["id"], utm_campaign)
                 link = f" ([link]({url}))" if url else ""
                 post_items.append(f"> {post['content']}{link}")
+                subject_context["post_hooks"].append(post["content"])
+                subject_context["content_types"].append("x_post")
             sections.append(
                 ("x_post", "## Posts\n\n" + "\n\n".join(post_items))
             )
@@ -147,6 +169,12 @@ class NewsletterAssembler:
         # Compose the full newsletter
         date_str = week_end.strftime("%B %d, %Y")
         subject = f"Building with AI — Week of {week_start.strftime('%b %d')}"
+        subject_candidates = self.generate_subject_candidates(
+            week_start,
+            week_end,
+            subject_context=subject_context,
+            fallback_subject=subject,
+        )
 
         body = f"# Weekly Digest\n\n{date_str}\n\n"
         ordered_sections = self._order_sections(sections, source_preferences)
@@ -161,7 +189,147 @@ class NewsletterAssembler:
             body_markdown=body,
             source_content_ids=content_ids,
             metadata={"utm_campaign": utm_campaign} if utm_campaign else {},
+            subject_candidates=subject_candidates,
         )
+
+    def generate_subject_candidates(
+        self,
+        week_start: datetime,
+        week_end: datetime,
+        subject_context: Optional[dict] = None,
+        fallback_subject: str = "",
+    ) -> list[NewsletterSubjectCandidate]:
+        """Create scored subject candidates for the assembled issue."""
+        fallback_subject = fallback_subject or (
+            f"Building with AI — Week of {week_start.strftime('%b %d')}"
+        )
+        subject_context = subject_context or {}
+        blog_titles = subject_context.get("blog_titles") or []
+        thread_hooks = subject_context.get("thread_hooks") or []
+        post_hooks = subject_context.get("post_hooks") or []
+        content_types = subject_context.get("content_types") or []
+
+        candidates = [fallback_subject]
+        if blog_titles:
+            candidates.append(blog_titles[0])
+            candidates.append(f"This week: {blog_titles[0]}")
+
+        top_hook = self._first_meaningful_phrase(thread_hooks + post_hooks)
+        if top_hook:
+            candidates.append(f"This week: {top_hook}")
+
+        mix_label = self._subject_mix_label(content_types)
+        if mix_label:
+            candidates.append(
+                f"{mix_label} from the week of {week_start.strftime('%b %d')}"
+            )
+
+        candidates.append(f"Weekly Digest — {week_end.strftime('%b %d, %Y')}")
+
+        seen = set()
+        scored = []
+        for candidate in candidates:
+            normalized = self._normalize_subject(candidate)
+            key = normalized.lower()
+            if not normalized or key in seen:
+                continue
+            seen.add(key)
+            score, rationale = self._score_subject_candidate(
+                normalized,
+                fallback_subject=fallback_subject,
+                context_terms=blog_titles + thread_hooks + post_hooks,
+            )
+            scored.append(
+                NewsletterSubjectCandidate(
+                    subject=normalized,
+                    score=score,
+                    rationale=rationale,
+                    metadata={
+                        "week_start": week_start.strftime("%Y-%m-%d"),
+                        "week_end": week_end.strftime("%Y-%m-%d"),
+                    },
+                )
+            )
+
+        return sorted(scored, key=lambda item: (-item.score, item.subject.lower()))
+
+    @staticmethod
+    def _normalize_subject(subject: str, max_length: int = 90) -> str:
+        """Trim generated subject text to a Buttondown-friendly one-liner."""
+        subject = re.sub(r"\s+", " ", subject or "").strip(" -:\n\t")
+        if len(subject) <= max_length:
+            return subject
+        shortened = subject[:max_length].rsplit(" ", 1)[0].strip(" -:")
+        return shortened or subject[:max_length].strip()
+
+    @staticmethod
+    def _first_meaningful_phrase(items: list[str]) -> str:
+        """Return a compact phrase from the first current issue hook."""
+        for item in items:
+            text = re.sub(r"https?://\S+", "", item or "")
+            text = re.sub(r"[*_`>#\[\]()]", "", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            if text:
+                return text.split(". ")[0].strip()
+        return ""
+
+    @staticmethod
+    def _subject_mix_label(content_types: list[str]) -> str:
+        labels = []
+        if "blog_post" in content_types:
+            labels.append("post")
+        if "x_thread" in content_types:
+            labels.append("threads")
+        if "x_post" in content_types:
+            labels.append("notes")
+        if not labels:
+            return ""
+        if len(labels) == 1:
+            return labels[0].title()
+        return ", ".join(labels[:-1]).title() + f" and {labels[-1]}"
+
+    @staticmethod
+    def _score_subject_candidate(
+        subject: str, fallback_subject: str, context_terms: list[str]
+    ) -> tuple[float, str]:
+        """Score subject lines for specificity, readability, and email fit."""
+        score = 5.0
+        reasons = []
+        length = len(subject)
+
+        if 28 <= length <= 70:
+            score += 1.5
+            reasons.append("clear length")
+        elif length < 20:
+            score -= 1.0
+            reasons.append("short")
+        elif length > 80:
+            score -= 1.0
+            reasons.append("long")
+
+        lower_subject = subject.lower()
+        context_words = {
+            word.lower()
+            for term in context_terms
+            for word in re.findall(r"[A-Za-z][A-Za-z0-9'-]{3,}", term or "")
+        }
+        if context_words and any(word in lower_subject for word in context_words):
+            score += 1.5
+            reasons.append("issue-specific")
+        if "weekly digest" in lower_subject or "week of" in lower_subject:
+            score += 0.5
+            reasons.append("recognizable series")
+        if subject == fallback_subject:
+            score += 0.25
+            reasons.append("default format")
+        if re.search(r"\b(ai|agents?|shipping|building|post|threads?|notes?)\b", lower_subject):
+            score += 0.5
+            reasons.append("topical")
+        if subject.count("!") > 0 or subject.isupper():
+            score -= 1.0
+            reasons.append("salesy")
+
+        return round(max(score, 0.0), 2), ", ".join(reasons) or "baseline"
 
     def _build_utm_campaign(
         self, week_start: datetime, week_end: datetime

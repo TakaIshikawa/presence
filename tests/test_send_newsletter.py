@@ -15,7 +15,11 @@ sys.path.insert(0, str(_project_root / "scripts"))
 sys.path.insert(0, str(_project_root / "src"))
 
 from send_newsletter import main
-from output.newsletter import NewsletterContent, NewsletterResult
+from output.newsletter import (
+    NewsletterContent,
+    NewsletterResult,
+    NewsletterSubjectCandidate,
+)
 
 
 def _make_config(enabled=True, api_key="test-key"):
@@ -293,6 +297,102 @@ class TestSendSuccess:
         out = caplog.text
         assert "Newsletter sent" in out
         assert "https://buttondown.com/issue/42" in out
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_sends_top_subject_candidate_and_stores_scores(
+        self, mock_ctx, MockAssembler, MockClient, mock_monitoring
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = None
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        content = NewsletterContent(
+            subject="Building with AI — Week of Apr 16",
+            body_markdown="Content.",
+            source_content_ids=[1],
+            subject_candidates=[
+                NewsletterSubjectCandidate(
+                    subject="Shipping Better AI Tools",
+                    score=8.5,
+                    rationale="issue-specific",
+                ),
+                NewsletterSubjectCandidate(
+                    subject="Building with AI — Week of Apr 16",
+                    score=6.75,
+                    rationale="default format",
+                ),
+            ],
+        )
+        MockAssembler.return_value.assemble.return_value = content
+        MockClient.return_value.send.return_value = NewsletterResult(
+            success=True,
+            issue_id="issue-1",
+            url="https://example.com",
+        )
+        MockClient.return_value.get_subscriber_count.return_value = 10
+
+        main()
+
+        MockClient.return_value.send.assert_called_once_with(
+            "Shipping Better AI Tools",
+            "Content.",
+        )
+        db.insert_newsletter_subject_candidates.assert_called_once()
+        storage_kwargs = db.insert_newsletter_subject_candidates.call_args.kwargs
+        assert storage_kwargs["selected_subject"] == "Shipping Better AI Tools"
+        assert storage_kwargs["content_ids"] == [1]
+        db.insert_newsletter_send.assert_called_once()
+        assert db.insert_newsletter_send.call_args.kwargs["subject"] == (
+            "Shipping Better AI Tools"
+        )
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_manual_subject_override_wins_over_candidates(
+        self, mock_ctx, MockAssembler, MockClient, mock_monitoring
+    ):
+        config = _make_config()
+        config.newsletter.subject_override = "Manual subject"
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = None
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        content = NewsletterContent(
+            subject="Building with AI — Week of Apr 16",
+            body_markdown="Content.",
+            source_content_ids=[1],
+            subject_candidates=[
+                NewsletterSubjectCandidate(
+                    subject="Shipping Better AI Tools",
+                    score=8.5,
+                    rationale="issue-specific",
+                ),
+            ],
+        )
+        MockAssembler.return_value.assemble.return_value = content
+        MockClient.return_value.send.return_value = NewsletterResult(
+            success=True,
+            issue_id="issue-1",
+            url="https://example.com",
+        )
+        MockClient.return_value.get_subscriber_count.return_value = 10
+
+        main()
+
+        MockClient.return_value.send.assert_called_once_with(
+            "Manual subject",
+            "Content.",
+        )
+        stored_candidates = db.insert_newsletter_subject_candidates.call_args.args[0]
+        assert stored_candidates[0].subject == "Manual subject"
+        assert stored_candidates[0].source == "manual"
+        assert db.insert_newsletter_send.call_args.kwargs["subject"] == "Manual subject"
 
     @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")

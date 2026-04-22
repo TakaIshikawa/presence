@@ -12,7 +12,71 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
-from output.newsletter import NewsletterAssembler, ButtondownClient
+from output.newsletter import (
+    NewsletterAssembler,
+    NewsletterSubjectCandidate,
+    ButtondownClient,
+)
+
+
+def _arg_value(name: str) -> str:
+    """Read a simple --name value CLI option without changing existing argv usage."""
+    if name not in sys.argv:
+        return ""
+    index = sys.argv.index(name)
+    if index + 1 >= len(sys.argv):
+        return ""
+    return sys.argv[index + 1].strip()
+
+
+def _config_text(obj, *names: str) -> str:
+    """Return the first configured string value from a possibly mocked config."""
+    for name in names:
+        value = getattr(obj, name, "")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _manual_subject_override(config) -> str:
+    """Resolve an explicit subject override from CLI or newsletter config."""
+    return (
+        _arg_value("--subject")
+        or _config_text(
+            config.newsletter,
+            "subject_override",
+            "manual_subject",
+            "subject",
+        )
+    )
+
+
+def _select_subject(content, manual_subject: str = "") -> str:
+    """Pick the outgoing subject while letting manual overrides win."""
+    if manual_subject:
+        return manual_subject
+    candidates = getattr(content, "subject_candidates", None) or []
+    if candidates:
+        return candidates[0].subject
+    return content.subject
+
+
+def _subject_candidates_for_storage(content, selected_subject: str, manual_subject: str):
+    """Include manual overrides in persisted candidates without dropping evaluated ones."""
+    candidates = list(getattr(content, "subject_candidates", None) or [])
+    if manual_subject and all(c.subject != manual_subject for c in candidates):
+        top_score = max((c.score for c in candidates), default=0.0)
+        candidates.insert(
+            0,
+            NewsletterSubjectCandidate(
+                subject=manual_subject,
+                score=round(top_score + 0.01, 2),
+                rationale="manual override",
+                source="manual",
+                metadata={"manual_override": True},
+            ),
+        )
+    return candidates
 
 
 def main():
@@ -56,7 +120,9 @@ def main():
             logger.info("No content published this week, skipping newsletter")
             return
 
-        logger.info(f"Subject: {content.subject}")
+        manual_subject = _manual_subject_override(config)
+        selected_subject = _select_subject(content, manual_subject)
+        logger.info(f"Subject: {selected_subject}")
         logger.debug(f"Content IDs included: {content.source_content_ids}")
 
         # Check for --dry-run flag
@@ -70,12 +136,30 @@ def main():
         subscriber_count = client.get_subscriber_count()
         logger.info(f"Subscribers: {subscriber_count}")
 
-        result = client.send(content.subject, content.body_markdown)
+        candidates_for_storage = _subject_candidates_for_storage(
+            content,
+            selected_subject=selected_subject,
+            manual_subject=manual_subject,
+        )
+        inserter = getattr(db, "insert_newsletter_subject_candidates", None)
+        if callable(inserter) and candidates_for_storage:
+            try:
+                inserter(
+                    candidates_for_storage,
+                    content_ids=content.source_content_ids,
+                    week_start=week_start,
+                    week_end=week_end,
+                    selected_subject=selected_subject,
+                )
+            except Exception as e:
+                logger.debug("Newsletter subject candidate storage failed: %s", e)
+
+        result = client.send(selected_subject, content.body_markdown)
 
         if result.success:
             send_kwargs = {
                 "issue_id": result.issue_id or "",
-                "subject": content.subject,
+                "subject": selected_subject,
                 "content_ids": content.source_content_ids,
                 "subscriber_count": subscriber_count,
             }

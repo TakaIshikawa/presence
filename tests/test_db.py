@@ -112,6 +112,29 @@ class TestSchemaInit:
         }
         assert expected.issubset(cols)
 
+    def test_newsletter_subject_candidates_table_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute(
+                "PRAGMA table_info(newsletter_subject_candidates)"
+            )
+        }
+        expected = {
+            "newsletter_send_id",
+            "issue_id",
+            "subject",
+            "score",
+            "rationale",
+            "source",
+            "rank",
+            "selected",
+            "source_content_ids",
+            "week_start",
+            "week_end",
+            "metadata",
+        }
+        assert expected.issubset(cols)
+
     def test_idempotent_init(self, db, schema_path):
         # Running init_schema again should not raise
         db.init_schema(schema_path)
@@ -2841,6 +2864,40 @@ class TestNewsletterMethods:
         assert rows[0]["unsubscribes"] == 5
         assert rows[0]["raw_metrics"] == {"count": 102}
         assert rows[1]["churn_rate"] == 0.05
+
+    def test_insert_and_list_newsletter_subject_candidates(self, db):
+        """Newsletter subject candidates are persisted with scores and selection."""
+        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        ids = db.insert_newsletter_subject_candidates(
+            [
+                {
+                    "subject": "Specific AI notes",
+                    "score": 8.5,
+                    "rationale": "issue-specific",
+                    "source": "heuristic",
+                    "metadata": {"source": "heuristic"},
+                },
+                {
+                    "subject": "Weekly Digest",
+                    "score": 6.0,
+                    "rationale": "baseline",
+                },
+            ],
+            content_ids=[10, 20],
+            week_start=now - timedelta(days=7),
+            week_end=now,
+            selected_subject="Specific AI notes",
+        )
+
+        rows = db.list_newsletter_subject_candidates(limit=10)
+
+        assert len(ids) == 2
+        assert rows[0]["subject"] == "Weekly Digest"
+        assert rows[1]["subject"] == "Specific AI notes"
+        assert rows[1]["selected"] is True
+        assert rows[1]["source"] == "heuristic"
+        assert rows[1]["source_content_ids"] == [10, 20]
+        assert rows[1]["metadata"] == {"source": "heuristic"}
 
     def test_resonant_newsletter_source_patterns_uses_source_content(self, db):
         """Source content from resonant sends becomes future assembly preference data."""

@@ -261,6 +261,7 @@ class TestDataclassParsing:
                 "api_key": "${BUTTONDOWN_KEY}",
                 "send_day": "monday",
                 "send_hour": 9,
+                "subject_override": "Manual weekly subject",
                 "utm_source": "newsletter",
                 "utm_medium": "email",
                 "utm_campaign_template": "weekly-{week_end_compact}",
@@ -268,6 +269,7 @@ class TestDataclassParsing:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert isinstance(cfg.newsletter, NewsletterConfig)
+        assert cfg.newsletter.subject_override == "Manual weekly subject"
         assert cfg.newsletter.utm_source == "newsletter"
         assert cfg.newsletter.utm_medium == "email"
         assert cfg.newsletter.utm_campaign_template == "weekly-{week_end_compact}"
@@ -283,6 +285,7 @@ class TestDataclassParsing:
             }
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.newsletter.subject_override == ""
         assert cfg.newsletter.utm_source == ""
         assert cfg.newsletter.utm_medium == ""
         assert cfg.newsletter.utm_campaign_template == ""

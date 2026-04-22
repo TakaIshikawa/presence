@@ -254,6 +254,29 @@ CREATE TABLE IF NOT EXISTS newsletter_sends (
 
 CREATE INDEX IF NOT EXISTS idx_newsletter_sends_sent_at ON newsletter_sends(sent_at);
 
+-- Store evaluated newsletter subject candidates before delivery
+CREATE TABLE IF NOT EXISTS newsletter_subject_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
+    issue_id TEXT,
+    subject TEXT NOT NULL,
+    score REAL NOT NULL,
+    rationale TEXT,
+    source TEXT DEFAULT 'heuristic',
+    rank INTEGER,
+    selected INTEGER DEFAULT 0,
+    source_content_ids TEXT,
+    week_start TEXT,
+    week_end TEXT,
+    metadata JSON,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_newsletter_subject_candidates_send
+    ON newsletter_subject_candidates(newsletter_send_id);
+CREATE INDEX IF NOT EXISTS idx_newsletter_subject_candidates_created
+    ON newsletter_subject_candidates(created_at);
+
 -- Track newsletter engagement metrics from Buttondown (time-series)
 CREATE TABLE IF NOT EXISTS newsletter_engagement (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

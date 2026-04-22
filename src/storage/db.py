@@ -284,6 +284,43 @@ class Database:
             if ns_cols and "metadata" not in ns_cols:
                 self.conn.execute("ALTER TABLE newsletter_sends ADD COLUMN metadata JSON")
             self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS newsletter_subject_candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
+                    issue_id TEXT,
+                    subject TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    rationale TEXT,
+                    source TEXT DEFAULT 'heuristic',
+                    rank INTEGER,
+                    selected INTEGER DEFAULT 0,
+                    source_content_ids TEXT,
+                    week_start TEXT,
+                    week_end TEXT,
+                    metadata JSON,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            nsc_cols = {
+                row[1]
+                for row in self.conn.execute(
+                    "PRAGMA table_info(newsletter_subject_candidates)"
+                )
+            }
+            if nsc_cols and "source" not in nsc_cols:
+                self.conn.execute(
+                    "ALTER TABLE newsletter_subject_candidates "
+                    "ADD COLUMN source TEXT DEFAULT 'heuristic'"
+                )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_newsletter_subject_candidates_send "
+                "ON newsletter_subject_candidates(newsletter_send_id)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_newsletter_subject_candidates_created "
+                "ON newsletter_subject_candidates(created_at)"
+            )
+            self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS newsletter_engagement (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
@@ -2236,6 +2273,92 @@ class Database:
             (f"-{max_age_days} days", f"-{stale_hours} hours"),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def insert_newsletter_subject_candidates(
+        self,
+        candidates: list[dict],
+        content_ids: Optional[list[int]] = None,
+        week_start: Optional[datetime] = None,
+        week_end: Optional[datetime] = None,
+        selected_subject: Optional[str] = None,
+        newsletter_send_id: Optional[int] = None,
+        issue_id: Optional[str] = None,
+    ) -> list[int]:
+        """Persist evaluated newsletter subject candidates."""
+        if not candidates:
+            return []
+
+        inserted_ids = []
+        source_content_ids = json.dumps(content_ids or [])
+        week_start_text = week_start.isoformat() if week_start else None
+        week_end_text = week_end.isoformat() if week_end else None
+        for rank, candidate in enumerate(candidates, start=1):
+            if hasattr(candidate, "__dataclass_fields__"):
+                subject = getattr(candidate, "subject", "")
+                score = getattr(candidate, "score", 0.0)
+                rationale = getattr(candidate, "rationale", "")
+                source = getattr(candidate, "source", "heuristic")
+                metadata = getattr(candidate, "metadata", {}) or {}
+            else:
+                subject = candidate.get("subject", "")
+                score = candidate.get("score", 0.0)
+                rationale = candidate.get("rationale", "")
+                source = candidate.get("source", "heuristic")
+                metadata = candidate.get("metadata", {}) or {}
+            if not subject:
+                continue
+            cursor = self.conn.execute(
+                """INSERT INTO newsletter_subject_candidates
+                   (newsletter_send_id, issue_id, subject, score, rationale, source,
+                    rank, selected, source_content_ids, week_start, week_end, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    newsletter_send_id,
+                    issue_id,
+                    subject,
+                    float(score),
+                    rationale,
+                    source,
+                    rank,
+                    1 if selected_subject and subject == selected_subject else 0,
+                    source_content_ids,
+                    week_start_text,
+                    week_end_text,
+                    json.dumps(metadata),
+                ),
+            )
+            inserted_ids.append(cursor.lastrowid)
+
+        self.conn.commit()
+        return inserted_ids
+
+    def list_newsletter_subject_candidates(self, limit: int = 30) -> list[dict]:
+        """List stored newsletter subject candidates newest-first."""
+        cursor = self.conn.execute(
+            """SELECT id, newsletter_send_id, issue_id, subject, score, rationale,
+                      source, rank, selected, source_content_ids, week_start, week_end,
+                      metadata, created_at
+               FROM newsletter_subject_candidates
+               ORDER BY created_at DESC, id DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                item["source_content_ids"] = json.loads(
+                    item.get("source_content_ids") or "[]"
+                )
+            except (TypeError, json.JSONDecodeError):
+                item["source_content_ids"] = []
+            try:
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item["metadata"] = {}
+            item["selected"] = bool(item.get("selected"))
+            rows.append(item)
+        return rows
 
     def insert_newsletter_engagement(
         self,
