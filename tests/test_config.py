@@ -18,6 +18,7 @@ from config import (
     ImageGenConfig,
     ProactiveConfig,
     PublishQueueConfig,
+    OperationsHealthConfig,
     CuratedSource,
     CuratedSourcesConfig,
     TimeoutsConfig,
@@ -357,6 +358,26 @@ class TestDefaults:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.publish_queue.max_retry_delay_minutes == 45
+
+    def test_operations_health_defaults(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert isinstance(cfg.operations_health, OperationsHealthConfig)
+        assert cfg.operations_health.max_poll_age_minutes == 90
+        assert cfg.operations_health.max_failed_queue_items == 0
+        assert cfg.operations_health.max_pipeline_rejection_rate == 0.5
+
+    def test_operations_health_overrides(self, tmp_path):
+        data = _minimal_config_dict(
+            operations_health={
+                "max_poll_age_minutes": 15,
+                "max_failed_queue_items": 2,
+                "max_pipeline_rejection_rate": 0.25,
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.operations_health.max_poll_age_minutes == 15
+        assert cfg.operations_health.max_failed_queue_items == 2
+        assert cfg.operations_health.max_pipeline_rejection_rate == 0.25
 
     def test_replies_defaults_when_section_missing(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

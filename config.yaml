@@ -109,6 +109,17 @@ scheduling:
 publish_queue:
   max_retry_delay_minutes: 360  # Cap exponential backoff at 6 hours
 
+# Operational health warning thresholds
+operations_health:
+  max_poll_age_minutes: 30
+  max_reply_state_age_hours: 6
+  max_platform_reply_state_age_hours: 6
+  max_failed_queue_items: 0
+  pipeline_window_hours: 24
+  min_pipeline_runs_for_rejection_rate: 3
+  max_pipeline_rejection_rate: 0.5
+  max_engagement_fetch_age_hours: 36
+
 # Image generation for visual posts
 image_gen:
   provider: "pillow"

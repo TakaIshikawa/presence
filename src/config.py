@@ -145,6 +145,18 @@ class PublishQueueConfig:
 
 
 @dataclass
+class OperationsHealthConfig:
+    max_poll_age_minutes: int = 30
+    max_reply_state_age_hours: int = 6
+    max_platform_reply_state_age_hours: int = 6
+    max_failed_queue_items: int = 0
+    pipeline_window_hours: int = 24
+    min_pipeline_runs_for_rejection_rate: int = 3
+    max_pipeline_rejection_rate: float = 0.5
+    max_engagement_fetch_age_hours: int = 36
+
+
+@dataclass
 class ImageGenConfig:
     provider: str = "pillow"
     output_dir: str = "generated_images"
@@ -186,6 +198,7 @@ class Config:
     timeouts: TimeoutsConfig
     scheduling: Optional[SchedulingConfig]
     publish_queue: PublishQueueConfig
+    operations_health: OperationsHealthConfig
     proactive: Optional[ProactiveConfig]
     image_gen: Optional[ImageGenConfig]
 
@@ -383,6 +396,33 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_retry_delay_minutes=data["publish_queue"].get("max_retry_delay_minutes", 360),
         )
 
+    default_poll_health_minutes = data["polling"].get("interval_minutes", 10) * 3
+    operations_health_config = OperationsHealthConfig(
+        max_poll_age_minutes=default_poll_health_minutes,
+    )
+    if "operations_health" in data:
+        health_data = data["operations_health"]
+        operations_health_config = OperationsHealthConfig(
+            max_poll_age_minutes=health_data.get(
+                "max_poll_age_minutes", default_poll_health_minutes
+            ),
+            max_reply_state_age_hours=health_data.get("max_reply_state_age_hours", 6),
+            max_platform_reply_state_age_hours=health_data.get(
+                "max_platform_reply_state_age_hours", 6
+            ),
+            max_failed_queue_items=health_data.get("max_failed_queue_items", 0),
+            pipeline_window_hours=health_data.get("pipeline_window_hours", 24),
+            min_pipeline_runs_for_rejection_rate=health_data.get(
+                "min_pipeline_runs_for_rejection_rate", 3
+            ),
+            max_pipeline_rejection_rate=health_data.get(
+                "max_pipeline_rejection_rate", 0.5
+            ),
+            max_engagement_fetch_age_hours=health_data.get(
+                "max_engagement_fetch_age_hours", 36
+            ),
+        )
+
     # Parse proactive engagement config if present
     proactive_config = None
     if "proactive" in data:
@@ -457,6 +497,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         timeouts=timeouts_config,
         scheduling=scheduling_config,
         publish_queue=publish_queue_config,
+        operations_health=operations_health_config,
         proactive=proactive_config,
         image_gen=image_gen_config,
     )
