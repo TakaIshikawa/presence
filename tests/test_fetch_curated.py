@@ -175,6 +175,56 @@ class TestFetchCuratedFeeds:
         assert mock_ingest.call_args.kwargs["author"] == "Example Blog"
         assert mock_ingest.call_args.kwargs["license_type"] == "open"
 
+    @patch("fetch_curated.ingest_curated_article")
+    @patch("fetch_curated.fetch_feed")
+    @patch("fetch_curated.discover_feed_candidates")
+    def test_autodiscovers_and_caches_missing_feed_url(
+        self, mock_discover, mock_fetch, mock_ingest, db
+    ):
+        from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedCandidate, FeedFetchResult
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example"}],
+            "blog",
+        )
+        mock_discover.return_value = [
+            FeedCandidate(
+                url="https://example.com/feed.xml",
+                content_type="application/rss+xml",
+                score=90,
+            )
+        ]
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=1))
+        store = MagicMock()
+        store.exists.return_value = False
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example",
+            license="open",
+            feed_url=None,
+            homepage_url="https://example.com/blog",
+        )
+
+        count = fetch_curated_feed_source(
+            store,
+            MagicMock(),
+            source,
+            db=db,
+            limit=1,
+            autodiscovery_enabled=True,
+            autodiscovery_timeout=4.5,
+        )
+
+        assert count == 1
+        mock_discover.assert_called_once_with("https://example.com/blog", timeout=4.5)
+        mock_fetch.assert_called_once()
+        assert mock_fetch.call_args.args[0] == "https://example.com/feed.xml"
+        assert db.get_curated_source("blog", "example.com")["feed_url"] == "https://example.com/feed.xml"
+        mock_ingest.assert_called_once()
+
     @patch("fetch_curated.ingest_curated_newsletter")
     @patch("fetch_curated.fetch_feed")
     def test_newsletter_feed_entries_use_distinct_source_type(self, mock_fetch, mock_ingest):
@@ -202,6 +252,25 @@ class TestFetchCuratedFeeds:
         assert mock_ingest.call_args.kwargs["url"] == "https://example.com/agent-loops"
         assert mock_ingest.call_args.kwargs["author"] == "Example Newsletter"
         assert mock_ingest.call_args.kwargs["license_type"] == "restricted"
+
+    def test_config_source_uses_cached_discovered_feed_url(self, db):
+        from fetch_curated import _active_feed_sources
+
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example"}],
+            "blog",
+        )
+        db.update_curated_source_feed_url("blog", "example.com", "https://example.com/rss")
+        config = SimpleNamespace(
+            curated_sources=SimpleNamespace(
+                blogs=[SimpleNamespace(identifier="example.com", name="Example", feed_url=None)],
+                newsletters=[],
+            )
+        )
+
+        sources = _active_feed_sources(config, db)
+
+        assert sources[0].feed_url == "https://example.com/rss"
 
     @patch("knowledge.rss.urlopen")
     def test_fetch_feed_persists_headers_from_first_fetch(self, mock_urlopen):

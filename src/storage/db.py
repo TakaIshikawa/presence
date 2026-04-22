@@ -2160,7 +2160,7 @@ class Database:
                    ON CONFLICT(source_type, identifier) DO UPDATE SET
                    name = excluded.name,
                    license = excluded.license,
-                   feed_url = excluded.feed_url""",
+                   feed_url = COALESCE(excluded.feed_url, curated_sources.feed_url)""",
                 (source_type, src["identifier"], src.get("name", ""),
                  src.get("license", "attribution_required"), src.get("feed_url")),
             )
@@ -2200,6 +2200,21 @@ class Database:
                SET feed_etag = ?, feed_last_modified = ?
                WHERE source_type = ? AND identifier = ?""",
             (etag, last_modified, source_type, identifier),
+        )
+        self.conn.commit()
+
+    def update_curated_source_feed_url(
+        self,
+        source_type: str,
+        identifier: str,
+        feed_url: str,
+    ) -> None:
+        """Persist an autodiscovered feed URL for a curated source."""
+        self.conn.execute(
+            """UPDATE curated_sources
+               SET feed_url = ?
+               WHERE source_type = ? AND identifier = ?""",
+            (feed_url, source_type, identifier),
         )
         self.conn.commit()
 

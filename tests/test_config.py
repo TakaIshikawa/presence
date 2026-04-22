@@ -213,6 +213,8 @@ class TestDataclassParsing:
         data = _minimal_config_dict(
             curated_sources={
                 "rss_entries_per_source": 3,
+                "feed_autodiscovery_enabled": False,
+                "feed_autodiscovery_timeout_seconds": 7.5,
                 "x_accounts": [
                     {"username": "acct1", "name": "Account 1", "license": "open"}
                 ],
@@ -221,6 +223,7 @@ class TestDataclassParsing:
                         "domain": "example.com",
                         "name": "Example Blog",
                         "feed_url": "https://example.com/feed.xml",
+                        "homepage_url": "https://example.com/blog",
                     }
                 ],
                 "newsletters": [
@@ -236,6 +239,8 @@ class TestDataclassParsing:
         assert isinstance(cfg.curated_sources, CuratedSourcesConfig)
         assert cfg.curated_sources.restricted_prompt_behavior == "strict"
         assert cfg.curated_sources.rss_entries_per_source == 3
+        assert cfg.curated_sources.feed_autodiscovery_enabled is False
+        assert cfg.curated_sources.feed_autodiscovery_timeout_seconds == 7.5
         assert cfg.curated_sources.source_failure_threshold == 3
         assert cfg.curated_sources.source_cooldown_hours == 24
         assert cfg.curated_sources.knowledge_context.max_per_author is None
@@ -254,6 +259,7 @@ class TestDataclassParsing:
         assert blog.name == "Example Blog"
         assert blog.license == "attribution_required"  # default
         assert blog.feed_url == "https://example.com/feed.xml"
+        assert blog.homepage_url == "https://example.com/blog"
 
         assert len(cfg.curated_sources.newsletters) == 1
         newsletter = cfg.curated_sources.newsletters[0]

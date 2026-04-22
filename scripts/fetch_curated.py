@@ -21,7 +21,7 @@ from knowledge.ingest import (
     ingest_curated_post,
 )
 from knowledge.curated_accounts import get_active_x_accounts
-from knowledge.rss import fetch_feed
+from knowledge.rss import discover_feed_candidates, fetch_feed
 from output.x_client import XClient
 from output.x_api_guard import (
     get_x_api_block_reason,
@@ -32,6 +32,8 @@ from output.api_rate_guard import should_skip_optional_api_call
 DEFAULT_MAX_X_ACCOUNTS_PER_RUN = 25
 DEFAULT_X_TWEETS_PER_ACCOUNT = 5
 DEFAULT_RSS_ENTRIES_PER_SOURCE = 5
+DEFAULT_FEED_AUTODISCOVERY_ENABLED = True
+DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS = 20.0
 DEFAULT_SOURCE_FAILURE_THRESHOLD = 3
 DEFAULT_SOURCE_COOLDOWN_HOURS = 24
 
@@ -157,6 +159,30 @@ def _record_source_skipped(db, source_type: str, identifier: str, status: str = 
         recorder(source_type, identifier, status=status)
 
 
+def _source_homepage_url(source) -> str:
+    homepage_url = getattr(source, "homepage_url", None)
+    if homepage_url:
+        return homepage_url
+    identifier = getattr(source, "identifier", "")
+    if identifier.startswith(("http://", "https://")):
+        return identifier
+    return f"https://{identifier}" if identifier else ""
+
+
+def _cache_discovered_feed_url(db, source_type: str, identifier: str, feed_url: str) -> None:
+    updater = getattr(db, "update_curated_source_feed_url", None)
+    if callable(updater):
+        updater(source_type, identifier, feed_url)
+        return
+    conn = getattr(db, "conn", None)
+    if conn is not None:
+        conn.execute(
+            "UPDATE curated_sources SET feed_url = ? WHERE source_type = ? AND identifier = ?",
+            (feed_url, source_type, identifier),
+        )
+        conn.commit()
+
+
 def _active_feed_sources(config, db) -> list:
     """Return active blog/newsletter sources with optional feed URLs."""
     sources = []
@@ -173,7 +199,8 @@ def _active_feed_sources(config, db) -> list:
                 identifier=identifier,
                 name=getattr(source, "name", None) or identifier,
                 license=getattr(source, "license", "attribution_required"),
-                feed_url=getattr(source, "feed_url", None),
+                feed_url=getattr(source, "feed_url", None) or (row.get("feed_url") if row else None),
+                homepage_url=getattr(source, "homepage_url", None),
                 feed_etag=row.get("feed_etag") if row else None,
                 feed_last_modified=row.get("feed_last_modified") if row else None,
                 health=row,
@@ -191,6 +218,7 @@ def _active_feed_sources(config, db) -> list:
                 name=row["name"] or identifier,
                 license=row["license"] or "attribution_required",
                 feed_url=row.get("feed_url"),
+                homepage_url=row.get("homepage_url"),
                 feed_etag=row.get("feed_etag"),
                 feed_last_modified=row.get("feed_last_modified"),
                 health=row,
@@ -208,13 +236,12 @@ def fetch_curated_feed_source(
     limit: int = DEFAULT_RSS_ENTRIES_PER_SOURCE,
     failure_threshold: int = DEFAULT_SOURCE_FAILURE_THRESHOLD,
     cooldown_hours: int = DEFAULT_SOURCE_COOLDOWN_HOURS,
+    autodiscovery_enabled: bool = False,
+    autodiscovery_timeout: float = DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS,
 ) -> int:
     """Fetch a curated RSS/Atom source and ingest new article entries."""
     logger = logging.getLogger(__name__)
     feed_url = getattr(source, "feed_url", None)
-    if not feed_url:
-        logger.debug("Skipping %s; no feed_url configured", getattr(source, "identifier", "source"))
-        return 0
 
     source_type = getattr(source, "source_type", None)
     identifier = getattr(source, "identifier", "")
@@ -231,6 +258,37 @@ def fetch_curated_feed_source(
         if db is not None and source_type and identifier:
             _record_source_skipped(db, source_type, identifier)
         return 0
+
+    if not feed_url:
+        if not autodiscovery_enabled:
+            logger.debug("Skipping %s; no feed_url configured", identifier or "source")
+            return 0
+
+        homepage_url = _source_homepage_url(source)
+        if not homepage_url:
+            logger.debug("Skipping %s; no homepage URL available for feed autodiscovery", identifier or "source")
+            return 0
+        try:
+            candidates = discover_feed_candidates(homepage_url, timeout=autodiscovery_timeout)
+        except Exception as exc:
+            if db is not None and source_type and identifier:
+                _record_source_failure(db, source_type, identifier, _source_error(exc))
+            raise
+
+        if not candidates:
+            logger.info("No feed candidates discovered for %s", identifier or homepage_url)
+            if db is not None and source_type and identifier:
+                _record_source_skipped(db, source_type, identifier, status="no_feed_discovered")
+            return 0
+
+        feed_url = candidates[0].url
+        logger.info("Discovered feed for %s: %s", identifier or homepage_url, feed_url)
+        try:
+            setattr(source, "feed_url", feed_url)
+        except Exception:
+            pass
+        if db is not None and source_type and identifier:
+            _cache_discovered_feed_url(db, source_type, identifier, feed_url)
 
     try:
         result = fetch_feed(
@@ -473,6 +531,16 @@ def main():
                     limit=rss_entries_per_source,
                     failure_threshold=failure_threshold,
                     cooldown_hours=cooldown_hours,
+                    autodiscovery_enabled=getattr(
+                        config.curated_sources,
+                        "feed_autodiscovery_enabled",
+                        DEFAULT_FEED_AUTODISCOVERY_ENABLED,
+                    ),
+                    autodiscovery_timeout=getattr(
+                        config.curated_sources,
+                        "feed_autodiscovery_timeout_seconds",
+                        DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS,
+                    ),
                 )
                 if count:
                     logger.info("Ingested %d entries from %s", count, source.identifier)

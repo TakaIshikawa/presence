@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urljoin
 import xml.etree.ElementTree as ET
 
 
@@ -31,6 +32,16 @@ class FeedFetchResult:
     not_modified: bool = False
 
 
+@dataclass(frozen=True)
+class FeedCandidate:
+    """A feed URL discovered from a page's alternate link tags."""
+
+    url: str
+    content_type: str
+    title: str = ""
+    score: int = 0
+
+
 class FeedFetchError(RuntimeError):
     """Raised when a feed cannot be fetched or parsed."""
 
@@ -46,6 +57,46 @@ class _HTMLTextExtractor(HTMLParser):
 
     def text(self) -> str:
         return " ".join(self._chunks)
+
+
+class _FeedLinkExtractor(HTMLParser):
+    def __init__(self, page_url: str) -> None:
+        super().__init__()
+        self._page_url = page_url
+        self.candidates: list[FeedCandidate] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "link":
+            return
+        attr_map = {name.lower(): value or "" for name, value in attrs}
+        rel_tokens = {token.lower() for token in attr_map.get("rel", "").split()}
+        if "alternate" not in rel_tokens:
+            return
+
+        href = attr_map.get("href", "").strip()
+        content_type = _normalize_media_type(attr_map.get("type", ""))
+        if not href or content_type not in _FEED_MEDIA_TYPE_SCORES:
+            return
+
+        self.candidates.append(
+            FeedCandidate(
+                url=urljoin(self._page_url, href),
+                content_type=content_type,
+                title=_clean_text(attr_map.get("title", "")),
+                score=_FEED_MEDIA_TYPE_SCORES[content_type],
+            )
+        )
+
+
+_FEED_MEDIA_TYPE_SCORES = {
+    "application/atom+xml": 100,
+    "application/rss+xml": 90,
+    "application/feed+json": 50,
+}
+
+
+def _normalize_media_type(value: str) -> str:
+    return value.split(";", 1)[0].strip().lower()
 
 
 def _local_name(tag: str) -> str:
@@ -70,6 +121,29 @@ def _clean_text(value: str | None) -> str:
     parser.feed(unescape(value))
     text = parser.text() or unescape(value)
     return " ".join(text.split())
+
+
+def discover_feed_candidates(page_url: str, timeout: float = 20.0) -> list[FeedCandidate]:
+    """Fetch a page and return ranked RSS/Atom/JSON feed candidates."""
+    headers = {"User-Agent": "PresenceBot/1.0 (+https://github.com/)"}
+    request = Request(page_url, headers=headers)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            html_text = response.read().decode(charset, errors="replace")
+    except URLError as exc:
+        raise FeedFetchError(f"Failed to fetch page {page_url}: {exc.reason}") from exc
+
+    parser = _FeedLinkExtractor(page_url)
+    parser.feed(html_text)
+    seen: set[str] = set()
+    ranked: list[FeedCandidate] = []
+    for candidate in sorted(parser.candidates, key=lambda item: item.score, reverse=True):
+        if candidate.url in seen:
+            continue
+        ranked.append(candidate)
+        seen.add(candidate.url)
+    return ranked
 
 
 def _rss_link(item: ET.Element) -> str:

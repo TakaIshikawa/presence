@@ -79,6 +79,21 @@ class TestSyncConfigSources:
         assert row["feed_etag"] == '"feed-v1"'
         assert row["feed_last_modified"] == "Wed, 22 Apr 2026 10:00:00 GMT"
 
+    def test_sync_preserves_discovered_feed_url_when_config_omits_it(self, db):
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example"}],
+            "blog",
+        )
+        db.update_curated_source_feed_url("blog", "example.com", "https://example.com/rss")
+
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example"}],
+            "blog",
+        )
+
+        row = db.get_curated_source("blog", "example.com")
+        assert row["feed_url"] == "https://example.com/rss"
+
 
 class TestGetActiveCuratedSources:
     def test_returns_only_active(self, db):

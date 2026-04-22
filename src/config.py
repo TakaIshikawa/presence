@@ -100,6 +100,7 @@ class CuratedSource:
     name: str
     license: str
     feed_url: Optional[str] = None
+    homepage_url: Optional[str] = None
 
 
 @dataclass
@@ -117,6 +118,8 @@ class CuratedSourcesConfig:
     max_x_accounts_per_run: int = 25
     x_tweets_per_account: int = 5
     rss_entries_per_source: int = 5
+    feed_autodiscovery_enabled: bool = True
+    feed_autodiscovery_timeout_seconds: float = 20.0
     source_failure_threshold: int = 3
     source_cooldown_hours: int = 24
     freshness_half_life_days: Optional[float] = None
@@ -368,6 +371,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 name=acc.get("name", ""),
                 license=acc.get("license", "attribution_required"),
                 feed_url=acc.get("feed_url"),
+                homepage_url=acc.get("homepage_url", acc.get("url")),
             )
             for acc in curated_sources_data.get("x_accounts", [])
         ]
@@ -377,6 +381,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 name=blog.get("name", ""),
                 license=blog.get("license", "attribution_required"),
                 feed_url=blog.get("feed_url"),
+                homepage_url=blog.get("homepage_url", blog.get("url")),
             )
             for blog in curated_sources_data.get("blogs", [])
         ]
@@ -386,6 +391,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 name=newsletter.get("name", ""),
                 license=newsletter.get("license", "attribution_required"),
                 feed_url=newsletter.get("feed_url"),
+                homepage_url=newsletter.get("homepage_url", newsletter.get("url")),
             )
             for newsletter in curated_sources_data.get("newsletters", [])
         ]
@@ -400,6 +406,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_x_accounts_per_run=curated_sources_data.get("max_x_accounts_per_run", 25),
             x_tweets_per_account=curated_sources_data.get("x_tweets_per_account", 5),
             rss_entries_per_source=curated_sources_data.get("rss_entries_per_source", 5),
+            feed_autodiscovery_enabled=curated_sources_data.get("feed_autodiscovery_enabled", True),
+            feed_autodiscovery_timeout_seconds=curated_sources_data.get(
+                "feed_autodiscovery_timeout_seconds", 20.0
+            ),
             source_failure_threshold=curated_sources_data.get("source_failure_threshold", 3),
             source_cooldown_hours=curated_sources_data.get("source_cooldown_hours", 24),
             freshness_half_life_days=curated_sources_data.get("freshness_half_life_days"),
