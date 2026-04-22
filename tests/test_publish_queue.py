@@ -1088,6 +1088,191 @@ def test_main_all_marks_published_without_posting_when_all_platforms_done(test_d
     assert queue_row["error"] is None
 
 
+def test_main_x_only_publishes_x_variant(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Original post", "x_post", 7.0, 0),
+    ).lastrowid
+    test_db.upsert_content_variant(content_id, "x", "post", "X durable post")
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+
+    fake_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/x-variant",
+        tweet_id="x-variant",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(bluesky_enabled=False), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    assert fake_x.posts == ["X durable post"]
+
+
+def test_main_applies_thread_variant_before_parsing(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Original 1\n---\nOriginal 2", "x_thread", 7.0, 0),
+    ).lastrowid
+    test_db.upsert_content_variant(
+        content_id,
+        "x",
+        "thread",
+        "Variant 1\n---\nVariant 2",
+    )
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+
+    fake_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/thread-variant",
+        tweet_id="thread-variant",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.parse_thread_content") as mock_parse, \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_parse.return_value = ["Variant 1", "Variant 2"]
+        mock_context.return_value.__enter__.return_value = (make_config(bluesky_enabled=False), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    mock_parse.assert_called_once_with("Variant 1\n---\nVariant 2")
+    assert fake_x.threads == [["Variant 1", "Variant 2"]]
+
+
+def test_main_bluesky_only_publishes_bluesky_variant_without_crossposter(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Original post", "x_post", 7.0, 0),
+    ).lastrowid
+    test_db.upsert_content_variant(content_id, "bluesky", "post", "Bluesky durable post")
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="bluesky")
+
+    fake_x = FakeXClient(FakePostResult(success=False, error="should not post"))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/bsky-variant",
+        url="https://bsky.app/profile/test.bsky.social/post/bsky-variant",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster") as mock_cross_poster_class, \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    assert fake_x.posts == []
+    assert fake_bluesky.posts == ["Bluesky durable post"]
+    mock_cross_poster_class.assert_not_called()
+
+
+def test_main_all_publishes_platform_variants(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Original post", "x_post", 7.0, 0),
+    ).lastrowid
+    test_db.upsert_content_variant(content_id, "x", "post", "X all-platform post")
+    test_db.upsert_content_variant(content_id, "bluesky", "post", "Bluesky all-platform post")
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="all")
+
+    fake_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/all-variant",
+        tweet_id="all-variant",
+    ))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/all-variant",
+        url="https://bsky.app/profile/test.bsky.social/post/all-variant",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster") as mock_cross_poster_class, \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    assert fake_x.posts == ["X all-platform post"]
+    assert fake_bluesky.posts == ["Bluesky all-platform post"]
+    mock_cross_poster_class.assert_not_called()
+
+
+def test_main_missing_variant_falls_back_to_original_copy(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Original fallback post", "x_post", 7.0, 0),
+    ).lastrowid
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="all")
+
+    fake_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/fallback",
+        tweet_id="fallback",
+    ))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/fallback",
+        url="https://bsky.app/profile/test.bsky.social/post/fallback",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    assert fake_x.posts == ["Original fallback post"]
+    assert fake_bluesky.posts == ["bsky:Original fallback post"]
+
+
 def test_queue_respects_time_boundary(test_db, base_time):
     """Test precise time boundary handling for scheduled_at."""
     # Create posts at exact boundaries

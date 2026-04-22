@@ -78,6 +78,18 @@ def _queue_error_category(errors: list[tuple[str, str]]) -> str:
     return "unknown"
 
 
+def _variant_type_for_content_type(content_type: str) -> str:
+    if content_type == "x_thread":
+        return "thread"
+    return "post"
+
+
+def _copy_parts(content: str, content_type: str) -> list[str]:
+    if content_type == "x_thread":
+        return parse_thread_content(content)
+    return [content]
+
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -172,7 +184,6 @@ def main() -> None:
             queue_id = item['id']
             content_id = item['content_id']
             platform = item['platform']
-            content = item['content']
             content_type = item['content_type']
             scheduled_at = item['scheduled_at']
             image_path = item.get("image_path")
@@ -195,26 +206,31 @@ def main() -> None:
                     logger.info(f"  Queue item {queue_id} already completed")
                     continue
 
-                # Parse content into tweets if it's a thread
-                if content_type == 'x_thread':
-                    tweets = parse_thread_content(content)
-                else:
-                    tweets = [content]
+                variant_type = _variant_type_for_content_type(content_type)
+                x_copy = db.get_content_variant_or_original(
+                    content_id,
+                    "x",
+                    variant_type,
+                )
+                if not x_copy:
+                    raise ValueError(f"content {content_id} not found")
+                x_content = x_copy["content"]
+                x_parts = _copy_parts(x_content, content_type)
 
                 platform_errors = []
 
                 # Publish to X if needed
                 if 'x' in pending_platforms:
                     if content_type == 'x_thread':
-                        result = x_client.post_thread(tweets)
+                        result = x_client.post_thread(x_parts)
                     elif image_path:
                         result = x_client.post_with_media(
-                            text=content,
+                            text=x_content,
                             media_path=image_path,
                             alt_text=image_alt_text,
                         )
                     else:
-                        result = x_client.post(content)
+                        result = x_client.post(x_content)
 
                     if result.success:
                         db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
@@ -234,8 +250,21 @@ def main() -> None:
                 # Cross-post to Bluesky if needed and configured
                 if 'bluesky' in pending_platforms:
                     if bluesky_client:
-                        cross_poster = CrossPoster(bluesky_client=bluesky_client)
-                        bsky_tweets = [cross_poster.adapt_for_bluesky(t, content_type) for t in tweets]
+                        bsky_copy = db.get_content_variant_or_original(
+                            content_id,
+                            "bluesky",
+                            variant_type,
+                        )
+                        if not bsky_copy:
+                            raise ValueError(f"content {content_id} not found")
+                        if bsky_copy["source"] == "variant":
+                            bsky_tweets = _copy_parts(bsky_copy["content"], content_type)
+                        else:
+                            cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                            bsky_tweets = [
+                                cross_poster.adapt_for_bluesky(t, content_type)
+                                for t in x_parts
+                            ]
 
                         if content_type == 'x_thread':
                             bsky_result = bluesky_client.post_thread(bsky_tweets)

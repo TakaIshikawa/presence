@@ -1515,6 +1515,37 @@ class Database:
         ).fetchone()
         return self._content_variant_from_row(row) if row else None
 
+    def get_content_variant_or_original(
+        self,
+        content_id: int,
+        platform: str,
+        variant_type: str,
+    ) -> dict | None:
+        """Fetch a content variant, falling back deterministically to original copy."""
+        variant = self.get_content_variant(content_id, platform, variant_type)
+        if variant:
+            variant["source"] = "variant"
+            return variant
+
+        row = self.conn.execute(
+            """SELECT id, content, created_at
+               FROM generated_content
+               WHERE id = ?""",
+            (content_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": None,
+            "content_id": row["id"],
+            "platform": platform,
+            "variant_type": variant_type,
+            "content": row["content"],
+            "metadata": {},
+            "created_at": row["created_at"],
+            "source": "original",
+        }
+
     def list_content_variants(self, content_id: int) -> list[dict]:
         """List all durable variants for a generated content item."""
         cursor = self.conn.execute(

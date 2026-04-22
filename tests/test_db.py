@@ -1280,6 +1280,29 @@ class TestGeneratedContent:
 
         assert db.get_content_variant(content_id, "blog", "draft") is None
 
+    def test_content_variant_or_original_returns_variant_when_present(self, db):
+        content_id = self._insert_content(db, content="Original copy")
+        variant_id = db.upsert_content_variant(content_id, "x", "post", "X copy")
+
+        result = db.get_content_variant_or_original(content_id, "x", "post")
+
+        assert result["id"] == variant_id
+        assert result["content"] == "X copy"
+        assert result["source"] == "variant"
+
+    def test_content_variant_or_original_falls_back_to_generated_content(self, db):
+        content_id = self._insert_content(db, content="Original copy")
+
+        result = db.get_content_variant_or_original(content_id, "bluesky", "post")
+
+        assert result["id"] is None
+        assert result["content_id"] == content_id
+        assert result["platform"] == "bluesky"
+        assert result["variant_type"] == "post"
+        assert result["content"] == "Original copy"
+        assert result["metadata"] == {}
+        assert result["source"] == "original"
+
     def test_get_content_provenance_returns_single_item_details(self, db):
         commit_id = db.insert_commit(
             "presence",
