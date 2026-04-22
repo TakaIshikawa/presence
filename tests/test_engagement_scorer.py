@@ -2,6 +2,10 @@
 
 from evaluation.engagement_scorer import (
     compute_engagement_score,
+    compute_newsletter_engagement_score,
+    classify_newsletter_engagement,
+    NEWSLETTER_STATUS_LOW_RESONANCE,
+    NEWSLETTER_STATUS_RESONATED,
     WEIGHT_LIKE,
     WEIGHT_RETWEET,
     WEIGHT_REPLY,
@@ -87,3 +91,42 @@ class TestComputeEngagementScore:
         # = 10*1 + 5*3 + 2*4 + 1*5 = 10 + 15 + 8 + 5 = 38.0
         result = compute_engagement_score(10, 5, 2, 1)
         assert result == 38.0
+
+
+class TestNewsletterEngagement:
+    def test_compute_newsletter_score_weights_clicks(self):
+        assert compute_newsletter_engagement_score(opens=40, clicks=5) == 55.0
+
+    def test_classifies_high_open_rate_as_resonated(self):
+        status = classify_newsletter_engagement(
+            opens=45,
+            clicks=0,
+            subscriber_count=100,
+        )
+        assert status == NEWSLETTER_STATUS_RESONATED
+
+    def test_classifies_high_click_rate_as_resonated(self):
+        status = classify_newsletter_engagement(
+            opens=10,
+            clicks=4,
+            subscriber_count=100,
+        )
+        assert status == NEWSLETTER_STATUS_RESONATED
+
+    def test_classifies_low_metrics_as_low_resonance(self):
+        status = classify_newsletter_engagement(
+            opens=10,
+            clicks=0,
+            subscriber_count=100,
+        )
+        assert status == NEWSLETTER_STATUS_LOW_RESONANCE
+
+    def test_no_subscriber_denominator_uses_nonzero_engagement(self):
+        assert (
+            classify_newsletter_engagement(opens=1, clicks=0, subscriber_count=0)
+            == NEWSLETTER_STATUS_RESONATED
+        )
+        assert (
+            classify_newsletter_engagement(opens=0, clicks=0, subscriber_count=0)
+            == NEWSLETTER_STATUS_LOW_RESONANCE
+        )

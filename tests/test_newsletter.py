@@ -38,6 +38,14 @@ def _insert_published_content(db, content_type, content, days_ago=1, url=None):
     return content_id
 
 
+def _set_content_format(db, content_id, content_format):
+    db.conn.execute(
+        "UPDATE generated_content SET content_format = ? WHERE id = ?",
+        (content_format, content_id),
+    )
+    db.conn.commit()
+
+
 # --- NewsletterAssembler ---
 
 
@@ -242,6 +250,50 @@ class TestNewsletterAssembler:
         assert blog_id in content.source_content_ids
         assert thread_id in content.source_content_ids
         assert post_id in content.source_content_ids
+
+    def test_prefers_formats_from_prior_resonant_sends(self, db):
+        """Current posts matching resonant source patterns are selected first."""
+        historical_tip_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Historical tip",
+            eval_score=8.0,
+            eval_feedback="Good",
+            content_format="tip",
+        )
+        db.insert_newsletter_send(
+            issue_id="issue-resonated",
+            subject="Resonated",
+            content_ids=[historical_tip_id],
+            subscriber_count=100,
+            status="resonated",
+        )
+
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+        newer_observation_id = _insert_published_content(
+            db,
+            "x_post",
+            "Newer observation post.",
+            days_ago=1,
+        )
+        preferred_tip_id = _insert_published_content(
+            db,
+            "x_post",
+            "Preferred tip post.",
+            days_ago=2,
+        )
+        _set_content_format(db, newer_observation_id, "observation")
+        _set_content_format(db, preferred_tip_id, "tip")
+
+        assembler = NewsletterAssembler(db)
+        content = assembler.assemble(week_start, now)
+
+        assert content.source_content_ids[:2] == [preferred_tip_id, newer_observation_id]
+        assert content.body_markdown.index("Preferred tip post") < content.body_markdown.index(
+            "Newer observation post"
+        )
 
 
 class TestNewsletterAssemblerHelpers:

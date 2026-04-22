@@ -2071,7 +2071,7 @@ class Database:
                    FROM newsletter_engagement
                    GROUP BY newsletter_send_id
                ) ne ON ne.newsletter_send_id = ns.id
-               WHERE ns.status = 'sent'
+               WHERE ns.status IN ('sent', 'resonated', 'low_resonance')
                  AND ns.issue_id IS NOT NULL
                  AND ns.issue_id != ''
                  AND ns.sent_at >= datetime('now', ?)
@@ -2091,6 +2091,8 @@ class Database:
         unsubscribes: int,
     ) -> int:
         """Insert a Buttondown newsletter metrics snapshot."""
+        from evaluation.engagement_scorer import classify_newsletter_engagement
+
         now = datetime.now(timezone.utc).isoformat()
         cursor = self.conn.execute(
             """INSERT INTO newsletter_engagement
@@ -2098,8 +2100,69 @@ class Database:
                VALUES (?, ?, ?, ?, ?, ?)""",
             (newsletter_send_id, issue_id, opens, clicks, unsubscribes, now),
         )
+        send = self.conn.execute(
+            "SELECT subscriber_count FROM newsletter_sends WHERE id = ?",
+            (newsletter_send_id,),
+        ).fetchone()
+        if send is not None:
+            status = classify_newsletter_engagement(
+                opens=opens,
+                clicks=clicks,
+                subscriber_count=int(send["subscriber_count"] or 0),
+            )
+            self.update_newsletter_send_status(newsletter_send_id, status, commit=False)
         self.conn.commit()
         return cursor.lastrowid
+
+    def update_newsletter_send_status(
+        self, newsletter_send_id: int, status: str, commit: bool = True
+    ) -> None:
+        """Update the resonance status for a newsletter send."""
+        self.conn.execute(
+            "UPDATE newsletter_sends SET status = ? WHERE id = ?",
+            (status, newsletter_send_id),
+        )
+        if commit:
+            self.conn.commit()
+
+    def get_resonant_newsletter_source_patterns(
+        self, limit: int = 10
+    ) -> list[dict]:
+        """Return content type/format patterns from prior resonant sends."""
+        cursor = self.conn.execute(
+            """SELECT ns.source_content_ids
+               FROM newsletter_sends ns
+               WHERE ns.status = 'resonated'
+                 AND ns.source_content_ids IS NOT NULL
+               ORDER BY ns.sent_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        content_ids: list[int] = []
+        for row in cursor.fetchall():
+            try:
+                source_ids = json.loads(row["source_content_ids"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            for source_id in source_ids:
+                try:
+                    content_ids.append(int(source_id))
+                except (TypeError, ValueError):
+                    continue
+
+        if not content_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in content_ids)
+        cursor = self.conn.execute(
+            f"""SELECT content_type, content_format, COUNT(*) AS count
+                FROM generated_content
+                WHERE id IN ({placeholders})
+                GROUP BY content_type, content_format
+                ORDER BY count DESC, content_type ASC, content_format ASC""",
+            content_ids,
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_published_content_in_range(
         self,
@@ -2110,7 +2173,7 @@ class Database:
         """Get published content within a date range."""
         cursor = self.conn.execute(
             """SELECT id, content, content_type, eval_score, published_url,
-                      tweet_id, published_at
+                      tweet_id, published_at, content_format
                FROM generated_content
                WHERE content_type = ? AND published = 1
                  AND published_at >= ? AND published_at < ?

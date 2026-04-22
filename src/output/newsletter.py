@@ -11,6 +11,16 @@ from storage.db import Database
 
 logger = logging.getLogger(__name__)
 
+if not hasattr(requests, "RequestException"):
+    requests.RequestException = Exception
+
+if not hasattr(requests, "Session"):
+    class _MissingRequestsSession:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("requests.Session is unavailable")
+
+    requests.Session = _MissingRequestsSession
+
 
 @dataclass
 class NewsletterResult:
@@ -48,28 +58,32 @@ class NewsletterAssembler:
         """Gather this week's blog post + top threads + top posts into a newsletter."""
         content_ids = []
         sections = []
+        source_preferences = self._load_resonant_source_preferences()
 
         # 1. Blog post (if published this week)
         blog_posts = self.db.get_published_content_in_range(
             "blog_post", week_start, week_end
         )
+        blog_posts = self._sort_by_source_preferences(blog_posts, source_preferences)
         if blog_posts:
             post = blog_posts[0]
             content_ids.append(post["id"])
             title = self._extract_blog_title(post["content"])
             excerpt = self._extract_blog_excerpt(post["content"], max_lines=3)
             url = post.get("published_url", "")
-            sections.append(
+            sections.append((
+                "blog_post",
                 f"## This Week's Post\n\n"
                 f"**[{title}]({url})**\n\n"
                 f"{excerpt}\n\n"
-                f"[Read the full post]({url})"
-            )
+                f"[Read the full post]({url})",
+            ))
 
         # 2. Top threads (up to 2)
         threads = self.db.get_published_content_in_range(
             "x_thread", week_start, week_end
         )
+        threads = self._sort_by_source_preferences(threads, source_preferences)
         if threads:
             thread_items = []
             for thread in threads[:2]:
@@ -79,13 +93,14 @@ class NewsletterAssembler:
                 link = f" ([thread]({url}))" if url else ""
                 thread_items.append(f"- {first_tweet}{link}")
             sections.append(
-                "## Threads\n\n" + "\n\n".join(thread_items)
+                ("x_thread", "## Threads\n\n" + "\n\n".join(thread_items))
             )
 
         # 3. Top posts by engagement (up to 3)
         posts = self.db.get_published_content_in_range(
             "x_post", week_start, week_end
         )
+        posts = self._sort_by_source_preferences(posts, source_preferences)
         if posts:
             post_items = []
             for post in posts[:3]:
@@ -94,7 +109,7 @@ class NewsletterAssembler:
                 link = f" ([link]({url}))" if url else ""
                 post_items.append(f"> {post['content']}{link}")
             sections.append(
-                "## Posts\n\n" + "\n\n".join(post_items)
+                ("x_post", "## Posts\n\n" + "\n\n".join(post_items))
             )
 
         if not sections:
@@ -107,7 +122,8 @@ class NewsletterAssembler:
         subject = f"Building with AI — Week of {week_start.strftime('%b %d')}"
 
         body = f"# Weekly Digest\n\n{date_str}\n\n"
-        body += "\n\n---\n\n".join(sections)
+        ordered_sections = self._order_sections(sections, source_preferences)
+        body += "\n\n---\n\n".join(section for _, section in ordered_sections)
         body += (
             "\n\n---\n\n"
             f"*Shipped from [takaishikawa.com]({self.site_url})*"
@@ -117,6 +133,68 @@ class NewsletterAssembler:
             subject=subject,
             body_markdown=body,
             source_content_ids=content_ids,
+        )
+
+    def _load_resonant_source_preferences(self) -> list[dict]:
+        """Load content type/format patterns from prior resonant sends."""
+        getter = getattr(self.db, "get_resonant_newsletter_source_patterns", None)
+        if getter is None:
+            return []
+        try:
+            return getter()
+        except Exception as e:
+            logger.debug(f"Newsletter source preference lookup failed: {e}")
+            return []
+
+    @staticmethod
+    def _sort_by_source_preferences(
+        items: list[dict], preferences: list[dict]
+    ) -> list[dict]:
+        """Prefer current content matching prior resonant type/format patterns."""
+        if not preferences:
+            return items
+
+        format_rank = {}
+        type_rank = {}
+        for index, pref in enumerate(preferences):
+            content_type = pref.get("content_type")
+            content_format = pref.get("content_format")
+            if content_type and content_type not in type_rank:
+                type_rank[content_type] = index
+            if content_type and content_format:
+                format_rank[(content_type, content_format)] = index
+
+        def preference_key(item: dict) -> tuple[int, int]:
+            content_type = item.get("content_type")
+            content_format = item.get("content_format")
+            return (
+                format_rank.get((content_type, content_format), len(preferences)),
+                type_rank.get(content_type, len(preferences)),
+            )
+
+        return sorted(items, key=preference_key)
+
+    @staticmethod
+    def _order_sections(
+        sections: list[tuple[str, str]], preferences: list[dict]
+    ) -> list[tuple[str, str]]:
+        """Order newsletter sections by prior resonant content-type mix."""
+        if not preferences:
+            return sections
+
+        default_order = {"blog_post": 0, "x_thread": 1, "x_post": 2}
+        type_rank = {}
+        for index, pref in enumerate(preferences):
+            content_type = pref.get("content_type")
+            if content_type and content_type not in type_rank:
+                type_rank[content_type] = index
+
+        return sorted(
+            sections,
+            key=lambda section: (
+                type_rank.get(section[0], len(preferences)),
+                default_order.get(section[0], len(default_order)),
+            ),
         )
 
     @staticmethod

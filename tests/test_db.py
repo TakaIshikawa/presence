@@ -2709,3 +2709,61 @@ class TestNewsletterMethods:
         now = datetime.now(timezone.utc)
         time_diff = (now - result).total_seconds()
         assert time_diff < 60  # Should be less than 60 seconds old
+
+    def test_insert_newsletter_engagement_classifies_send(self, db):
+        """Stored Buttondown metrics update newsletter_sends.status."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-high",
+            subject="High Engagement",
+            content_ids=[1],
+            subscriber_count=100,
+        )
+
+        db.insert_newsletter_engagement(
+            newsletter_send_id=send_id,
+            issue_id="issue-high",
+            opens=42,
+            clicks=1,
+            unsubscribes=0,
+        )
+
+        status = db.conn.execute(
+            "SELECT status FROM newsletter_sends WHERE id = ?",
+            (send_id,),
+        ).fetchone()["status"]
+        assert status == "resonated"
+
+    def test_resonant_newsletter_source_patterns_uses_source_content(self, db):
+        """Source content from resonant sends becomes future assembly preference data."""
+        tip_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Tip post",
+            eval_score=8.0,
+            eval_feedback="Good",
+            content_format="tip",
+        )
+        thread_id = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=[],
+            source_messages=[],
+            content="Thread",
+            eval_score=8.0,
+            eval_feedback="Good",
+            content_format="contrarian_thread",
+        )
+        db.insert_newsletter_send(
+            issue_id="issue-resonated",
+            subject="Resonated",
+            content_ids=[tip_id, thread_id],
+            subscriber_count=100,
+            status="resonated",
+        )
+
+        patterns = db.get_resonant_newsletter_source_patterns()
+
+        assert {
+            (pattern["content_type"], pattern["content_format"])
+            for pattern in patterns
+        } == {("x_post", "tip"), ("x_thread", "contrarian_thread")}
