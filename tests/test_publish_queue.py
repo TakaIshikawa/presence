@@ -302,6 +302,47 @@ def test_published_items_not_returned(populated_db, base_time):
     assert content_ids[4] not in returned_ids
 
 
+def test_due_items_skip_platforms_still_inside_backoff(test_db, base_time):
+    """A failed single-platform queue item is hidden until next_retry_at."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Backoff post", "x_post", 7.0, 0)
+    ).lastrowid
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+    test_db.upsert_publication_failure(content_id, "x", "rate limit")
+
+    due_items = test_db.get_due_queue_items(base_time.isoformat())
+
+    assert due_items == []
+
+
+def test_due_items_return_after_retry_time(test_db, base_time):
+    """A failed queue item is due again once next_retry_at has passed."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Retry due post", "x_post", 7.0, 0)
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+    test_db.mark_queue_failed(queue_id, "X: rate limit")
+    test_db.upsert_publication_failure(content_id, "x", "rate limit")
+    test_db.conn.execute(
+        """UPDATE content_publications
+           SET next_retry_at = ?
+           WHERE content_id = ? AND platform = 'x'""",
+        ((base_time - timedelta(minutes=1)).isoformat(), content_id),
+    )
+    test_db.conn.commit()
+
+    due_items = test_db.get_due_queue_items(base_time.isoformat())
+
+    assert len(due_items) == 1
+    assert due_items[0]["content_id"] == content_id
+
+
 def test_mark_queue_published_updates_status(test_db, base_time):
     """Test that mark_queue_published correctly updates queue item status."""
     # Create content and queue item
@@ -741,6 +782,101 @@ def test_main_bluesky_failure_preserves_x_success(test_db, base_time):
     assert bsky_state["status"] == "failed"
     assert bsky_state["error"] == "Bluesky rate limit"
     assert bsky_state["attempt_count"] == 1
+
+
+def test_main_completes_successfully_after_partial_platform_failure(test_db, base_time):
+    """After backoff expires, retry only the failed platform and close the queue."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Retry both post", "x_post", 7.0, 0)
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="all")
+
+    first_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/123",
+        tweet_id="123",
+    ))
+    first_bluesky = FakeBlueskyClient(FakePostResult(
+        success=False,
+        error="Bluesky timeout",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=first_x), \
+         patch("publish_queue.BlueskyClient", return_value=first_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    queue_row = test_db.conn.execute(
+        "SELECT status FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    assert queue_row["status"] == "failed"
+
+    test_db.conn.execute(
+        """UPDATE content_publications
+           SET next_retry_at = ?
+           WHERE content_id = ? AND platform = 'bluesky'""",
+        ((base_time - timedelta(minutes=1)).isoformat(), content_id),
+    )
+    test_db.conn.commit()
+
+    second_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/duplicate",
+        tweet_id="duplicate",
+    ))
+    second_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/retry",
+        url="https://bsky.app/profile/test.bsky.social/post/retry",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=second_x), \
+         patch("publish_queue.BlueskyClient", return_value=second_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    queue_row = test_db.conn.execute(
+        "SELECT status, error FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    content_row = test_db.conn.execute(
+        "SELECT published_url, tweet_id, bluesky_uri FROM generated_content WHERE id = ?",
+        (content_id,),
+    ).fetchone()
+    bsky_state = test_db.get_publication_state(content_id, "bluesky")
+
+    assert second_x.posts == []
+    assert second_bluesky.posts == ["bsky:Retry both post"]
+    assert queue_row["status"] == "published"
+    assert queue_row["error"] is None
+    assert content_row["published_url"] == "https://x.com/test/status/123"
+    assert content_row["tweet_id"] == "123"
+    assert content_row["bluesky_uri"] == "at://did:plc:test/app.bsky.feed.post/retry"
+    assert bsky_state["status"] == "published"
+    assert bsky_state["attempt_count"] == 2
+    assert bsky_state["next_retry_at"] is None
 
 
 def test_main_all_attempts_bluesky_when_x_fails_and_records_only_x_error(test_db, base_time):

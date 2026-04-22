@@ -71,6 +71,8 @@ class TestSchemaInit:
             "platform_url",
             "error",
             "attempt_count",
+            "next_retry_at",
+            "last_error_at",
             "published_at",
             "updated_at",
         }
@@ -315,6 +317,7 @@ class TestInitSchemaMigrations:
             }
             assert "idx_content_publications_content" in indexes
             assert "idx_content_publications_platform_status" in indexes
+            assert "idx_content_publications_retry" in indexes
 
     def test_migration_creates_content_variants_for_existing_schema(self, schema_path):
         """Test that content_variants is added to an existing in-memory schema."""
@@ -871,6 +874,44 @@ class TestGeneratedContent:
         assert state["status"] == "failed"
         assert state["error"] == "rate limit"
         assert state["attempt_count"] == 2
+
+    def test_publication_first_failure_sets_retry_backoff(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_publication_failure(content_id, "x", "rate limit")
+
+        state = db.get_publication_state(content_id, "x")
+        last_error_at = datetime.fromisoformat(state["last_error_at"])
+        next_retry_at = datetime.fromisoformat(state["next_retry_at"])
+
+        assert state["attempt_count"] == 1
+        assert 299 <= (next_retry_at - last_error_at).total_seconds() <= 301
+
+    def test_publication_second_failure_doubles_retry_backoff(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_publication_failure(content_id, "x", "rate limit")
+        db.upsert_publication_failure(content_id, "x", "still limited")
+
+        state = db.get_publication_state(content_id, "x")
+        last_error_at = datetime.fromisoformat(state["last_error_at"])
+        next_retry_at = datetime.fromisoformat(state["next_retry_at"])
+
+        assert state["attempt_count"] == 2
+        assert 599 <= (next_retry_at - last_error_at).total_seconds() <= 601
+
+    def test_publication_failure_retry_backoff_respects_max_delay(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_publication_failure(
+            content_id,
+            "x",
+            "rate limit",
+            max_retry_delay_minutes=3,
+        )
+
+        state = db.get_publication_state(content_id, "x")
+        last_error_at = datetime.fromisoformat(state["last_error_at"])
+        next_retry_at = datetime.fromisoformat(state["next_retry_at"])
+
+        assert (next_retry_at - last_error_at).total_seconds() == 180
 
     def test_queue_for_publishing_seeds_platform_states(self, db):
         content_id = self._insert_content(db)

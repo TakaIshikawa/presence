@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 WATCHDOG_TIMEOUT = 300  # 5 minutes
+DEFAULT_MAX_RETRY_DELAY_MINUTES = 360
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,26 @@ def _already_published(item: dict, platform: str) -> bool:
     return False
 
 
+def _max_retry_delay_minutes(config) -> int:
+    publish_queue_config = getattr(config, "publish_queue", None)
+    value = getattr(publish_queue_config, "max_retry_delay_minutes", None)
+    if isinstance(value, (int, float)) and value > 0:
+        return int(value)
+    return DEFAULT_MAX_RETRY_DELAY_MINUTES
+
+
+def _ready_for_attempt(db, content_id: int, platform: str, now_iso: str) -> bool:
+    state = db.get_publication_state(content_id, platform)
+    if not state:
+        return True
+    next_retry_at = state.get("next_retry_at")
+    return not (
+        state.get("status") == "failed"
+        and next_retry_at is not None
+        and next_retry_at > now_iso
+    )
+
+
 def _timeout_handler(signum, frame):
     logger.error("WATCHDOG: Publish queue process exceeded 5-minute timeout, exiting")
     sys.exit(1)
@@ -36,9 +57,35 @@ def _timeout_handler(signum, frame):
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
-from output.x_client import XClient, parse_thread_content
 from output.bluesky_client import BlueskyClient
-from output.cross_poster import CrossPoster
+
+try:
+    from output.x_client import XClient, parse_thread_content
+except ModuleNotFoundError as exc:
+    if exc.name != "tweepy":
+        raise
+
+    class XClient:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError(
+                "tweepy is required for X publishing"
+            ) from exc
+
+    def parse_thread_content(content: str) -> list[str]:
+        return [content]
+
+try:
+    from output.cross_poster import CrossPoster
+except ModuleNotFoundError as exc:
+    if exc.name != "tweepy":
+        raise
+
+    class CrossPoster:
+        def __init__(self, bluesky_client=None):
+            self.bluesky_client = bluesky_client
+
+        def adapt_for_bluesky(self, text: str, content_type: str = "x_post") -> str:
+            return text
 
 
 def main() -> None:
@@ -66,6 +113,7 @@ def main() -> None:
         # Get current time
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
+        max_retry_delay_minutes = _max_retry_delay_minutes(config)
 
         # Get due queue items
         due_items = db.get_due_queue_items(now_iso)
@@ -91,7 +139,10 @@ def main() -> None:
                 requested_platforms = _requested_platforms(platform)
                 pending_platforms = [
                     p for p in requested_platforms
-                    if not _already_published(item, p)
+                    if (
+                        not _already_published(item, p)
+                        and _ready_for_attempt(db, content_id, p, now_iso)
+                    )
                 ]
 
                 if not pending_platforms:
@@ -119,7 +170,12 @@ def main() -> None:
                         logger.info(f"  Posted to X: {result.url}")
                     else:
                         logger.error(f"  X posting failed: {result.error}")
-                        db.upsert_publication_failure(content_id, "x", str(result.error))
+                        db.upsert_publication_failure(
+                            content_id,
+                            "x",
+                            str(result.error),
+                            max_retry_delay_minutes=max_retry_delay_minutes,
+                        )
                         platform_errors.append(f"X: {result.error}")
 
                 # Cross-post to Bluesky if needed and configured
@@ -146,6 +202,7 @@ def main() -> None:
                                 content_id,
                                 "bluesky",
                                 str(bsky_result.error),
+                                max_retry_delay_minutes=max_retry_delay_minutes,
                             )
                             platform_errors.append(f"Bluesky: {bsky_result.error}")
                     else:
@@ -154,6 +211,7 @@ def main() -> None:
                             content_id,
                             "bluesky",
                             "client not configured",
+                            max_retry_delay_minutes=max_retry_delay_minutes,
                         )
                         platform_errors.append("Bluesky: client not configured")
 

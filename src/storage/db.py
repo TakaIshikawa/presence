@@ -210,13 +210,24 @@ class Database:
                     platform_url TEXT,
                     error TEXT,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
+                    last_error_at TEXT,
                     published_at TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(content_id, platform)
                 )
             """)
+            cp_cols = {
+                row[1]
+                for row in self.conn.execute("PRAGMA table_info(content_publications)")
+            }
+            if "next_retry_at" not in cp_cols:
+                self.conn.execute("ALTER TABLE content_publications ADD COLUMN next_retry_at TEXT")
+            if "last_error_at" not in cp_cols:
+                self.conn.execute("ALTER TABLE content_publications ADD COLUMN last_error_at TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publications(content_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_retry ON content_publications(status, next_retry_at)")
             # Migrate: create newsletter_engagement table if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS newsletter_engagement (
@@ -483,13 +494,14 @@ class Database:
         self.conn.execute(
             """INSERT INTO content_publications
                (content_id, platform, status, platform_post_id, platform_url,
-                error, attempt_count, published_at, updated_at)
-               VALUES (?, ?, 'published', ?, ?, NULL, 1, ?, ?)
+                error, attempt_count, next_retry_at, published_at, updated_at)
+               VALUES (?, ?, 'published', ?, ?, NULL, 1, NULL, ?, ?)
                ON CONFLICT(content_id, platform) DO UPDATE SET
                status = 'published',
                platform_post_id = excluded.platform_post_id,
                platform_url = excluded.platform_url,
                error = NULL,
+               next_retry_at = NULL,
                attempt_count = content_publications.attempt_count + 1,
                published_at = excluded.published_at,
                updated_at = excluded.updated_at""",
@@ -527,19 +539,37 @@ class Database:
         content_id: int,
         platform: str,
         error: str,
+        max_retry_delay_minutes: int = 360,
     ) -> None:
         """Record a failed publish attempt for one platform."""
-        now = datetime.now(timezone.utc).isoformat()
+        if not isinstance(max_retry_delay_minutes, (int, float)) or max_retry_delay_minutes <= 0:
+            max_retry_delay_minutes = 360
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        existing = self.conn.execute(
+            """SELECT attempt_count FROM content_publications
+               WHERE content_id = ? AND platform = ?""",
+            (content_id, platform),
+        ).fetchone()
+        next_attempt_count = (existing["attempt_count"] if existing else 0) + 1
+        delay_minutes = min(
+            max_retry_delay_minutes,
+            5 * (2 ** max(0, next_attempt_count - 1)),
+        )
+        next_retry_at = (now_dt + timedelta(minutes=delay_minutes)).isoformat()
         self.conn.execute(
             """INSERT INTO content_publications
-               (content_id, platform, status, error, attempt_count, updated_at)
-               VALUES (?, ?, 'failed', ?, 1, ?)
+               (content_id, platform, status, error, attempt_count,
+                next_retry_at, last_error_at, updated_at)
+               VALUES (?, ?, 'failed', ?, 1, ?, ?, ?)
                ON CONFLICT(content_id, platform) DO UPDATE SET
                status = 'failed',
                error = excluded.error,
                attempt_count = content_publications.attempt_count + 1,
+               next_retry_at = excluded.next_retry_at,
+               last_error_at = excluded.last_error_at,
                updated_at = excluded.updated_at""",
-            (content_id, platform, error, now),
+            (content_id, platform, error, next_retry_at, now, now),
         )
         self.conn.commit()
 
@@ -566,6 +596,10 @@ class Database:
                END,
                error = CASE
                    WHEN content_publications.status = 'published' THEN content_publications.error
+                   ELSE NULL
+               END,
+               next_retry_at = CASE
+                   WHEN content_publications.status = 'published' THEN content_publications.next_retry_at
                    ELSE NULL
                END,
                updated_at = CASE
@@ -2298,7 +2332,8 @@ class Database:
             now: Current ISO timestamp to compare against
 
         Returns:
-            List of queue item dicts where scheduled_at <= now and status = 'queued'
+            List of queue item dicts where scheduled_at <= now and at least one
+            requested platform is ready, or all requested platforms are done.
         """
         cursor = self.conn.execute(
             """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
@@ -2306,10 +2341,45 @@ class Database:
                       gc.published_url, gc.tweet_id, gc.bluesky_uri
                FROM publish_queue pq
                INNER JOIN generated_content gc ON gc.id = pq.content_id
-               WHERE pq.status = 'queued'
+               WHERE pq.status IN ('queued', 'failed')
                  AND pq.scheduled_at <= ?
+                 AND (
+                   NOT EXISTS (
+                     SELECT 1
+                     FROM (
+                       SELECT 'x' AS platform WHERE pq.platform IN ('x', 'all')
+                       UNION ALL
+                       SELECT 'bluesky' AS platform WHERE pq.platform IN ('bluesky', 'all')
+                     ) target
+                     WHERE NOT (
+                       (target.platform = 'x' AND COALESCE(gc.published, 0) = 1)
+                       OR (target.platform = 'bluesky' AND gc.bluesky_uri IS NOT NULL)
+                     )
+                   )
+                   OR EXISTS (
+                     SELECT 1
+                     FROM (
+                       SELECT 'x' AS platform WHERE pq.platform IN ('x', 'all')
+                       UNION ALL
+                       SELECT 'bluesky' AS platform WHERE pq.platform IN ('bluesky', 'all')
+                     ) target
+                     LEFT JOIN content_publications cp
+                       ON cp.content_id = pq.content_id
+                      AND cp.platform = target.platform
+                     WHERE NOT (
+                       (target.platform = 'x' AND COALESCE(gc.published, 0) = 1)
+                       OR (target.platform = 'bluesky' AND gc.bluesky_uri IS NOT NULL)
+                     )
+                       AND (
+                         cp.id IS NULL
+                         OR cp.status != 'failed'
+                         OR cp.next_retry_at IS NULL
+                         OR cp.next_retry_at <= ?
+                       )
+                   )
+                 )
                ORDER BY pq.scheduled_at ASC""",
-            (now,)
+            (now, now)
         )
         return [dict(row) for row in cursor.fetchall()]
 

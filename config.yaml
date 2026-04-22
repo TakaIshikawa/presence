@@ -101,6 +101,10 @@ scheduling:
   enabled: false         # Enable time-based posting optimization
   min_samples: 20        # Minimum posts needed before optimizing schedule
 
+# Publish queue retry behavior
+publish_queue:
+  max_retry_delay_minutes: 360  # Cap exponential backoff at 6 hours
+
 # Image generation for visual posts
 image_gen:
   provider: "pillow"

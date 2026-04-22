@@ -107,12 +107,15 @@ CREATE TABLE IF NOT EXISTS content_publications (
     platform_url TEXT,
     error TEXT,
     attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    last_error_at TEXT,
     published_at TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(content_id, platform)
 );
 CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publications(content_id);
 CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status);
+CREATE INDEX IF NOT EXISTS idx_content_publications_retry ON content_publications(status, next_retry_at);
 
 -- Track engagement predictions from EngagementPredictor
 CREATE TABLE IF NOT EXISTS engagement_predictions (

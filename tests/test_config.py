@@ -17,6 +17,7 @@ from config import (
     EmbeddingsConfig,
     ImageGenConfig,
     ProactiveConfig,
+    PublishQueueConfig,
     CuratedSource,
     CuratedSourcesConfig,
     TimeoutsConfig,
@@ -337,6 +338,18 @@ class TestDefaults:
         assert cfg.polling.readiness_token_threshold == 1000
         assert cfg.polling.max_post_gap_hours == 24
         assert cfg.polling.max_daily_posts == 10
+
+    def test_publish_queue_defaults(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert isinstance(cfg.publish_queue, PublishQueueConfig)
+        assert cfg.publish_queue.max_retry_delay_minutes == 360
+
+    def test_publish_queue_max_retry_delay_override(self, tmp_path):
+        data = _minimal_config_dict(
+            publish_queue={"max_retry_delay_minutes": 45}
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.publish_queue.max_retry_delay_minutes == 45
 
     def test_replies_defaults_when_section_missing(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

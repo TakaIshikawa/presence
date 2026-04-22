@@ -136,6 +136,11 @@ class SchedulingConfig:
 
 
 @dataclass
+class PublishQueueConfig:
+    max_retry_delay_minutes: int = 360
+
+
+@dataclass
 class ImageGenConfig:
     provider: str = "pillow"
     output_dir: str = "generated_images"
@@ -176,6 +181,7 @@ class Config:
     cultivate: Optional[CultivateIntegrationConfig]
     timeouts: TimeoutsConfig
     scheduling: Optional[SchedulingConfig]
+    publish_queue: PublishQueueConfig
     proactive: Optional[ProactiveConfig]
     image_gen: Optional[ImageGenConfig]
 
@@ -363,6 +369,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
             min_samples=data["scheduling"].get("min_samples", 20),
         )
 
+    publish_queue_config = PublishQueueConfig()
+    if "publish_queue" in data:
+        publish_queue_config = PublishQueueConfig(
+            max_retry_delay_minutes=data["publish_queue"].get("max_retry_delay_minutes", 360),
+        )
+
     # Parse proactive engagement config if present
     proactive_config = None
     if "proactive" in data:
@@ -436,6 +448,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         cultivate=cultivate_config,
         timeouts=timeouts_config,
         scheduling=scheduling_config,
+        publish_queue=publish_queue_config,
         proactive=proactive_config,
         image_gen=image_gen_config,
     )
