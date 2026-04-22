@@ -518,7 +518,8 @@ class SynthesisPipeline:
         self,
         num: int,
         content_type: str = "x_post",
-        weights: Optional[dict[str, float]] = None
+        weights: Optional[dict[str, float]] = None,
+        recommended_formats: Optional[list[str]] = None,
     ) -> tuple[list[str], list[str]]:
         """Select format directives for candidate generation.
 
@@ -541,7 +542,23 @@ class SynthesisPipeline:
         else:
             formats = self.POST_FORMATS
 
-        if weights:
+        if recommended_formats:
+            formats_by_name = dict(formats)
+            selected = [
+                (name, formats_by_name[name])
+                for name in recommended_formats
+                if name in formats_by_name
+            ][:num]
+            if len(selected) < num:
+                selected_names = {name for name, _ in selected}
+                remaining = [
+                    format_pair for format_pair in formats
+                    if format_pair[0] not in selected_names
+                ]
+                selected.extend(
+                    random.sample(remaining, min(num - len(selected), len(remaining)))
+                )
+        elif weights:
             # Weighted selection with replacement (allows duplicates if num > len(formats))
             format_list = list(formats)
             format_weights = [
@@ -620,6 +637,7 @@ class SynthesisPipeline:
         commits: list[dict],
         content_type: str = "x_post",
         threshold: float = 0.7,
+        platform: str = "x",
     ) -> PipelineResult:
         """Execute the full multi-stage pipeline."""
         batch_id = str(uuid.uuid4())[:8]
@@ -685,20 +703,32 @@ class SynthesisPipeline:
                 trend_context = (trend_context + "\n" + trend_hooks).strip() + "\n"
         linked_knowledge = [trend_context] if trend_context else []
 
-        # Stage 1.6: Load format weights if enabled
+        # Stage 1.6: Load format recommendations/weights if enabled
+        recommended_formats = None
         format_weights = None
         if self.format_weighting_enabled:
             try:
                 from evaluation.format_performance import FormatPerformanceAnalyzer
                 analyzer = FormatPerformanceAnalyzer(self.db)
+                recommended_formats = analyzer.get_recommended_formats(
+                    content_type=content_type,
+                    platform=platform,
+                    limit=self.num_candidates,
+                    days=90,
+                )
                 format_weights = analyzer.compute_selection_weights(days=90)
+                if recommended_formats:
+                    logger.debug(f"  Recommended formats: {recommended_formats}")
                 if format_weights:
                     logger.debug(f"  Format weights: {format_weights}")
             except Exception as e:
                 logger.debug(f"  Format weighting failed (non-fatal): {e}")
 
         format_directives, format_names = self._select_format_directives(
-            self.num_candidates, content_type, weights=format_weights
+            self.num_candidates,
+            content_type,
+            weights=format_weights,
+            recommended_formats=recommended_formats,
         )
         if content_type == "x_visual" and trend_context:
             trend_directive = next(

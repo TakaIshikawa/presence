@@ -1,7 +1,7 @@
 """Format performance analysis for engagement-based format selection weighting."""
 
 from dataclasses import dataclass
-from typing import Optional
+from datetime import datetime, timedelta, timezone
 from storage.db import Database
 
 
@@ -32,6 +32,98 @@ class FormatPerformanceAnalyzer:
 
     def __init__(self, db: Database):
         self.db = db
+
+    def get_recommended_formats(
+        self,
+        content_type: str,
+        platform: str = "x",
+        limit: int = 3,
+        days: int = 90,
+    ) -> list[str]:
+        """Return high-confidence format recommendations for a platform.
+
+        Formats with fewer than MIN_SAMPLES are intentionally excluded so noisy
+        early engagement does not collapse generation into one format. Callers
+        should fill any remaining slots with random formats to keep exploration.
+        """
+        if limit <= 0:
+            return []
+
+        stats = self._get_platform_format_stats(
+            content_type=content_type,
+            platform=platform,
+            days=days,
+        )
+        eligible = [
+            row for row in stats
+            if (row["count"] or 0) >= self.MIN_SAMPLES
+        ]
+        if not eligible:
+            return []
+
+        def recommendation_score(row: dict) -> float:
+            avg_engagement = row["avg_engagement"] or 0.0
+            sample_count = row["count"] or 0
+            sample_boost = 1.0 + min(sample_count, 30) / 30.0
+            return avg_engagement * sample_boost
+
+        ranked = sorted(
+            eligible,
+            key=lambda row: (
+                recommendation_score(row),
+                row["avg_engagement"] or 0.0,
+                row["count"] or 0,
+            ),
+            reverse=True,
+        )
+        return [row["format"] for row in ranked[:limit]]
+
+    def _get_platform_format_stats(
+        self,
+        content_type: str,
+        platform: str,
+        days: int,
+    ) -> list[dict]:
+        """Get recent format stats scoped to content type and platform."""
+        engagement_tables = {
+            "x": "post_engagement",
+            "bluesky": "bluesky_engagement",
+        }
+        if platform not in engagement_tables:
+            return []
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        engagement_table = engagement_tables[platform]
+
+        cursor = self.db.conn.execute(
+            f"""SELECT
+                   gc.content_format AS format,
+                   COUNT(*) AS count,
+                   AVG(COALESCE(e.engagement_score, 0)) AS avg_engagement,
+                   SUM(CASE WHEN gc.auto_quality = 'resonated' THEN 1 ELSE 0 END) AS resonated_count,
+                   SUM(CASE WHEN gc.auto_quality IS NOT NULL THEN 1 ELSE 0 END) AS total_classified
+               FROM generated_content gc
+               LEFT JOIN content_publications cp
+                 ON cp.content_id = gc.id
+                AND cp.platform = ?
+                AND cp.status = 'published'
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (PARTITION BY content_id ORDER BY fetched_at DESC) AS rn
+                   FROM {engagement_table}
+                   WHERE engagement_score IS NOT NULL
+               ) e ON e.content_id = gc.id AND e.rn = 1
+               WHERE gc.content_format IS NOT NULL
+                 AND gc.content_type = ?
+                 AND (
+                     cp.id IS NOT NULL
+                     OR (? = 'x' AND gc.published = 1)
+                 )
+                 AND COALESCE(cp.published_at, gc.published_at) >= ?
+               GROUP BY gc.content_format""",
+            (platform, content_type, platform, cutoff.isoformat()),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def analyze_format_performance(self, days: int = 90) -> FormatReport:
         """Analyze format performance based on engagement data.

@@ -326,6 +326,84 @@ def test_compute_selection_weights_uniform_performance(db):
         assert weight == pytest.approx(1.0)
 
 
+def _insert_published_with_engagement(
+    db,
+    *,
+    content_type="x_post",
+    format_name="micro_story",
+    engagement=10.0,
+    platform="x",
+):
+    content_id = db.insert_generated_content(
+        content_type=content_type,
+        source_commits=["abc"],
+        source_messages=["uuid"],
+        content=f"Content for {format_name}",
+        eval_score=8.0,
+        eval_feedback="Test",
+        content_format=format_name,
+    )
+    if platform == "bluesky":
+        uri = f"at://test/{format_name}/{content_id}"
+        db.mark_published_bluesky(content_id, uri, url=f"https://bsky.app/{content_id}")
+        db.insert_bluesky_engagement(
+            content_id,
+            uri,
+            like_count=0,
+            repost_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=engagement,
+        )
+    else:
+        tweet_id = f"{format_name}_{content_id}"
+        db.mark_published(content_id, f"https://x.com/test/{content_id}", tweet_id=tweet_id)
+        db.insert_engagement(
+            content_id,
+            tweet_id,
+            like_count=0,
+            retweet_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=engagement,
+        )
+    return content_id
+
+
+def test_get_recommended_formats_ranks_by_platform_engagement(db):
+    """Recommendations use recent engagement from the requested platform."""
+    for _ in range(3):
+        _insert_published_with_engagement(
+            db, format_name="micro_story", engagement=15.0, platform="x"
+        )
+        _insert_published_with_engagement(
+            db, format_name="question", engagement=5.0, platform="x"
+        )
+        _insert_published_with_engagement(
+            db, format_name="tip", engagement=20.0, platform="bluesky"
+        )
+
+    analyzer = FormatPerformanceAnalyzer(db)
+
+    assert analyzer.get_recommended_formats("x_post", "x", limit=2) == [
+        "micro_story",
+        "question",
+    ]
+    assert analyzer.get_recommended_formats("x_post", "bluesky", limit=1) == ["tip"]
+
+
+def test_get_recommended_formats_ignores_low_sample_noise(db):
+    """Low-sample formats are not ranked from noisy early engagement."""
+    for _ in range(2):
+        _insert_published_with_engagement(
+            db, format_name="micro_story", engagement=100.0, platform="x"
+        )
+
+    analyzer = FormatPerformanceAnalyzer(db)
+
+    assert analyzer.get_recommended_formats("x_post", "x", limit=2) == []
+
+
 def test_lookback_window(db):
     """Test that lookback window filters old content correctly."""
     now = datetime.now(timezone.utc)
