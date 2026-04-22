@@ -311,6 +311,18 @@ class TestBuildResolvedPayload:
         assert p["draft"] == "Nice work!"
         assert p["tweet_id"] == "tw-1"
         assert p["execution_type"] == "reply"
+        assert "quote_tweet_id" not in p
+
+    def test_quote_tweet_payload_marks_quote_target(self):
+        tweet = {"id": "tw-1", "text": "hello", "reply_settings": "everyone"}
+        p = build_resolved_payload(
+            "quote_tweet", tweet=tweet, draft="Worth reading."
+        )
+        assert p["execution_type"] == "quote_tweet"
+        assert p["tweet_id"] == "tw-1"
+        assert p["quote_tweet_id"] == "tw-1"
+        assert p["quoted_tweet_id"] == "tw-1"
+        assert p["draft"] == "Worth reading."
 
     def test_no_tweet_no_tweet_fields(self):
         p = build_resolved_payload("follow")
@@ -378,6 +390,28 @@ class TestResolveSingleAction:
         assert result["execution_type"] == "reply"
         assert result["draft"] == "Great insight!"
         drafter.draft.assert_called_once()
+        drafter.draft_proactive.assert_not_called()
+
+    def test_quote_tweet_drafts_proactive_commentary(self):
+        tweets = _make_tweets(1)
+        drafter = MagicMock()
+        drafter.draft_proactive.return_value.reply_text = "Worth adding context."
+
+        action = ProactiveAction(
+            action_id="a1", action_type="strengthen",
+            target_handle="alice", target_person_id="p1",
+            description="[quote_tweet] Quote @alice",
+            person_context=_make_person_context(),
+        )
+        result = _resolve_single_action(
+            "quote_tweet", action, tweets=tweets, x_user_id="u1",
+            drafter=drafter, my_handle="me",
+        )
+        assert result["execution_type"] == "quote_tweet"
+        assert result["quote_tweet_id"] == "tw-0"
+        assert result["draft"] == "Worth adding context."
+        drafter.draft_proactive.assert_called_once()
+        drafter.draft.assert_not_called()
 
     def test_returns_none_when_no_suitable_tweet(self):
         tweets = [{"id": "1", "text": "locked", "reply_settings": "followers"}]

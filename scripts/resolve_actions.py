@@ -82,6 +82,9 @@ def build_resolved_payload(
     if tweet:
         payload["tweet_id"] = tweet["id"]
         payload["tweet_content"] = tweet["text"]
+        if execution_type == "quote_tweet":
+            payload["quote_tweet_id"] = tweet["id"]
+            payload["quoted_tweet_id"] = tweet["id"]
         if tweet.get("reply_settings"):
             payload["reply_settings"] = tweet["reply_settings"]
     if draft:
@@ -120,14 +123,22 @@ def _resolve_single_action(
             execution_type=exec_type, tweet=tweet, x_user_id=x_user_id
         )
 
-    # reply or quote_tweet: pre-draft content
-    draft = drafter.draft(
-        our_post="",
-        their_reply=tweet["text"],
-        their_handle=action.target_handle,
-        self_handle=my_handle,
-        person_context=action.person_context,
-    )
+    if exec_type == "reply":
+        draft = drafter.draft(
+            our_post="",
+            their_reply=tweet["text"],
+            their_handle=action.target_handle,
+            self_handle=my_handle,
+            person_context=action.person_context,
+        )
+    else:
+        result = drafter.draft_proactive(
+            their_tweet=tweet["text"],
+            their_handle=action.target_handle,
+            self_handle=my_handle,
+            person_context=action.person_context,
+        )
+        draft = result.reply_text
 
     return build_resolved_payload(
         execution_type=exec_type,

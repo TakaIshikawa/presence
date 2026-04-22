@@ -267,6 +267,33 @@ class TestQuoteTweet:
         assert "Forbidden" in result.error
 
 
+# --- XClient.quote_post() ---
+
+
+class TestQuotePost:
+    def test_success_returns_post_result(self):
+        client, mock_tweepy = make_x_client()
+        mock_get_me(mock_tweepy, username="alice")
+        mock_create_tweet(mock_tweepy, tweet_id="444")
+
+        result = client.quote_post("Worth reading", quoted_tweet_id="original_200")
+
+        assert result.success is True
+        assert result.tweet_id == "444"
+        assert result.url == "https://x.com/alice/status/444"
+
+    def test_calls_create_tweet_with_quote_param(self):
+        client, mock_tweepy = make_x_client()
+        mock_get_me(mock_tweepy)
+        mock_create_tweet(mock_tweepy)
+
+        client.quote_post("Commentary", quoted_tweet_id="qt_300")
+
+        mock_tweepy.create_tweet.assert_called_once_with(
+            text="Commentary", quote_tweet_id="qt_300"
+        )
+
+
 # --- XClient.like() ---
 
 

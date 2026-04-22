@@ -20,6 +20,7 @@ from review_proactive import (
     _mark_dismissed,
     _format_action_header,
     _open_action_url,
+    _publish_text_action,
     _account_cooldown_block_reason,
     _account_cooldown_hours,
 )
@@ -200,6 +201,27 @@ class TestMarkDismissed:
 
         _mark_dismissed(action, db=MagicMock(), bridge=bridge)
         bridge.mark_action_dismissed.assert_called_once_with("cult_2")
+
+
+# --- publish text action ---
+
+
+class TestPublishTextAction:
+    def test_reply_uses_reply_endpoint(self):
+        x_client = MagicMock()
+
+        _publish_text_action(x_client, "reply", "hello", "target_1")
+
+        x_client.reply.assert_called_once_with("hello", "target_1")
+        x_client.quote_post.assert_not_called()
+
+    def test_quote_tweet_uses_quote_post_endpoint(self):
+        x_client = MagicMock()
+
+        _publish_text_action(x_client, "quote_tweet", "commentary", "target_2")
+
+        x_client.quote_post.assert_called_once_with("commentary", "target_2")
+        x_client.reply.assert_not_called()
 
 
 # --- Format action header ---

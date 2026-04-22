@@ -47,6 +47,9 @@ class XClient:
         self.last_error = str(error)
         return self.last_error
 
+    def _status_url(self, tweet_id: str) -> str:
+        return f"https://x.com/{self.username}/status/{tweet_id}"
+
     @property
     def username(self) -> str:
         if not self._username:
@@ -120,7 +123,7 @@ class XClient:
             return PostResult(
                 success=True,
                 tweet_id=tweet_id,
-                url=f"https://x.com/{self.username}/status/{tweet_id}",
+                url=self._status_url(tweet_id),
             )
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=self._record_error(e))
@@ -267,7 +270,7 @@ class XClient:
             return PostResult(
                 success=True,
                 tweet_id=tweet_id,
-                url=f"https://x.com/{self.username}/status/{tweet_id}"
+                url=self._status_url(tweet_id)
             )
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=self._record_error(e))
@@ -284,26 +287,33 @@ class XClient:
             return PostResult(
                 success=True,
                 tweet_id=tweet_id,
-                url=f"https://x.com/{self.username}/status/{tweet_id}"
+                url=self._status_url(tweet_id)
             )
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=self._record_error(e))
 
-    def quote_tweet(self, text: str, quote_tweet_id: str) -> PostResult:
-        """Post a quote tweet."""
+    def quote_post(self, text: str, quoted_tweet_id: str) -> PostResult:
+        """Publish a quote post that references another tweet/post."""
         try:
             response = self.client.create_tweet(
-                text=text, quote_tweet_id=quote_tweet_id
+                text=text, quote_tweet_id=quoted_tweet_id
             )
             self._clear_error()
             tweet_id = response.data["id"]
             return PostResult(
                 success=True,
                 tweet_id=tweet_id,
-                url=f"https://x.com/{self.username}/status/{tweet_id}",
+                url=self._status_url(tweet_id),
             )
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=self._record_error(e))
+
+    def quote_tweet(self, text: str, quote_tweet_id: str) -> PostResult:
+        """Post a quote tweet.
+
+        Kept for callers that still use Twitter-era terminology.
+        """
+        return self.quote_post(text, quoted_tweet_id=quote_tweet_id)
 
     def like(self, tweet_id: str) -> PostResult:
         """Like a tweet."""
@@ -439,7 +449,7 @@ class XClient:
             return PostResult(
                 success=True,
                 tweet_id=first_id,
-                url=f"https://x.com/{self.username}/status/{first_id}"
+                url=self._status_url(first_id)
             )
         except tweepy.TweepyException as e:
             return PostResult(success=False, error=self._record_error(e))

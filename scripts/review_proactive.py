@@ -126,6 +126,17 @@ def _open_action_url(action: dict) -> None:
     webbrowser.open(url)
 
 
+def _publish_text_action(
+    x_client: XClient, action_type: str, text: str, target_tweet_id: str
+):
+    """Publish a reply or quote action and return the X client result."""
+    if action_type == "reply":
+        return x_client.reply(text, target_tweet_id)
+    if action_type == "quote_tweet":
+        return x_client.quote_post(text, target_tweet_id)
+    raise ValueError(f"Unsupported text action type: {action_type}")
+
+
 def _account_cooldown_hours(config) -> int:
     """Return the configured proactive account cooldown window."""
     if not config.proactive or not config.proactive.enabled:
@@ -358,10 +369,9 @@ def main():
                         if cooldown_block_reason:
                             print(f"  Approval blocked: {cooldown_block_reason}.")
                             continue
-                        if exec_type == "reply":
-                            result = x_client.reply(draft, tweet_id)
-                        else:
-                            result = x_client.quote_tweet(draft, tweet_id)
+                        result = _publish_text_action(
+                            x_client, exec_type, draft, tweet_id
+                        )
                         if result.success:
                             _mark_completed(action, db, bridge, result.tweet_id)
                             print(f"  Posted: {result.url}")
@@ -383,10 +393,9 @@ def main():
                             print(f"  Too long ({len(edited)} chars, max 280).")
                             continue
                         else:
-                            if exec_type == "reply":
-                                result = x_client.reply(edited, tweet_id)
-                            else:
-                                result = x_client.quote_tweet(edited, tweet_id)
+                            result = _publish_text_action(
+                                x_client, exec_type, edited, tweet_id
+                            )
                             if result.success:
                                 _mark_completed(action, db, bridge, result.tweet_id)
                                 print(f"  Posted: {result.url}")
