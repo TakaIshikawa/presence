@@ -169,6 +169,8 @@ def main() -> None:
             ) if config.curated_sources else "strict",
             feedback_lookback_days=config.synthesis.feedback_lookback_days,
             feedback_max_items=config.synthesis.feedback_max_items,
+            max_estimated_cost_per_run=config.synthesis.max_estimated_cost_per_run,
+            max_daily_estimated_cost=config.synthesis.max_daily_estimated_cost,
         )
         x_client = XClient(
             config.x.api_key,
@@ -483,6 +485,10 @@ def main() -> None:
                 f"Score {pipeline_result.final_score:.1f} below threshold "
                 f"{config.synthesis.eval_threshold * 10}"
             )
+        elif pipeline_result.budget_rejection_reason:
+            outcome = "budget_exceeded"
+            rejection_reason = pipeline_result.budget_rejection_reason
+            logger.warning("Budget gate blocked publishing: %s", rejection_reason)
         elif passes:
             if rate_limited:
                 logger.info("Rate limited, queued for later")

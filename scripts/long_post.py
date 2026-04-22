@@ -74,6 +74,8 @@ def main():
             ) if config.curated_sources else "strict",
             feedback_lookback_days=config.synthesis.feedback_lookback_days,
             feedback_max_items=config.synthesis.feedback_max_items,
+            max_estimated_cost_per_run=config.synthesis.max_estimated_cost_per_run,
+            max_daily_estimated_cost=config.synthesis.max_daily_estimated_cost,
         )
         x_client = XClient(
             config.x.api_key,
@@ -217,6 +219,10 @@ def main():
                 logger.warning("Below threshold, not posting")
             logger.debug("Generated content:")
             logger.debug(result.final_content)
+        elif result.budget_rejection_reason:
+            outcome = "budget_exceeded"
+            rejection_reason = result.budget_rejection_reason
+            logger.warning("Budget gate blocked publishing: %s", rejection_reason)
         elif args.dry_run:
             outcome = "dry_run"
             logger.info("Dry run enabled, skipping publish")

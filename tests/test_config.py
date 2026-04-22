@@ -482,6 +482,19 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.synthesis.num_candidates == 5
 
+    def test_synthesis_model_cost_budgets_default_disabled(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert cfg.synthesis.max_estimated_cost_per_run is None
+        assert cfg.synthesis.max_daily_estimated_cost is None
+
+    def test_synthesis_model_cost_budgets_override(self, tmp_path):
+        data = _minimal_config_dict()
+        data["synthesis"]["max_estimated_cost_per_run"] = 0.25
+        data["synthesis"]["max_daily_estimated_cost"] = 1.5
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.synthesis.max_estimated_cost_per_run == 0.25
+        assert cfg.synthesis.max_daily_estimated_cost == 1.5
+
     def test_synthesis_claim_check_enabled_default(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert cfg.synthesis.claim_check_enabled is True

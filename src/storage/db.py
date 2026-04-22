@@ -746,6 +746,43 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_model_usage_cost_since(self, since: str | datetime) -> float:
+        """Return total estimated model usage cost recorded at or after a time."""
+        if isinstance(since, datetime):
+            if since.tzinfo is None:
+                since = since.replace(tzinfo=timezone.utc)
+            since_value = since.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            since_value = str(since).replace("T", " ")[:19]
+        cursor = self.conn.execute(
+            """SELECT COALESCE(SUM(estimated_cost), 0)
+               FROM model_usage
+               WHERE created_at >= ?""",
+            (since_value,),
+        )
+        return float(cursor.fetchone()[0] or 0.0)
+
+    def get_model_usage_cost_for_utc_day(
+        self, day: datetime | None = None
+    ) -> float:
+        """Return total estimated model usage cost for a UTC calendar day."""
+        day = day or datetime.now(timezone.utc)
+        if day.tzinfo is None:
+            day = day.replace(tzinfo=timezone.utc)
+        day = day.astimezone(timezone.utc)
+        start = day.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        cursor = self.conn.execute(
+            """SELECT COALESCE(SUM(estimated_cost), 0)
+               FROM model_usage
+               WHERE created_at >= ? AND created_at < ?""",
+            (
+                start.strftime("%Y-%m-%d %H:%M:%S"),
+                end.strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+        return float(cursor.fetchone()[0] or 0.0)
+
     # Claude messages
     def is_message_processed(self, message_uuid: str) -> bool:
         cursor = self.conn.execute(

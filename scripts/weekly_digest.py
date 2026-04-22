@@ -84,6 +84,8 @@ def main():
             ) if config.curated_sources else "strict",
             feedback_lookback_days=config.synthesis.feedback_lookback_days,
             feedback_max_items=config.synthesis.feedback_max_items,
+            max_estimated_cost_per_run=config.synthesis.max_estimated_cost_per_run,
+            max_daily_estimated_cost=config.synthesis.max_daily_estimated_cost,
         )
         blog_writer = BlogWriter(config.paths.static_site)
 
@@ -218,6 +220,10 @@ def main():
                 logger.warning("Below threshold, not publishing")
             logger.debug("Generated content:")
             logger.debug(result.final_content[:500] + "...")
+        elif result.budget_rejection_reason:
+            outcome = "budget_exceeded"
+            rejection_reason = result.budget_rejection_reason
+            logger.warning("Budget gate blocked publishing: %s", rejection_reason)
         else:
             logger.info("Writing blog post...")
             write_result = blog_writer.write_post(

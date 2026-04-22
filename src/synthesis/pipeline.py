@@ -21,6 +21,7 @@ from synthesis.claim_checker import ClaimChecker, ClaimCheckResult
 from synthesis.thread_validator import validate_thread
 from synthesis.persona_guard import PersonaGuard, PersonaGuardConfig, PersonaGuardResult
 from evaluation.topic_performance import TopicPerformanceAnalyzer
+from model_usage import evaluate_model_usage_budget
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ class PipelineResult:
     planned_topic_id: Optional[int] = None  # planned_topics.id used for campaign guidance
     claim_check_summary: Optional[dict] = None  # Persistable final-content claim-check summary
     persona_guard_summary: Optional[dict] = None  # Persistable persona guard summary
+    model_usage_started_at: Optional[str] = None
+    estimated_model_cost: float = 0.0
+    estimated_daily_model_cost: float = 0.0
+    budget_rejection_reason: Optional[str] = None
 
     def save_claim_check_summary(self, db: Database, content_id: int) -> None:
         """Persist final claim-check summary after generated content is inserted."""
@@ -237,6 +242,8 @@ class SynthesisPipeline:
         restricted_prompt_behavior: str = "strict",
         feedback_lookback_days: int = 30,
         feedback_max_items: int = 6,
+        max_estimated_cost_per_run: float | None = None,
+        max_daily_estimated_cost: float | None = None,
     ):
         self.api_key = api_key
         self.generator = ContentGenerator(
@@ -281,6 +288,28 @@ class SynthesisPipeline:
         )
         self.persona_guard = PersonaGuard(self.persona_guard_config)
         self.presence_context_builder = PresenceContextBuilder(db)
+        self.max_estimated_cost_per_run = max_estimated_cost_per_run
+        self.max_daily_estimated_cost = max_daily_estimated_cost
+
+    def _apply_budget_gate(
+        self, result: PipelineResult, run_started_at: datetime
+    ) -> PipelineResult:
+        """Attach budget status after generation; callers still save content."""
+        check = evaluate_model_usage_budget(
+            self.db,
+            run_started_at=run_started_at,
+            max_estimated_cost_per_run=self.max_estimated_cost_per_run,
+            max_daily_estimated_cost=self.max_daily_estimated_cost,
+        )
+        result.model_usage_started_at = run_started_at.isoformat()
+        result.estimated_model_cost = check.run_cost
+        result.estimated_daily_model_cost = check.daily_cost
+        result.budget_rejection_reason = check.reason if check.exceeded else None
+        if result.budget_rejection_reason:
+            result.comparison = self._append_reject_reason(
+                result.comparison, result.budget_rejection_reason
+            )
+        return result
 
     # Character limits per content type
     CHAR_LIMITS = {
@@ -855,6 +884,7 @@ class SynthesisPipeline:
         platform: str = "x",
     ) -> PipelineResult:
         """Execute the full multi-stage pipeline."""
+        run_started_at = datetime.now(timezone.utc)
         batch_id = str(uuid.uuid4())[:8]
         source_commit_messages = [c["message"] for c in commits]
 
@@ -1021,7 +1051,7 @@ class SynthesisPipeline:
         # All candidates filtered — reject rather than publish stale/repetitive content
         if not candidate_texts:
             logger.warning("  All candidates filtered")
-            return PipelineResult(
+            return self._apply_budget_gate(PipelineResult(
                 batch_id=batch_id,
                 candidates=[],
                 comparison=ComparisonResult(
@@ -1044,7 +1074,7 @@ class SynthesisPipeline:
                 source_commits=source_commit_messages,
                 filter_stats=filter_stats,
                 planned_topic_id=planned_topic_id,
-            )
+            ), run_started_at)
 
         # Stage 3: Cross-model evaluation with engagement and topic calibration
         topic_history_context = self._build_topic_history_context(
@@ -1172,7 +1202,7 @@ class SynthesisPipeline:
             logger.warning("  %s", guard_reason)
             comparison = self._append_reject_reason(comparison, guard_reason)
             knowledge_ids = [(kid, 0.3) for kid in trend_knowledge_ids]
-            return PipelineResult(
+            return self._apply_budget_gate(PipelineResult(
                 batch_id=batch_id,
                 candidates=candidate_texts,
                 comparison=comparison,
@@ -1191,7 +1221,7 @@ class SynthesisPipeline:
                 planned_topic_id=planned_topic_id,
                 claim_check_summary=None,
                 persona_guard_summary=persona_guard_summary,
-            )
+            ), run_started_at)
 
         final_claim_check = self._check_final_claims(
             final_content,
@@ -1222,7 +1252,7 @@ class SynthesisPipeline:
                     comparison, validation_reason
                 )
                 knowledge_ids = [(kid, 0.3) for kid in trend_knowledge_ids]
-                return PipelineResult(
+                return self._apply_budget_gate(PipelineResult(
                     batch_id=batch_id,
                     candidates=candidate_texts,
                     comparison=comparison,
@@ -1241,7 +1271,7 @@ class SynthesisPipeline:
                     planned_topic_id=planned_topic_id,
                     claim_check_summary=claim_check_summary,
                     persona_guard_summary=persona_guard_summary,
-                )
+                ), run_started_at)
 
         # Stage 6: Engagement prediction logging.
         # Reuse the prediction computed in Stage 3.5 for the chosen candidate
@@ -1288,7 +1318,7 @@ class SynthesisPipeline:
         # Compile knowledge IDs: trend items get default relevance of 0.3
         knowledge_ids = [(kid, 0.3) for kid in trend_knowledge_ids]
 
-        return PipelineResult(
+        return self._apply_budget_gate(PipelineResult(
             batch_id=batch_id,
             candidates=candidate_texts,
             comparison=comparison,
@@ -1307,4 +1337,4 @@ class SynthesisPipeline:
             planned_topic_id=planned_topic_id,
             claim_check_summary=claim_check_summary,
             persona_guard_summary=persona_guard_summary,
-        )
+        ), run_started_at)

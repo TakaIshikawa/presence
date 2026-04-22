@@ -1,5 +1,6 @@
 """Tests for the multi-stage synthesis pipeline."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -90,6 +91,38 @@ class TestPipelineConstruction:
             "test-key", "claude-opus-4-7", timeout=300.0, db=db
         )
         assert pipeline.num_candidates == 3
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    def test_budget_gate_adds_publish_block_reason(self, MockGen, MockEval, MockRefiner):
+        db = MagicMock()
+        db.get_model_usage_cost_since.return_value = 0.35
+        db.get_model_usage_cost_for_utc_day.return_value = 1.25
+        pipeline = SynthesisPipeline(
+            api_key="test-key",
+            generator_model="claude-sonnet-4-6",
+            evaluator_model="claude-opus-4-7",
+            db=db,
+            max_estimated_cost_per_run=0.2,
+            max_daily_estimated_cost=1.0,
+        )
+        result = PipelineResult(
+            batch_id="batch",
+            candidates=["post"],
+            comparison=_make_comparison(reject_reason=None),
+            refinement=None,
+            final_content="post",
+            final_score=8.0,
+            source_prompts=[],
+            source_commits=[],
+        )
+
+        gated = pipeline._apply_budget_gate(result, datetime.now(timezone.utc))
+
+        assert gated.budget_rejection_reason is not None
+        assert "Model usage budget exceeded" in gated.budget_rejection_reason
+        assert gated.comparison.reject_reason == gated.budget_rejection_reason
 
 
 # --- Content type routing ---

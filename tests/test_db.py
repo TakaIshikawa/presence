@@ -296,6 +296,28 @@ class TestModelUsage:
         assert rows[0]["total_tokens"] == 180
         assert rows[0]["estimated_cost"] == pytest.approx(0.0009)
 
+    def test_get_model_usage_cost_since(self, db):
+        db.record_model_usage(
+            "claude-sonnet-4-6",
+            "synthesis.generate_candidates.x_post",
+            100,
+            20,
+            estimated_cost=0.25,
+        )
+
+        assert db.get_model_usage_cost_since("1970-01-01 00:00:00") == pytest.approx(0.25)
+
+    def test_get_model_usage_cost_for_utc_day(self, db):
+        db.record_model_usage(
+            "claude-sonnet-4-6",
+            "synthesis.generate_candidates.x_post",
+            100,
+            20,
+            estimated_cost=0.5,
+        )
+
+        assert db.get_model_usage_cost_for_utc_day() == pytest.approx(0.5)
+
 
 # --- Schema migration logic ---
 

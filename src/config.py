@@ -53,6 +53,8 @@ class SynthesisConfig:
     eval_model: str
     eval_threshold: float
     num_candidates: int
+    max_estimated_cost_per_run: Optional[float] = None
+    max_daily_estimated_cost: Optional[float] = None
     feedback_lookback_days: int = 30
     feedback_max_items: int = 6
     format_weighting_enabled: bool = True
@@ -676,6 +678,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
             eval_model=data["synthesis"].get("eval_model", _require(data, "synthesis", "model", section="synthesis")),
             eval_threshold=_require(data, "synthesis", "eval_threshold", section="synthesis"),
             num_candidates=data["synthesis"].get("num_candidates", 3),
+            max_estimated_cost_per_run=data["synthesis"].get("max_estimated_cost_per_run"),
+            max_daily_estimated_cost=data["synthesis"].get("max_daily_estimated_cost"),
             feedback_lookback_days=data["synthesis"].get("feedback_lookback_days", 30),
             feedback_max_items=data["synthesis"].get("feedback_max_items", 6),
             format_weighting_enabled=data["synthesis"].get("format_weighting_enabled", True),
