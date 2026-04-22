@@ -184,6 +184,7 @@ class TestProactiveConfig:
         config = ProactiveConfig()
         assert config.enabled is False
         assert config.max_daily_replies == 5
+        assert config.draft_ttl_hours == 48
         assert config.account_cooldown_hours == 72
         assert config.min_relevance == 0.50
         assert config.max_tweet_age_hours == 24
@@ -217,6 +218,7 @@ polling:
 proactive:
   enabled: true
   max_daily_replies: 3
+  draft_ttl_hours: 36
   account_cooldown_hours: 48
   min_relevance: 0.60
   search_enabled: true
@@ -231,6 +233,7 @@ proactive:
         assert config.proactive is not None
         assert config.proactive.enabled is True
         assert config.proactive.max_daily_replies == 3
+        assert config.proactive.draft_ttl_hours == 36
         assert config.proactive.account_cooldown_hours == 48
         assert config.proactive.min_relevance == 0.60
         assert config.proactive.search_enabled is True

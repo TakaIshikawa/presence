@@ -316,6 +316,7 @@ class TestDataclassParsing:
         assert isinstance(cfg.proactive, ProactiveConfig)
         assert cfg.proactive.enabled is True
         assert cfg.proactive.max_daily_replies == 3
+        assert cfg.proactive.draft_ttl_hours == 48
         assert cfg.proactive.account_cooldown_hours == 48
 
     def test_newsletter_utm_config_when_present(self, tmp_path):
@@ -684,6 +685,7 @@ class TestDefaults:
         data = _minimal_config_dict(proactive={"enabled": True})
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.proactive.account_cooldown_hours == 72
+        assert cfg.proactive.draft_ttl_hours == 48
 
     def test_replies_partial_defaults(self, tmp_path):
         data = _minimal_config_dict(replies={"enabled": False})

@@ -2275,6 +2275,106 @@ class TestReplyQueue:
         with pytest.raises(ValueError, match="draft_ttl_hours"):
             db.dismiss_expired_reply_drafts(-1)
 
+    def test_get_expired_proactive_drafts_returns_old_pending_with_drafts(self, db):
+        now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+        old_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="old",
+            target_tweet_text="old target",
+            target_author_handle="alice",
+            draft_text="Worth replying",
+        )
+        fresh_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="fresh",
+            target_tweet_text="fresh target",
+            target_author_handle="bob",
+            draft_text="Still fresh",
+        )
+        no_draft_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="no-draft",
+            target_tweet_text="no draft target",
+            target_author_handle="carol",
+        )
+        posted_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="posted",
+            target_tweet_text="posted target",
+            target_author_handle="dave",
+            draft_text="Already handled",
+        )
+        db.conn.execute(
+            "UPDATE proactive_actions SET created_at = ? WHERE id IN (?, ?, ?)",
+            ("2026-04-20 12:00:00", old_id, no_draft_id, posted_id),
+        )
+        db.conn.execute(
+            "UPDATE proactive_actions SET created_at = ? WHERE id = ?",
+            ("2026-04-23 10:00:00", fresh_id),
+        )
+        db.conn.execute(
+            "UPDATE proactive_actions SET status = 'posted' WHERE id = ?",
+            (posted_id,),
+        )
+        db.conn.commit()
+
+        expired = db.get_expired_proactive_drafts(48, now=now)
+
+        assert [row["target_tweet_id"] for row in expired] == ["old"]
+
+    def test_dismiss_expired_proactive_drafts_marks_only_limited_pending(self, db):
+        now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+        first_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="first",
+            target_tweet_text="first target",
+            target_author_handle="alice",
+            draft_text="First",
+        )
+        second_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="second",
+            target_tweet_text="second target",
+            target_author_handle="bob",
+            draft_text="Second",
+        )
+        approved_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="approved",
+            target_tweet_text="approved target",
+            target_author_handle="carol",
+            draft_text="Approved",
+        )
+        db.conn.execute(
+            "UPDATE proactive_actions SET created_at = ? WHERE id IN (?, ?, ?)",
+            ("2026-04-20 12:00:00", first_id, second_id, approved_id),
+        )
+        db.conn.execute(
+            "UPDATE proactive_actions SET status = 'approved' WHERE id = ?",
+            (approved_id,),
+        )
+        db.conn.commit()
+
+        dismissed = db.dismiss_expired_proactive_drafts(48, limit=1, now=now)
+
+        assert dismissed == 1
+        rows = {
+            row["target_tweet_id"]: dict(row)
+            for row in db.conn.execute(
+                "SELECT target_tweet_id, status, reviewed_at FROM proactive_actions"
+            )
+        }
+        assert rows["first"]["status"] == "dismissed"
+        assert rows["first"]["reviewed_at"] == "2026-04-23T12:00:00+00:00"
+        assert rows["second"]["status"] == "pending"
+        assert rows["approved"]["status"] == "approved"
+
+    def test_expired_proactive_drafts_rejects_non_positive_values(self, db):
+        with pytest.raises(ValueError, match="draft_ttl_hours"):
+            db.get_expired_proactive_drafts(0)
+        with pytest.raises(ValueError, match="limit"):
+            db.dismiss_expired_proactive_drafts(48, limit=0)
+
 
 # ====================================================================
 

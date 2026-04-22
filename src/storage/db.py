@@ -2069,6 +2069,65 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_expired_proactive_drafts(
+        self,
+        draft_ttl_hours: int,
+        limit: Optional[int] = None,
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get pending proactive drafts older than the configured TTL."""
+        if draft_ttl_hours <= 0:
+            raise ValueError("draft_ttl_hours must be positive")
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be positive")
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=draft_ttl_hours)
+        params: list[object] = [cutoff.isoformat()]
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(limit)
+        cursor = self.conn.execute(
+            """SELECT * FROM proactive_actions
+               WHERE status = 'pending'
+                 AND draft_text IS NOT NULL
+                 AND TRIM(draft_text) != ''
+                 AND created_at IS NOT NULL
+                 AND datetime(created_at) <= datetime(?)
+               ORDER BY created_at ASC, id ASC"""
+            + limit_sql,
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def dismiss_expired_proactive_drafts(
+        self,
+        draft_ttl_hours: int,
+        limit: Optional[int] = None,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Mark pending proactive drafts older than the configured TTL as dismissed."""
+        expired = self.get_expired_proactive_drafts(
+            draft_ttl_hours,
+            limit=limit,
+            now=now,
+        )
+        if not expired:
+            return 0
+
+        reviewed_at = (now or datetime.now(timezone.utc)).isoformat()
+        action_ids = [row["id"] for row in expired]
+        placeholders = ",".join("?" for _ in action_ids)
+        cursor = self.conn.execute(
+            f"""UPDATE proactive_actions
+                SET status = 'dismissed', reviewed_at = ?
+                WHERE id IN ({placeholders})
+                  AND status = 'pending'""",
+            [reviewed_at, *action_ids],
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def mark_proactive_posted(self, action_id: int, posted_tweet_id: str) -> None:
         """Mark a proactive action as posted."""
         now = datetime.now(timezone.utc).isoformat()
