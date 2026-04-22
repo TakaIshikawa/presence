@@ -477,10 +477,27 @@ class PresenceContextBuilder:
 
     @staticmethod
     def _activity_detail(row: dict) -> str:
+        metadata = row.get("metadata") or {}
+        if row.get("activity_type") == "issue":
+            event_type = metadata.get("issue_event_type")
+            details = []
+            if event_type and event_type != "updated":
+                author = metadata.get("issue_event_author")
+                if author:
+                    details.append(f"{event_type} by {author}")
+                else:
+                    details.append(str(event_type))
+            comment_excerpt = PresenceContextBuilder._snippet(
+                metadata.get("comment_excerpt", ""),
+                max_len=100,
+            )
+            if comment_excerpt:
+                details.append(f"comment: {comment_excerpt}")
+            return "; " + "; ".join(details) if details else ""
+
         if row.get("activity_type") != "pull_request":
             return ""
 
-        metadata = row.get("metadata") or {}
         details = []
         if metadata.get("merged") or row.get("merged_at"):
             details.append("merged")

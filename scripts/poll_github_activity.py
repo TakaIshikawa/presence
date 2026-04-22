@@ -43,6 +43,7 @@ def ingest_github_activity(
     username: str,
     since: datetime,
     repositories: list[str | dict] | None = None,
+    include_issues: bool = True,
     include_discussions: bool = False,
     include_pull_requests: bool = False,
     dry_run: bool = False,
@@ -55,6 +56,7 @@ def ingest_github_activity(
         since=since,
         db=db,
         repositories=repositories,
+        include_issues=include_issues,
         include_discussions=include_discussions,
         include_pull_requests=include_pull_requests,
         dry_run=dry_run,
@@ -93,12 +95,15 @@ def main(argv: list[str] | None = None) -> int:
         since = determine_since(db, parse_since(args.since), args.lookback_minutes)
         current_poll_time = datetime.now(timezone.utc)
         repositories = getattr(config.github, "repositories", None) or None
+        include_issues = getattr(config.github, "include_issues", True)
         include_discussions = getattr(config.github, "include_discussions", False)
         include_pull_requests = getattr(config.github, "include_pull_requests", False)
 
         logger.info("Polling GitHub issues/PRs/releases since %s", since.isoformat())
         if repositories:
             logger.info("Using %d configured repositories", len(repositories))
+        if not include_issues:
+            logger.info("Skipping GitHub issues")
         if include_pull_requests:
             logger.info("Including GitHub pull requests")
         if include_discussions:
@@ -110,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             username=config.github.username,
             since=since,
             repositories=repositories,
+            include_issues=include_issues,
             include_discussions=include_discussions,
             include_pull_requests=include_pull_requests,
             dry_run=args.dry_run,

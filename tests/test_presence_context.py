@@ -175,6 +175,12 @@ def test_github_activity_context_includes_recent_and_unresolved_activity(db):
         url="https://github.com/taka/presence/issues/12",
         updated_at=datetime.now(timezone.utc).isoformat(),
         labels=["content", "provenance"],
+        metadata={
+            "issue_event_type": "commented",
+            "issue_event_author": "octo",
+            "comment_excerpt": "This should cite the issue comment.",
+            "issue_event_key": "presence#issue:12:commented:901",
+        },
     )
     db.upsert_github_activity(
         repo_name="presence",
@@ -205,6 +211,8 @@ def test_github_activity_context_includes_recent_and_unresolved_activity(db):
     assert "GITHUB ACTIVITY CONTEXT" in section
     assert "issues, PRs, releases, and discussions" in section
     assert "presence issue #12" in section
+    assert "commented by octo" in section
+    assert "comment: This should cite the issue comment." in section
     assert "unresolved" in section
     assert "content, provenance" in section
     assert "presence PR #13" in section

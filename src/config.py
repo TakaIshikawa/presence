@@ -14,6 +14,7 @@ class GitHubConfig:
     username: str
     token: str
     repositories: list[str | dict] = field(default_factory=list)
+    include_issues: bool = True
     include_discussions: bool = False
     include_pull_requests: bool = False
 
@@ -617,6 +618,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             username=_require(data, "github", "username", section="github"),
             token=_resolve_env_var(_require(data, "github", "token", section="github")),
             repositories=data["github"].get("repositories", data["github"].get("repos", [])),
+            include_issues=data["github"].get("include_issues", True),
             include_discussions=data["github"].get("include_discussions", False),
             include_pull_requests=data["github"].get("include_pull_requests", False),
         ),

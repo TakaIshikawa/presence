@@ -126,6 +126,13 @@ class GitHubActivityClient:
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _get_optional_list(self, path: str, params: dict | None = None) -> list[dict]:
+        try:
+            data = self._get(path, params or {})
+        except (GitHubClientError, GitHubNotFoundError, GitHubRateLimitError):
+            return []
+        return data if isinstance(data, list) else []
+
     def _post_graphql(self, query: str, variables: dict) -> dict:
         try:
             response = requests.post(
@@ -219,11 +226,12 @@ class GitHubActivityClient:
         yielded = 0
         page = 1
         while yielded < limit:
+            per_page = min(100, limit - yielded)
             params = {
                 "state": "all",
                 "sort": "updated",
                 "direction": "desc",
-                "per_page": min(100, limit - yielded),
+                "per_page": per_page,
                 "page": page,
             }
             if since:
@@ -234,11 +242,79 @@ class GitHubActivityClient:
             for item in data:
                 if "pull_request" in item:
                     continue
-                yield self._issue_to_activity(item, repo_name or repo)
+                yield self._issue_to_activity(item, repo_name or repo, owner, repo, since)
                 yielded += 1
                 if yielded >= limit:
                     break
+            if len(data) < per_page:
+                break
             page += 1
+
+    def get_issue_comments(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Return issue comments, newest relevant comments last."""
+        comments = []
+        page = 1
+        while len(comments) < limit:
+            per_page = min(100, limit - len(comments))
+            params = {
+                "per_page": per_page,
+                "page": page,
+            }
+            if since:
+                params["since"] = since.isoformat()
+            data = self._get_optional_list(
+                f"/repos/{owner}/{repo}/issues/{issue_number}/comments",
+                params,
+            )
+            if not data:
+                break
+            comments.extend(data)
+            if len(data) < per_page:
+                break
+            page += 1
+        return comments
+
+    def get_issue_events(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Return close/reopen events for an issue."""
+        events = []
+        page = 1
+        while len(events) < limit:
+            per_page = min(100, limit - len(events))
+            data = self._get_optional_list(
+                f"/repos/{owner}/{repo}/issues/{issue_number}/events",
+                {
+                    "per_page": per_page,
+                    "page": page,
+                },
+            )
+            if not data:
+                break
+            for event in data:
+                event_type = event.get("event")
+                event_at = _parse_github_datetime(event.get("created_at"))
+                if event_type not in {"closed", "reopened"}:
+                    continue
+                if since and event_at and event_at < since:
+                    continue
+                events.append(event)
+            if len(data) < per_page:
+                break
+            page += 1
+        return events
 
     def get_repo_pull_requests(
         self,
@@ -394,17 +470,19 @@ class GitHubActivityClient:
         limit_per_repo: int = 100,
         include_discussions: bool = False,
         include_pull_requests: bool = False,
+        include_issues: bool = True,
     ) -> Iterator[GitHubActivity]:
         """Yield recent issues, releases, and optionally pull requests/discussions."""
         for repo in self.get_configured_repos(repositories, include_forks=include_forks):
             try:
-                yield from self.get_repo_issues(
-                    repo["owner"],
-                    repo["name"],
-                    repo_name=repo["repo_name"],
-                    since=since,
-                    limit=limit_per_repo,
-                )
+                if include_issues:
+                    yield from self.get_repo_issues(
+                        repo["owner"],
+                        repo["name"],
+                        repo_name=repo["repo_name"],
+                        since=since,
+                        limit=limit_per_repo,
+                    )
                 if include_pull_requests:
                     yield from self.get_repo_pull_requests(
                         repo["owner"],
@@ -431,21 +509,130 @@ class GitHubActivityClient:
             except (GitHubRateLimitError, GitHubNotFoundError):
                 pass
 
-    def _issue_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+    def _issue_to_activity(
+        self,
+        item: dict,
+        repo_name: str,
+        owner: str | None = None,
+        repo: str | None = None,
+        since: Optional[datetime] = None,
+    ) -> GitHubActivity:
+        issue_number = item["number"]
+        issue_url = item.get("html_url", "")
+        created_at = _parse_github_datetime(item.get("created_at"))
+        updated_at = _parse_github_datetime(item.get("updated_at")) or created_at
+        closed_at = _parse_github_datetime(item.get("closed_at"))
+        comments = []
+        events = []
+        if owner and repo:
+            if item.get("comments", 0):
+                comments = self.get_issue_comments(owner, repo, issue_number, since=since)
+            events = self.get_issue_events(owner, repo, issue_number, since=since)
+
+        latest_signal = self._latest_issue_signal(
+            repo_name=repo_name,
+            issue_number=issue_number,
+            issue_url=issue_url,
+            created_at=created_at,
+            updated_at=updated_at,
+            comments=comments,
+            events=events,
+            since=since,
+        )
+        body = _body_excerpt(self.redactor.redact(item.get("body") or ""))
+        comment_excerpt = latest_signal.get("comment_excerpt")
+        if comment_excerpt:
+            body = _body_excerpt(f"{body}\nLatest comment: {comment_excerpt}".strip())
+
         return GitHubActivity(
             repo_name=repo_name,
             activity_type="issue",
-            number=item["number"],
+            number=issue_number,
             title=self.redactor.redact(item.get("title", "")),
             state=item.get("state", ""),
             author=(item.get("user") or {}).get("login", ""),
-            url=item.get("html_url", ""),
-            updated_at=_parse_github_datetime(item.get("updated_at")),
-            created_at=_parse_github_datetime(item.get("created_at")),
-            body=self.redactor.redact(item.get("body") or ""),
-            closed_at=_parse_github_datetime(item.get("closed_at")),
+            url=issue_url,
+            updated_at=updated_at,
+            created_at=created_at,
+            body=body,
+            closed_at=closed_at,
             labels=[label.get("name", "") for label in item.get("labels", [])],
+            metadata=latest_signal,
         )
+
+    def _latest_issue_signal(
+        self,
+        repo_name: str,
+        issue_number: int,
+        issue_url: str,
+        created_at: Optional[datetime],
+        updated_at: Optional[datetime],
+        comments: list[dict],
+        events: list[dict],
+        since: Optional[datetime] = None,
+    ) -> dict:
+        candidates = []
+        if created_at and (since is None or created_at >= since):
+            candidates.append(
+                {
+                    "issue_event_type": "opened",
+                    "issue_event_at": created_at,
+                    "issue_event_author": None,
+                    "issue_event_url": issue_url,
+                    "issue_event_key": f"{repo_name}#issue:{issue_number}:opened:{created_at.isoformat()}",
+                }
+            )
+
+        for event in events:
+            event_type = event.get("event")
+            event_at = _parse_github_datetime(event.get("created_at"))
+            if not event_type or not event_at:
+                continue
+            event_id = event.get("id") or event_at.isoformat()
+            candidates.append(
+                {
+                    "issue_event_type": event_type,
+                    "issue_event_at": event_at,
+                    "issue_event_author": (event.get("actor") or {}).get("login"),
+                    "issue_event_url": issue_url,
+                    "issue_event_key": f"{repo_name}#issue:{issue_number}:{event_type}:{event_id}",
+                }
+            )
+
+        for comment in comments:
+            comment_at = _parse_github_datetime(comment.get("updated_at") or comment.get("created_at"))
+            if not comment_at:
+                continue
+            comment_id = comment.get("id") or comment_at.isoformat()
+            comment_excerpt = _body_excerpt(self.redactor.redact(comment.get("body") or ""))
+            candidates.append(
+                {
+                    "issue_event_type": "commented",
+                    "issue_event_at": comment_at,
+                    "issue_event_author": (comment.get("user") or {}).get("login"),
+                    "issue_event_url": comment.get("html_url") or issue_url,
+                    "issue_event_key": f"{repo_name}#issue:{issue_number}:commented:{comment_id}",
+                    "comment_id": comment.get("id"),
+                    "comment_url": comment.get("html_url"),
+                    "comment_excerpt": comment_excerpt,
+                }
+            )
+
+        if updated_at and not candidates:
+            candidates.append(
+                {
+                    "issue_event_type": "updated",
+                    "issue_event_at": updated_at,
+                    "issue_event_author": None,
+                    "issue_event_url": issue_url,
+                    "issue_event_key": f"{repo_name}#issue:{issue_number}:updated:{updated_at.isoformat()}",
+                }
+            )
+
+        latest = max(candidates, key=lambda candidate: candidate["issue_event_at"])
+        latest["issue_event_at"] = latest["issue_event_at"].isoformat()
+        latest["comments_count"] = len(comments)
+        return latest
 
     def _release_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
         tag_name = item.get("tag_name") or ""
@@ -559,6 +746,7 @@ def poll_new_activity(
     repositories: Optional[list[str | dict]] = None,
     include_discussions: bool = False,
     include_pull_requests: bool = False,
+    include_issues: bool = True,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: Optional[Iterable[str | dict]] = None,
@@ -577,6 +765,7 @@ def poll_new_activity(
         repositories=repositories,
         include_discussions=include_discussions,
         include_pull_requests=include_pull_requests,
+        include_issues=include_issues,
     ):
         if db.is_github_activity_processed(
             activity.repo_name,

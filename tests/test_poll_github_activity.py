@@ -39,6 +39,7 @@ def test_ingest_github_activity_passes_dry_run(mock_poll, db):
         username="taka",
         since=TIMESTAMP,
         repositories=["repo"],
+        include_issues=False,
         include_discussions=True,
         include_pull_requests=True,
         dry_run=True,
@@ -52,6 +53,7 @@ def test_ingest_github_activity_passes_dry_run(mock_poll, db):
         since=TIMESTAMP,
         db=db,
         repositories=["repo"],
+        include_issues=False,
         include_discussions=True,
         include_pull_requests=True,
         dry_run=True,
@@ -68,6 +70,7 @@ def test_main_dry_run_does_not_update_watermark(mock_context, mock_ingest, mock_
     config.github.token = "tok"
     config.github.username = "taka"
     config.github.repositories = ["repo"]
+    config.github.include_issues = False
     config.github.include_discussions = True
     config.github.include_pull_requests = True
     config.privacy.redaction_patterns = []
@@ -81,6 +84,7 @@ def test_main_dry_run_does_not_update_watermark(mock_context, mock_ingest, mock_
     assert db.get_last_github_activity_poll_time() is None
     mock_update.assert_not_called()
     assert mock_ingest.call_args.kwargs["dry_run"] is True
+    assert mock_ingest.call_args.kwargs["include_issues"] is False
     assert mock_ingest.call_args.kwargs["include_discussions"] is True
     assert mock_ingest.call_args.kwargs["include_pull_requests"] is True
 
@@ -93,6 +97,7 @@ def test_main_persists_watermark_after_success(mock_context, mock_ingest, mock_u
     config.github.token = "tok"
     config.github.username = "taka"
     config.github.repositories = []
+    config.github.include_issues = True
     config.github.include_discussions = False
     config.github.include_pull_requests = False
     config.privacy.redaction_patterns = []
@@ -106,5 +111,6 @@ def test_main_persists_watermark_after_success(mock_context, mock_ingest, mock_u
     assert db.get_last_github_activity_poll_time() is not None
     mock_update.assert_called_once_with("poll-github-activity")
     assert mock_ingest.call_args.kwargs["dry_run"] is False
+    assert mock_ingest.call_args.kwargs["include_issues"] is True
     assert mock_ingest.call_args.kwargs["include_discussions"] is False
     assert mock_ingest.call_args.kwargs["include_pull_requests"] is False
