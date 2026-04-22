@@ -176,6 +176,14 @@ class TestMainPublishesWhenPassesThreshold:
         config = _make_config()
         db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = [
+            {
+                "activity_id": "my-project#8:pull_request",
+                "repo_name": "my-project",
+                "activity_type": "pull_request",
+                "number": 8,
+            }
+        ]
         db.insert_generated_content.return_value = 42
         mock_ctx.return_value = _mock_script_context(config, db)()
 
@@ -217,6 +225,14 @@ class TestMainDoesNotPublishBelowThreshold:
         config = _make_config()
         db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = [
+            {
+                "activity_id": "my-project#8:pull_request",
+                "repo_name": "my-project",
+                "activity_type": "pull_request",
+                "number": 8,
+            }
+        ]
         db.insert_generated_content.return_value = 42
         mock_ctx.return_value = _mock_script_context(config, db)()
 
@@ -363,6 +379,14 @@ class TestContentFormatPersistence:
         config = _make_config()
         db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = [
+            {
+                "activity_id": "my-project#8:pull_request",
+                "repo_name": "my-project",
+                "activity_type": "pull_request",
+                "number": 8,
+            }
+        ]
         db.insert_generated_content.return_value = 42
         mock_ctx.return_value = _mock_script_context(config, db)()
 
@@ -384,3 +408,4 @@ class TestContentFormatPersistence:
         db.insert_generated_content.assert_called_once()
         kwargs = db.insert_generated_content.call_args.kwargs
         assert kwargs["content_format"] == "surprising_result"
+        assert kwargs["source_activity_ids"] == ["my-project#8:pull_request"]

@@ -48,6 +48,7 @@ class TestSchemaInit:
         assert "last_retry_at" in cols
         assert "tweet_id" in cols
         assert "published_at" in cols
+        assert "source_activity_ids" in cols
         assert "curation_quality" in cols
         assert "auto_quality" in cols
         assert "bluesky_uri" in cols
@@ -817,6 +818,37 @@ class TestGitHubActivity:
 
         assert rows[0]["labels"] == ["bug"]
         assert rows[0]["metadata"] == {"source": "test"}
+        assert rows[0]["activity_id"] == "repo#1:issue"
+
+    def test_github_activity_recent_and_unresolved_helpers(self, db):
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="issue",
+            number=1,
+            title="Open issue",
+            state="open",
+            author="taka",
+            url="url",
+            updated_at="2026-04-01T12:00:00+00:00",
+            labels=["bug"],
+        )
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="pull_request",
+            number=2,
+            title="Closed PR",
+            state="closed",
+            author="taka",
+            url="url",
+            updated_at="2026-03-20T12:00:00+00:00",
+        )
+
+        now = datetime(2026, 4, 3, 0, 0, tzinfo=timezone.utc)
+        recent = db.get_recent_github_activity(days=7, now=now)
+        unresolved = db.get_unresolved_github_activity()
+
+        assert [row["activity_id"] for row in recent] == ["repo#1:issue"]
+        assert [row["activity_id"] for row in unresolved] == ["repo#1:issue"]
 
 
 # --- Commit-prompt correlation ---
@@ -952,6 +984,34 @@ class TestGeneratedContent:
         assert len(unpub) == 1
         assert unpub[0]["content"] == "Test post"
         assert json.loads(unpub[0]["source_commits"]) == ["sha1", "sha2"]
+
+    def test_insert_and_retrieve_source_activity_ids(self, db):
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="issue",
+            number=9,
+            title="Keep retries visible",
+            state="open",
+            author="taka",
+            url="url",
+            updated_at="2026-04-01T12:00:00+00:00",
+        )
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            source_activity_ids=["repo#9:issue"],
+            content="Post from issue context",
+            eval_score=8.0,
+            eval_feedback="ok",
+        )
+
+        content = db.get_generated_content(content_id)
+        activity = db.get_source_github_activity_for_content(content_id)
+
+        assert content["source_activity_ids"] == ["repo#9:issue"]
+        assert activity[0]["matched"] is True
+        assert activity[0]["title"] == "Keep retries visible"
 
     def test_mark_published(self, db):
         content_id = self._insert_content(db)

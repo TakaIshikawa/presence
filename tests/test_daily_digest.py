@@ -184,6 +184,14 @@ class TestMainPostsWhenPassesThreshold:
         config = _make_config()
         db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = [
+            {
+                "repo_name": "my-project",
+                "activity_type": "issue",
+                "number": 7,
+                "title": "Track timeout fallout",
+            }
+        ]
         db.insert_generated_content.return_value = 42
         mock_ctx.return_value = _mock_script_context(config, db)()
 
@@ -215,6 +223,14 @@ class TestMainDoesNotPostBelowThreshold:
         config = _make_config()
         db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = [
+            {
+                "repo_name": "my-project",
+                "activity_type": "issue",
+                "number": 7,
+                "title": "Track timeout fallout",
+            }
+        ]
         db.insert_generated_content.return_value = 42
         mock_ctx.return_value = _mock_script_context(config, db)()
 
@@ -304,6 +320,14 @@ class TestContentFormatPersistence:
         config = _make_config()
         db = MagicMock()
         db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = [
+            {
+                "repo_name": "my-project",
+                "activity_type": "issue",
+                "number": 7,
+                "title": "Track timeout fallout",
+            }
+        ]
         db.insert_generated_content.return_value = 42
         mock_ctx.return_value = _mock_script_context(config, db)()
 
@@ -323,6 +347,7 @@ class TestContentFormatPersistence:
         db.insert_generated_content.assert_called_once()
         kwargs = db.insert_generated_content.call_args.kwargs
         assert kwargs["content_format"] == "bold_claim"
+        assert kwargs["source_activity_ids"] == ["my-project#7:issue"]
 
     @_daily_patches
     def test_content_format_none_forwarded(

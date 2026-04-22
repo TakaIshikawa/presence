@@ -20,6 +20,27 @@ from knowledge.store import KnowledgeStore
 logger = logging.getLogger(__name__)
 
 
+def _github_activity_id(row: dict) -> str:
+    if row.get("activity_id"):
+        return str(row["activity_id"])
+    repo_name = row.get("repo_name")
+    number = row.get("number")
+    activity_type = row.get("activity_type")
+    if repo_name is None or number is None or activity_type is None:
+        return ""
+    return f"{repo_name}#{number}:{activity_type}"
+
+
+def _get_activity_ids_in_range(db, start: datetime, end: datetime) -> list[str]:
+    method = getattr(db, "get_github_activity_in_range", None)
+    if not callable(method):
+        return []
+    activity = method(start, end)
+    if not isinstance(activity, list):
+        return []
+    return [activity_id for row in activity if (activity_id := _github_activity_id(row))]
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -85,6 +106,10 @@ def main():
             logger.info("No prompts found, skipping digest")
             return
 
+        activity_ids = _get_activity_ids_in_range(db, week_ago, today)
+        if activity_ids:
+            logger.info(f"Found {len(activity_ids)} GitHub issues/PRs updated this week")
+
         # Convert commit dicts from db rows to have expected keys
         commit_dicts = [
             {"repo_name": c.get("repo_name", ""), "message": c.get("commit_message", ""),
@@ -130,6 +155,7 @@ def main():
             content_type="blog_post",
             source_commits=[c["sha"] for c in commit_dicts],
             source_messages=[p.message_uuid for p in prompts],
+            source_activity_ids=activity_ids,
             content=result.final_content,
             eval_score=result.final_score,
             eval_feedback=result.comparison.best_feedback,

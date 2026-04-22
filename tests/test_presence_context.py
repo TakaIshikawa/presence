@@ -122,6 +122,38 @@ def test_idea_inbox_includes_high_priority_open_ideas_only(db):
     assert "Dismissed idea" not in section
 
 
+def test_github_activity_context_includes_recent_and_unresolved_activity(db):
+    db.upsert_github_activity(
+        repo_name="presence",
+        activity_type="issue",
+        number=12,
+        title="Make digest source provenance include issues",
+        state="open",
+        author="taka",
+        url="https://github.com/taka/presence/issues/12",
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        labels=["content", "provenance"],
+    )
+    db.upsert_github_activity(
+        repo_name="presence",
+        activity_type="pull_request",
+        number=13,
+        title="Wire GitHub activity into prompt context",
+        state="closed",
+        author="taka",
+        url="https://github.com/taka/presence/pull/13",
+        updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    section = PresenceContextBuilder(db).build_github_activity_context()
+
+    assert "GITHUB ACTIVITY CONTEXT" in section
+    assert "presence issue #12" in section
+    assert "unresolved" in section
+    assert "content, provenance" in section
+    assert "presence PR #13" in section
+
+
 def test_outcome_learning_includes_real_metrics(db):
     content_id = _published_content(db, "A concrete post that got engagement.")
     db.insert_engagement(

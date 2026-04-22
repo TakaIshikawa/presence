@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS generated_content (
     content_type TEXT NOT NULL,  -- 'x_post', 'x_thread', 'blog_post'
     source_commits TEXT,  -- JSON array of commit SHAs
     source_messages TEXT,  -- JSON array of message UUIDs
+    source_activity_ids TEXT,  -- JSON array of GitHub issue/PR activity IDs
     content TEXT NOT NULL,
     eval_score REAL,
     eval_feedback TEXT,

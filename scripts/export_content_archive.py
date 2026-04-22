@@ -52,6 +52,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     data = dict(row)
     data["source_commits"] = _decode_json_field(data.get("source_commits"))
     data["source_messages"] = _decode_json_field(data.get("source_messages"))
+    data["source_activity_ids"] = _decode_json_field(data.get("source_activity_ids"))
     return _json_safe(data)
 
 

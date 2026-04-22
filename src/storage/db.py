@@ -98,6 +98,8 @@ class Database:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN tweet_id TEXT")
             if "published_at" not in cols:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN published_at TEXT")
+            if "source_activity_ids" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN source_activity_ids TEXT")
             if "curation_quality" not in cols:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN curation_quality TEXT")
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_content_curation ON generated_content(curation_quality)")
@@ -685,13 +687,72 @@ class Database:
                 ORDER BY updated_at""",
             tuple(params),
         )
-        rows = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["labels"] = self._parse_json_list(item.get("labels"))
-            item["metadata"] = self._parse_json_object(item.get("metadata"))
-            rows.append(item)
-        return rows
+        return [self._github_activity_from_row(row) for row in cursor.fetchall()]
+
+    def get_recent_github_activity(
+        self,
+        days: int = 7,
+        limit: int = 10,
+        now: datetime | None = None,
+        activity_type: str | None = None,
+    ) -> list[dict]:
+        """Return recently updated GitHub issues/PRs, newest first."""
+        if days <= 0 or limit <= 0:
+            return []
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+        params: list[object] = [cutoff]
+        type_filter = ""
+        if activity_type:
+            type_filter = " AND activity_type = ?"
+            params.append(activity_type)
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE updated_at >= ?{type_filter}
+                ORDER BY updated_at DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return [self._github_activity_from_row(row) for row in cursor.fetchall()]
+
+    def get_unresolved_github_activity(
+        self,
+        limit: int = 10,
+        activity_type: str | None = None,
+    ) -> list[dict]:
+        """Return open GitHub issues/PRs, newest updates first."""
+        if limit <= 0:
+            return []
+        params: list[object] = []
+        type_filter = ""
+        if activity_type:
+            type_filter = " AND activity_type = ?"
+            params.append(activity_type)
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE LOWER(COALESCE(state, '')) = 'open'{type_filter}
+                ORDER BY updated_at DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return [self._github_activity_from_row(row) for row in cursor.fetchall()]
+
+    def _github_activity_from_row(self, row: sqlite3.Row) -> dict:
+        item = dict(row)
+        item["labels"] = self._parse_json_list(item.get("labels"))
+        item["metadata"] = self._parse_json_object(item.get("metadata"))
+        item["activity_id"] = self.github_activity_id(
+            item.get("repo_name", ""),
+            item.get("number", ""),
+            item.get("activity_type", ""),
+        )
+        return item
+
+    @staticmethod
+    def github_activity_id(repo_name: str, number: int | str, activity_type: str) -> str:
+        return f"{repo_name}#{number}:{activity_type}"
 
     # Commit-prompt correlation
     def link_commit_to_prompts(
@@ -782,16 +843,19 @@ class Database:
         content_format: Optional[str] = None,
         image_path: Optional[str] = None,
         image_prompt: Optional[str] = None,
+        source_activity_ids: Optional[list[str]] = None,
     ) -> int:
         cursor = self.conn.execute(
             """INSERT INTO generated_content
-               (content_type, source_commits, source_messages, content, eval_score, eval_feedback,
+               (content_type, source_commits, source_messages, source_activity_ids,
+                content, eval_score, eval_feedback,
                 content_format, image_path, image_prompt)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 content_type,
                 json.dumps(source_commits),
                 json.dumps(source_messages),
+                json.dumps(source_activity_ids or []),
                 content,
                 eval_score,
                 eval_feedback,
@@ -814,6 +878,7 @@ class Database:
         content = dict(row)
         content["source_commits"] = self._parse_json_list(content.get("source_commits"))
         content["source_messages"] = self._parse_json_list(content.get("source_messages"))
+        content["source_activity_ids"] = self._parse_json_list(content.get("source_activity_ids"))
         return content
 
     def get_source_commits_for_content(self, content_id: int) -> list[dict]:
@@ -866,6 +931,28 @@ class Database:
             message["matched"] = ref in by_uuid
             messages.append(message)
         return messages
+
+    def get_source_github_activity_for_content(self, content_id: int) -> list[dict]:
+        """Return source GitHub issue/PR references for one generated content item."""
+        content = self.get_generated_content(content_id)
+        if not content:
+            return []
+        refs = [str(ref) for ref in content["source_activity_ids"]]
+        if not refs:
+            return []
+        rows = self.conn.execute("SELECT * FROM github_activity").fetchall()
+        by_activity_id = {
+            self.github_activity_id(row["repo_name"], row["number"], row["activity_type"]): row
+            for row in rows
+        }
+        activity = []
+        for index, ref in enumerate(refs):
+            row = by_activity_id.get(ref)
+            item = self._github_activity_from_row(row) if row else {"activity_id": ref}
+            item["source_index"] = index
+            item["matched"] = row is not None
+            activity.append(item)
+        return activity
 
     def get_engagement_snapshots_for_content(self, content_id: int) -> list[dict]:
         """Return X and Bluesky engagement snapshots for one generated item."""
@@ -924,6 +1011,7 @@ class Database:
             "content": content,
             "source_commits": self.get_source_commits_for_content(content_id),
             "source_messages": self.get_source_messages_for_content(content_id),
+            "source_activity": self.get_source_github_activity_for_content(content_id),
             "knowledge_links": self.get_content_lineage(content_id),
             "variants": self.list_content_variants(content_id),
             "publications": self.get_latest_publication_states(content_id),
@@ -1367,6 +1455,7 @@ class Database:
             content = dict(row)
             content["source_commits"] = self._parse_json_list(content.get("source_commits"))
             content["source_messages"] = self._parse_json_list(content.get("source_messages"))
+            content["source_activity_ids"] = self._parse_json_list(content.get("source_activity_ids"))
             rows.append(content)
         return rows
 

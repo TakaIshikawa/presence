@@ -16,6 +16,7 @@ class PresenceContext:
     voice_memory: str = ""
     content_mix: str = ""
     campaign_context: str = ""
+    github_activity: str = ""
     idea_inbox: str = ""
     outcome_learning: str = ""
 
@@ -26,6 +27,7 @@ class PresenceContext:
                 self.voice_memory,
                 self.content_mix,
                 self.campaign_context,
+                self.github_activity,
                 self.idea_inbox,
                 self.outcome_learning,
             )
@@ -70,6 +72,7 @@ class PresenceContextBuilder:
             voice_memory=self.build_voice_memory(content_type),
             content_mix=self.build_content_mix(content_type),
             campaign_context=self.build_campaign_context(),
+            github_activity=self.build_github_activity_context(),
             idea_inbox=self.build_idea_inbox(),
             outcome_learning=self.build_outcome_learning(content_type),
         )
@@ -233,6 +236,46 @@ class PresenceContextBuilder:
             lines.append(f"- {detail}")
         return "\n".join(lines)
 
+    def build_github_activity_context(self) -> str:
+        recent = self._rows("get_recent_github_activity", days=7, limit=5)
+        unresolved = self._rows("get_unresolved_github_activity", limit=5)
+
+        by_id = {}
+        for row in recent + unresolved:
+            activity_id = self._activity_id(row)
+            if activity_id and activity_id not in by_id:
+                by_id[activity_id] = row
+        activity = list(by_id.values())
+        if not activity:
+            return ""
+
+        lines = [
+            "GITHUB ACTIVITY CONTEXT (issues and PRs):",
+            "- Use this as source context only when it connects to the commits/prompts; do not imply unresolved work is finished.",
+        ]
+
+        recent_ids = {self._activity_id(row) for row in recent[:5]}
+        unresolved_ids = {self._activity_id(row) for row in unresolved[:5]}
+        for row in activity[:6]:
+            markers = []
+            activity_id = self._activity_id(row)
+            if activity_id in recent_ids:
+                markers.append("recently updated")
+            if activity_id in unresolved_ids:
+                markers.append("unresolved")
+            marker = f" [{', '.join(markers)}]" if markers else ""
+            title = self._snippet(row.get("title", ""), max_len=90)
+            repo = row.get("repo_name") or "unknown repo"
+            number = row.get("number")
+            activity_type = self._activity_label(row.get("activity_type"))
+            state = row.get("state") or "unknown"
+            labels = row.get("labels") or []
+            label_text = f"; labels: {', '.join(str(label) for label in labels[:3])}" if labels else ""
+            lines.append(
+                f"- {repo} {activity_type} #{number}: {title} ({state}{marker}{label_text})"
+            )
+        return "\n".join(lines)
+
     def _active_campaign_limit_status(self) -> tuple[dict[str, Any], bool, str]:
         campaign = self._dict("get_active_campaign")
         if not campaign:
@@ -350,3 +393,22 @@ class PresenceContextBuilder:
         if len(cleaned) <= max_len:
             return cleaned
         return cleaned[: max_len - 1].rstrip() + "..."
+
+    @staticmethod
+    def _activity_id(row: dict) -> str:
+        if row.get("activity_id"):
+            return str(row["activity_id"])
+        repo = row.get("repo_name")
+        number = row.get("number")
+        activity_type = row.get("activity_type")
+        if repo is None or number is None or activity_type is None:
+            return ""
+        return f"{repo}#{number}:{activity_type}"
+
+    @staticmethod
+    def _activity_label(activity_type: str | None) -> str:
+        if activity_type == "pull_request":
+            return "PR"
+        if activity_type == "issue":
+            return "issue"
+        return str(activity_type or "activity")

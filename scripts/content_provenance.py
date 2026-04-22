@@ -74,6 +74,18 @@ def format_human_provenance(provenance: dict) -> str:
     else:
         lines.append("- none")
 
+    activity = provenance.get("source_activity", [])
+    lines.append(f"\nGitHub activity ({len(activity)})")
+    if activity:
+        for item in activity:
+            label = item.get("activity_id")
+            if item.get("matched"):
+                activity_type = "PR" if item.get("activity_type") == "pull_request" else item.get("activity_type")
+                label = f"{item.get('repo_name')} {activity_type} #{item.get('number')}"
+            lines.append(f"- {label}: {_shorten(item.get('title'), 90)}")
+    else:
+        lines.append("- none")
+
     links = provenance["knowledge_links"]
     lines.append(f"\nKnowledge links ({len(links)})")
     if links:
