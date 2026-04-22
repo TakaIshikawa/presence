@@ -179,6 +179,20 @@ class Database:
             """)
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_content ON bluesky_engagement(content_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_engagement_uri ON bluesky_engagement(bluesky_uri)")
+            # Migrate: create durable per-platform content variants table.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_variants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                    platform TEXT NOT NULL,
+                    variant_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata JSON,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(content_id, platform, variant_type)
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_variants_content ON content_variants(content_id)")
             # Migrate: create durable per-platform publication status table.
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS content_publications (
@@ -579,6 +593,63 @@ class Database:
             (content_id,),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def _content_variant_from_row(self, row: sqlite3.Row) -> dict:
+        variant = dict(row)
+        if variant.get("metadata") is not None:
+            variant["metadata"] = json.loads(variant["metadata"])
+        return variant
+
+    def upsert_content_variant(
+        self,
+        content_id: int,
+        platform: str,
+        variant_type: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> int:
+        """Insert or update a durable content variant for one platform/use."""
+        metadata_json = json.dumps(metadata if metadata is not None else {})
+        self.conn.execute(
+            """INSERT INTO content_variants
+               (content_id, platform, variant_type, content, metadata)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(content_id, platform, variant_type) DO UPDATE SET
+               content = excluded.content,
+               metadata = excluded.metadata""",
+            (content_id, platform, variant_type, content, metadata_json),
+        )
+        row = self.conn.execute(
+            """SELECT id FROM content_variants
+               WHERE content_id = ? AND platform = ? AND variant_type = ?""",
+            (content_id, platform, variant_type),
+        ).fetchone()
+        self.conn.commit()
+        return row["id"]
+
+    def get_content_variant(
+        self,
+        content_id: int,
+        platform: str,
+        variant_type: str,
+    ) -> dict | None:
+        """Fetch one content variant by content/platform/type."""
+        row = self.conn.execute(
+            """SELECT * FROM content_variants
+               WHERE content_id = ? AND platform = ? AND variant_type = ?""",
+            (content_id, platform, variant_type),
+        ).fetchone()
+        return self._content_variant_from_row(row) if row else None
+
+    def list_content_variants(self, content_id: int) -> list[dict]:
+        """List all durable variants for a generated content item."""
+        cursor = self.conn.execute(
+            """SELECT * FROM content_variants
+               WHERE content_id = ?
+               ORDER BY created_at, id""",
+            (content_id,),
+        )
+        return [self._content_variant_from_row(row) for row in cursor.fetchall()]
 
     def get_unpublished_content(self, content_type: str, min_score: float) -> list[dict]:
         cursor = self.conn.execute(

@@ -56,6 +56,19 @@ CREATE TABLE IF NOT EXISTS generated_content (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Durable platform-specific copy variants for generated content reuse
+CREATE TABLE IF NOT EXISTS content_variants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    platform TEXT NOT NULL,      -- 'x', 'bluesky', 'newsletter', 'blog'
+    variant_type TEXT NOT NULL,  -- e.g. 'post', 'thread', 'summary', 'seed'
+    content TEXT NOT NULL,
+    metadata JSON,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(content_id, platform, variant_type)
+);
+CREATE INDEX IF NOT EXISTS idx_content_variants_content ON content_variants(content_id);
+
 -- Track engagement metrics for published posts (time-series)
 CREATE TABLE IF NOT EXISTS post_engagement (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

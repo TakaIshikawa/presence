@@ -33,6 +33,7 @@ class TestSchemaInit:
             "content_knowledge_links",
             "pipeline_runs",
             "content_publications",
+            "content_variants",
         }
         assert expected.issubset(tables)
 
@@ -72,6 +73,21 @@ class TestSchemaInit:
             "attempt_count",
             "published_at",
             "updated_at",
+        }
+        assert expected.issubset(cols)
+
+    def test_content_variants_columns_exist(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(content_variants)")
+        }
+        expected = {
+            "content_id",
+            "platform",
+            "variant_type",
+            "content",
+            "metadata",
+            "created_at",
         }
         assert expected.issubset(cols)
 
@@ -299,6 +315,35 @@ class TestInitSchemaMigrations:
             }
             assert "idx_content_publications_content" in indexes
             assert "idx_content_publications_platform_status" in indexes
+
+    def test_migration_creates_content_variants_for_existing_schema(self, schema_path):
+        """Test that content_variants is added to an existing in-memory schema."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            tables = {
+                row[0]
+                for row in db.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "content_variants" in tables
+
+            indexes = {
+                row[1]
+                for row in db.conn.execute("PRAGMA index_list(content_variants)")
+            }
+            assert "idx_content_variants_content" in indexes
 
     def test_migration_adds_campaign_id_before_schema_indexes(self, schema_path):
         """Old DBs without planned_topics.campaign_id should initialize cleanly."""
@@ -839,6 +884,64 @@ class TestGeneratedContent:
         assert states["bluesky"]["status"] == "queued"
         assert states["x"]["attempt_count"] == 0
         assert states["bluesky"]["attempt_count"] == 0
+
+    def test_insert_content_variant(self, db):
+        content_id = self._insert_content(db)
+
+        variant_id = db.upsert_content_variant(
+            content_id=content_id,
+            platform="x",
+            variant_type="post",
+            content="Short X copy",
+            metadata={"source": "generator", "score": 8.4},
+        )
+
+        variant = db.get_content_variant(content_id, "x", "post")
+        assert variant["id"] == variant_id
+        assert variant["content"] == "Short X copy"
+        assert variant["metadata"] == {"source": "generator", "score": 8.4}
+
+        row = db.conn.execute(
+            "SELECT metadata FROM content_variants WHERE id = ?",
+            (variant_id,),
+        ).fetchone()
+        assert json.loads(row["metadata"]) == {"source": "generator", "score": 8.4}
+
+    def test_update_content_variant_preserves_unique_row(self, db):
+        content_id = self._insert_content(db)
+        first_id = db.upsert_content_variant(
+            content_id, "newsletter", "summary", "Original summary", {"version": 1}
+        )
+
+        second_id = db.upsert_content_variant(
+            content_id, "newsletter", "summary", "Updated summary", {"version": 2}
+        )
+
+        assert second_id == first_id
+        variant = db.get_content_variant(content_id, "newsletter", "summary")
+        assert variant["content"] == "Updated summary"
+        assert variant["metadata"] == {"version": 2}
+
+    def test_content_variant_uniqueness_is_per_platform_and_type(self, db):
+        content_id = self._insert_content(db)
+
+        db.upsert_content_variant(content_id, "x", "post", "X copy")
+        db.upsert_content_variant(content_id, "bluesky", "post", "Bluesky copy")
+        db.upsert_content_variant(content_id, "x", "thread", "X thread")
+
+        variants = db.list_content_variants(content_id)
+        keys = {(v["platform"], v["variant_type"]) for v in variants}
+        assert keys == {
+            ("x", "post"),
+            ("bluesky", "post"),
+            ("x", "thread"),
+        }
+        assert len(variants) == 3
+
+    def test_missing_content_variant_lookup_returns_none(self, db):
+        content_id = self._insert_content(db)
+
+        assert db.get_content_variant(content_id, "blog", "draft") is None
 
 
 # --- Poll state ---

@@ -3,7 +3,6 @@
 
 import logging
 import sys
-import tweepy
 from pathlib import Path
 
 # Add src to path
@@ -11,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context
 from evaluation.engagement_scorer import compute_engagement_score
-from output.x_client import XClient
 from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
@@ -86,6 +84,8 @@ def main() -> None:
             mark_x_api_blocked_if_needed(db, e)
             logger.error(f"Failed to get X bearer token: {e}")
             return
+        import tweepy
+
         client = tweepy.Client(bearer_token=bearer_token)
 
         # Get posts that need metrics (published in last 30 days, not fetched in 6h)
@@ -204,6 +204,8 @@ def main() -> None:
 
         # Fetch profile metrics (piggyback on engagement job)
         try:
+            from output.x_client import XClient
+
             x_client = XClient(
                 config.x.api_key,
                 config.x.api_secret,
