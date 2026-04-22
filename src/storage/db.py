@@ -193,6 +193,25 @@ class Database:
                 self.conn.execute("ALTER TABLE planned_topics ADD COLUMN campaign_id INTEGER REFERENCES content_campaigns(id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_topics_campaign ON planned_topics(campaign_id)")
             self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS content_ideas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    note TEXT NOT NULL,
+                    topic TEXT,
+                    priority TEXT DEFAULT 'normal',
+                    status TEXT DEFAULT 'open',
+                    source TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_ideas_status_priority "
+                "ON content_ideas(status, priority, created_at)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_content_ideas_topic ON content_ideas(topic)"
+            )
+            self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS platform_reply_state (
                     platform TEXT PRIMARY KEY,
                     cursor TEXT,
@@ -3361,6 +3380,107 @@ class Database:
             (content_id, planned_id)
         )
         self.conn.commit()
+
+    # Manual content idea inbox
+    def add_content_idea(
+        self,
+        note: str,
+        topic: str = None,
+        priority: str = "normal",
+        source: str = None,
+        status: str = "open",
+    ) -> int:
+        """Add a seed note to the manual content idea inbox."""
+        if not str(note or "").strip():
+            raise ValueError("Content idea note is required")
+        priority = self._normalize_content_idea_priority(priority)
+        status = self._normalize_content_idea_status(status)
+        cursor = self.conn.execute(
+            """INSERT INTO content_ideas
+               (note, topic, priority, status, source)
+               VALUES (?, ?, ?, ?, ?)""",
+            (note.strip(), topic, priority, status, source),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_content_idea(self, idea_id: int) -> dict | None:
+        """Get one content idea by ID."""
+        row = self.conn.execute(
+            "SELECT * FROM content_ideas WHERE id = ?",
+            (idea_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_content_ideas(
+        self,
+        status: str = "open",
+        priority: str = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """List content ideas, optionally filtered by status and priority."""
+        if limit <= 0:
+            return []
+        filters = []
+        params: list[object] = []
+        if status:
+            filters.append("status = ?")
+            params.append(self._normalize_content_idea_status(status))
+        if priority:
+            filters.append("priority = ?")
+            params.append(self._normalize_content_idea_priority(priority))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        cursor = self.conn.execute(
+            f"""SELECT * FROM content_ideas
+                {where}
+                ORDER BY
+                    CASE priority
+                        WHEN 'high' THEN 0
+                        WHEN 'normal' THEN 1
+                        WHEN 'low' THEN 2
+                        ELSE 3
+                    END,
+                    created_at ASC,
+                    id ASC
+                LIMIT ?""",
+            (*params, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def promote_content_idea(self, idea_id: int) -> None:
+        """Mark a content idea as promoted."""
+        self._set_content_idea_status(idea_id, "promoted")
+
+    def dismiss_content_idea(self, idea_id: int) -> None:
+        """Mark a content idea as dismissed."""
+        self._set_content_idea_status(idea_id, "dismissed")
+
+    def _set_content_idea_status(self, idea_id: int, status: str) -> None:
+        status = self._normalize_content_idea_status(status)
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """UPDATE content_ideas
+               SET status = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, now, idea_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Content idea {idea_id} does not exist")
+        self.conn.commit()
+
+    @staticmethod
+    def _normalize_content_idea_priority(priority: str | None) -> str:
+        value = (priority or "normal").strip().lower()
+        if value not in {"high", "normal", "low"}:
+            raise ValueError("priority must be one of: high, normal, low")
+        return value
+
+    @staticmethod
+    def _normalize_content_idea_status(status: str | None) -> str:
+        value = (status or "open").strip().lower()
+        if value not in {"open", "promoted", "dismissed"}:
+            raise ValueError("status must be one of: open, promoted, dismissed")
+        return value
 
     def get_content_without_topics(self) -> list[dict]:
         """Get published content that doesn't have topic entries yet.

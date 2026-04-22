@@ -412,6 +412,22 @@ CREATE TABLE IF NOT EXISTS planned_topics (
 );
 CREATE INDEX IF NOT EXISTS idx_planned_topics_campaign ON planned_topics(campaign_id);
 
+-- Lightweight manual idea inbox for future content seeds
+CREATE TABLE IF NOT EXISTS content_ideas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    note TEXT NOT NULL,
+    topic TEXT,
+    priority TEXT DEFAULT 'normal',      -- high | normal | low
+    status TEXT DEFAULT 'open',          -- open | promoted | dismissed
+    source TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_content_ideas_status_priority
+    ON content_ideas(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_content_ideas_topic
+    ON content_ideas(topic);
+
 -- Publish queue for scheduled posting at optimal times
 CREATE TABLE IF NOT EXISTS publish_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

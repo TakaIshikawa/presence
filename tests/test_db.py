@@ -34,6 +34,7 @@ class TestSchemaInit:
             "pipeline_runs",
             "content_publications",
             "content_variants",
+            "content_ideas",
         }
         assert expected.issubset(tables)
 
@@ -90,6 +91,22 @@ class TestSchemaInit:
             "content",
             "metadata",
             "created_at",
+        }
+        assert expected.issubset(cols)
+
+    def test_content_ideas_columns_exist(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(content_ideas)")
+        }
+        expected = {
+            "note",
+            "topic",
+            "priority",
+            "status",
+            "source",
+            "created_at",
+            "updated_at",
         }
         assert expected.issubset(cols)
 

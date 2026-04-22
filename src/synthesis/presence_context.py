@@ -16,6 +16,7 @@ class PresenceContext:
     voice_memory: str = ""
     content_mix: str = ""
     campaign_context: str = ""
+    idea_inbox: str = ""
     outcome_learning: str = ""
 
     def render(self) -> str:
@@ -25,6 +26,7 @@ class PresenceContext:
                 self.voice_memory,
                 self.content_mix,
                 self.campaign_context,
+                self.idea_inbox,
                 self.outcome_learning,
             )
             if section and section.strip()
@@ -68,6 +70,7 @@ class PresenceContextBuilder:
             voice_memory=self.build_voice_memory(content_type),
             content_mix=self.build_content_mix(content_type),
             campaign_context=self.build_campaign_context(),
+            idea_inbox=self.build_idea_inbox(),
             outcome_learning=self.build_outcome_learning(content_type),
         )
 
@@ -203,6 +206,31 @@ class PresenceContextBuilder:
             topic_line += "."
             lines.append(topic_line)
 
+        return "\n".join(lines)
+
+    def build_idea_inbox(self) -> str:
+        ideas = self._rows(
+            "get_content_ideas",
+            status="open",
+            priority="high",
+            limit=3,
+        )
+        if not ideas:
+            return ""
+
+        lines = [
+            "IDEA INBOX (optional seed notes):",
+            "- Use only if the source prompts or current work genuinely support the idea; do not force it.",
+        ]
+        for idea in ideas[:3]:
+            topic = idea.get("topic")
+            source = idea.get("source")
+            detail = self._snippet(idea.get("note", ""))
+            if topic:
+                detail = f"{topic}: {detail}"
+            if source:
+                detail += f" (source: {source})"
+            lines.append(f"- {detail}")
         return "\n".join(lines)
 
     def _active_campaign_limit_status(self) -> tuple[dict[str, Any], bool, str]:

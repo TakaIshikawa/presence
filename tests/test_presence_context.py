@@ -93,6 +93,35 @@ def test_campaign_context_includes_active_campaign_and_next_planned_topic(db):
     assert "2026-04-22" in section
 
 
+def test_idea_inbox_includes_high_priority_open_ideas_only(db):
+    db.add_content_idea(
+        "Turn the failed validation run into a note about boring release discipline.",
+        topic="testing",
+        priority="high",
+        source="manual",
+    )
+    db.add_content_idea(
+        "Low priority idea should not shape generation.",
+        topic="maintenance",
+        priority="low",
+    )
+    dismissed_id = db.add_content_idea(
+        "Dismissed idea should stay out of context.",
+        topic="debugging",
+        priority="high",
+    )
+    db.dismiss_content_idea(dismissed_id)
+
+    section = PresenceContextBuilder(db).build_idea_inbox()
+
+    assert "IDEA INBOX" in section
+    assert "validation run" in section
+    assert "testing" in section
+    assert "source: manual" in section
+    assert "Low priority" not in section
+    assert "Dismissed idea" not in section
+
+
 def test_outcome_learning_includes_real_metrics(db):
     content_id = _published_content(db, "A concrete post that got engagement.")
     db.insert_engagement(
