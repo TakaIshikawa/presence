@@ -147,6 +147,7 @@ from evaluation.posting_schedule import (
 )
 from output.bluesky_client import BlueskyClient
 from output.publish_errors import classify_publish_error, normalize_error_category
+from synthesis.alt_text_guard import validate_alt_text
 
 try:
     from output.x_client import XClient, parse_thread_content
@@ -175,6 +176,28 @@ except ModuleNotFoundError as exc:
 
         def adapt_for_bluesky(self, text: str, content_type: str = "x_post") -> str:
             return text
+
+
+def _alt_text_guard_mode(config) -> str:
+    publishing_config = getattr(config, "publishing", None)
+    mode = getattr(publishing_config, "alt_text_guard_mode", "strict")
+    if mode in {"strict", "warning"}:
+        return mode
+    return "strict"
+
+
+def _alt_text_guard_error(item: dict) -> str | None:
+    result = validate_alt_text(
+        item.get("image_alt_text"),
+        image_prompt=item.get("image_prompt"),
+        image_path=item.get("image_path"),
+        content_type=item.get("content_type"),
+    )
+    if result.passed:
+        return None
+    return "; ".join(
+        f"{issue.code}: {issue.message}" for issue in result.issues
+    )
 
 
 def main() -> None:
@@ -254,6 +277,18 @@ def main() -> None:
                     db.mark_queue_published(queue_id)
                     logger.info(f"  Queue item {queue_id} already completed")
                     continue
+
+                alt_text_error = _alt_text_guard_error(item)
+                if alt_text_error:
+                    if _alt_text_guard_mode(config) == "strict":
+                        db.mark_queue_failed(
+                            queue_id,
+                            f"Alt text guard failed: {alt_text_error}",
+                            error_category="media",
+                        )
+                        logger.error(f"  Alt text guard failed: {alt_text_error}")
+                        continue
+                    logger.warning(f"  Alt text guard warning: {alt_text_error}")
 
                 variant_type = _variant_type_for_content_type(content_type)
                 x_copy = db.get_content_variant_or_original(

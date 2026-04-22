@@ -547,6 +547,7 @@ class TestDefaults:
         assert isinstance(cfg.publishing, PublishingConfig)
         assert cfg.publishing.embargo_windows == []
         assert cfg.publishing.daily_platform_limits == {}
+        assert cfg.publishing.alt_text_guard_mode == "strict"
 
     def test_publishing_embargo_windows_override(self, tmp_path):
         windows = [
@@ -565,6 +566,13 @@ class TestDefaults:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.publishing.daily_platform_limits == {"x": 3, "bluesky": 2}
+
+    def test_publishing_alt_text_guard_mode_override(self, tmp_path):
+        data = _minimal_config_dict(
+            publishing={"alt_text_guard_mode": "warning"}
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.publishing.alt_text_guard_mode == "warning"
 
     def test_rate_limits_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

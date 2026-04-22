@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -23,6 +24,7 @@ def _insert_content(
     content_type="x_post",
     image_path=None,
     image_prompt=None,
+    image_alt_text=None,
 ):
     return db.insert_generated_content(
         content_type=content_type,
@@ -33,6 +35,7 @@ def _insert_content(
         eval_feedback="Good",
         image_path=image_path,
         image_prompt=image_prompt,
+        image_alt_text=image_alt_text,
     )
 
 
@@ -145,6 +148,67 @@ def test_preview_publish_cli_outputs_json(db, capsys):
     payload = json.loads(captured.out)
     assert payload["content"]["id"] == content_id
     assert payload["platforms"]["x"]["posts"][0]["text"] == "CLI preview post"
+
+
+def test_preview_publish_cli_blocks_failed_alt_text_in_strict_mode(db, capsys):
+    content_id = _insert_content(
+        db,
+        "CLI visual preview",
+        content_type="x_visual",
+        image_path="/tmp/presence-images/visual.png",
+        image_prompt="Launch metrics dashboard",
+    )
+
+    import preview_publish
+
+    class Context:
+        def __enter__(self):
+            config = SimpleNamespace(
+                publishing=SimpleNamespace(alt_text_guard_mode="strict")
+            )
+            return config, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("preview_publish.script_context", return_value=Context()):
+        exit_code = preview_publish.main(["--content-id", str(content_id)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "Alt text guard failed:" in captured.err
+    assert "missing_alt_text" in captured.err
+
+
+def test_preview_publish_cli_warns_for_failed_alt_text_in_warning_mode(db, capsys):
+    content_id = _insert_content(
+        db,
+        "CLI visual preview",
+        content_type="x_visual",
+        image_path="/tmp/presence-images/visual.png",
+        image_prompt="Launch metrics dashboard",
+    )
+
+    import preview_publish
+
+    class Context:
+        def __enter__(self):
+            config = SimpleNamespace(
+                publishing=SimpleNamespace(alt_text_guard_mode="warning")
+            )
+            return config, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("preview_publish.script_context", return_value=Context()):
+        exit_code = preview_publish.main(["--content-id", str(content_id)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Alt text guard warning:" in captured.err
+    assert "Alt text guard: failed" in captured.out
 
 
 def test_preview_publish_cli_writes_linkedin_artifact(db, tmp_path, capsys):

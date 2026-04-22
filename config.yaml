@@ -138,6 +138,7 @@ publish_queue:
 publishing:
   embargo_windows: []
   daily_platform_limits: {}
+  alt_text_guard_mode: "strict"  # strict blocks visual publish previews; warning only warns
   # Examples:
   # - timezone: "Asia/Tokyo"
   #   start: "22:00"

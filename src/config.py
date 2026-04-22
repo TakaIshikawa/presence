@@ -185,6 +185,7 @@ class PublishQueueConfig:
 class PublishingConfig:
     embargo_windows: list[dict] = field(default_factory=list)
     daily_platform_limits: dict[str, int] = field(default_factory=dict)
+    alt_text_guard_mode: str = "strict"
 
 
 @dataclass
@@ -318,6 +319,13 @@ def _require(data: dict, *keys: str, section: str) -> any:
             raise ValueError(f"Missing required config field: {key_path}")
         current = current[key]
     return current
+
+
+def _alt_text_guard_mode(value: str | None) -> str:
+    """Return a supported alt-text guard mode."""
+    if value in {"strict", "warning"}:
+        return value
+    return "strict"
 
 
 def load_config(config_path: Optional[str] = None) -> Config:
@@ -512,6 +520,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 and not isinstance(limit, bool)
                 and limit >= 0
             },
+            alt_text_guard_mode=_alt_text_guard_mode(
+                publishing_data.get("alt_text_guard_mode", "strict")
+            ),
         )
 
     rate_limits_config = RateLimitsConfig()

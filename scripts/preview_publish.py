@@ -25,6 +25,37 @@ from output.linkedin_export import (  # noqa: E402
 from runner import script_context  # noqa: E402
 
 
+def _alt_text_guard_mode(config: object) -> str:
+    publishing = getattr(config, "publishing", None)
+    mode = getattr(publishing, "alt_text_guard_mode", "strict")
+    if mode in {"strict", "warning"}:
+        return mode
+    return "strict"
+
+
+def _alt_text_guard_messages(preview: dict) -> list[str]:
+    alt_text = preview.get("alt_text") or {}
+    if alt_text.get("passed", True):
+        return []
+    return [
+        f"{issue['code']}: {issue['message']}"
+        for issue in alt_text.get("issues", [])
+    ]
+
+
+def _enforce_alt_text_guard(preview: dict, config: object) -> bool:
+    messages = _alt_text_guard_messages(preview)
+    if not messages:
+        return True
+
+    mode = _alt_text_guard_mode(config)
+    prefix = "Alt text guard failed" if mode == "strict" else "Alt text guard warning"
+    print(f"{prefix}:", file=sys.stderr)
+    for message in messages:
+        print(f"- {message}", file=sys.stderr)
+    return mode != "strict"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     target = parser.add_mutually_exclusive_group(required=True)
@@ -58,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.WARNING)
 
-    with script_context() as (_config, db):
+    with script_context() as (config, db):
         try:
             preview = build_publication_preview(
                 db,
@@ -66,6 +97,14 @@ def main(argv: list[str] | None = None) -> int:
                 queue_id=args.queue_id,
                 include_hashtag_suggestions=args.suggest_hashtags,
             )
+        except PreviewRecordNotFound as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if not _enforce_alt_text_guard(preview, config):
+            return 1
+
+        try:
             if args.linkedin_out:
                 linkedin_export = build_linkedin_export_from_db(
                     db,
@@ -76,9 +115,6 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
                 write_linkedin_markdown(linkedin_export, args.linkedin_out)
-        except PreviewRecordNotFound as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
         except LinkedInExportError as exc:
             print(str(exc), file=sys.stderr)
             return 1

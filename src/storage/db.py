@@ -4773,7 +4773,7 @@ class Database:
             """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
                       gc.content, gc.content_type, gc.published,
                       gc.published_url, gc.tweet_id, gc.bluesky_uri,
-                      gc.image_path, gc.image_alt_text
+                      gc.image_path, gc.image_prompt, gc.image_alt_text
                FROM publish_queue pq
                INNER JOIN generated_content gc ON gc.id = pq.content_id
                WHERE pq.status IN ('queued', 'failed')

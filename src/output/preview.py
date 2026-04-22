@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from synthesis.alt_text_guard import validate_alt_text
 from synthesis.hashtag_suggester import HashtagSuggestions, suggest_hashtags
 
 from .platform_adapter import BlueskyPlatformAdapter, count_graphemes
@@ -322,6 +323,12 @@ def build_publication_preview(
     persona_guard = _persona_guard_status(
         _fetch_persona_guard_summary(db, content["id"])
     )
+    alt_text = validate_alt_text(
+        content.get("image_alt_text"),
+        image_prompt=content.get("image_prompt"),
+        image_path=content.get("image_path"),
+        content_type=content.get("content_type"),
+    ).as_dict()
 
     platforms = {}
     for platform in ("x", "bluesky"):
@@ -348,6 +355,7 @@ def build_publication_preview(
             ),
             "image_path": content.get("image_path"),
             "image_alt_text": content.get("image_alt_text"),
+            "alt_text": alt_text,
         }
 
     return {
@@ -365,6 +373,7 @@ def build_publication_preview(
         "queue": queue,
         "claim_check": claim_check,
         "persona_guard": persona_guard,
+        "alt_text": alt_text,
         "hashtag_suggestions": (
             hashtag_suggestions.as_dict() if hashtag_suggestions else None
         ),
@@ -396,6 +405,12 @@ def format_preview(preview: dict) -> str:
         lines.append(f"Image: {content['image_path']}")
     if content.get("image_alt_text"):
         lines.append(f"Alt text: {content['image_alt_text']}")
+
+    alt_text = preview.get("alt_text")
+    if alt_text and alt_text.get("required"):
+        lines.append(f"Alt text guard: {alt_text['status']}")
+        for issue in alt_text.get("issues", []):
+            lines.append(f"- {issue['code']}: {issue['message']}")
 
     claim_check = preview.get("claim_check")
     if claim_check:
