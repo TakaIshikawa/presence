@@ -52,6 +52,7 @@ class TestReplyDrafterWithKnowledge:
             insight TEXT,
             embedding BLOB,
             attribution_required INTEGER DEFAULT 1,
+            license TEXT DEFAULT 'attribution_required',
             approved INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(source_type, source_id)

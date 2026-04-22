@@ -39,6 +39,7 @@ class TestSchemaInit:
             "content_ideas",
             "eval_batches",
             "eval_results",
+            "model_usage",
         }
         assert expected.issubset(tables)
 
@@ -207,6 +208,74 @@ class TestPromptVersions:
         assert first["version"] == 1
         assert second["version"] == 2
         assert first["prompt_hash"] != second["prompt_hash"]
+
+
+class TestModelUsage:
+    def test_record_model_usage_persists_event(self, db):
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="post",
+            eval_score=7.0,
+            eval_feedback="ok",
+        )
+        run_id = db.insert_pipeline_run(
+            batch_id="usage-batch",
+            content_type="x_post",
+            candidates_generated=1,
+            best_candidate_index=0,
+            best_score_before_refine=7.0,
+            content_id=content_id,
+        )
+
+        usage_id = db.record_model_usage(
+            model_name="claude-sonnet-4-6",
+            operation_name="synthesis.generate_x_post",
+            input_tokens=100,
+            output_tokens=25,
+            total_tokens=125,
+            estimated_cost=0.000675,
+            content_id=content_id,
+            pipeline_run_id=run_id,
+        )
+
+        row = db.conn.execute(
+            "SELECT * FROM model_usage WHERE id = ?", (usage_id,)
+        ).fetchone()
+        assert row["model_name"] == "claude-sonnet-4-6"
+        assert row["operation_name"] == "synthesis.generate_x_post"
+        assert row["input_tokens"] == 100
+        assert row["output_tokens"] == 25
+        assert row["total_tokens"] == 125
+        assert row["estimated_cost"] == pytest.approx(0.000675)
+        assert row["content_id"] == content_id
+        assert row["pipeline_run_id"] == run_id
+
+    def test_get_model_usage_summary_groups_by_day_operation_and_model(self, db):
+        db.record_model_usage(
+            "claude-sonnet-4-6",
+            "synthesis.generate_candidates.x_post",
+            100,
+            20,
+            estimated_cost=0.0006,
+        )
+        db.record_model_usage(
+            "claude-sonnet-4-6",
+            "synthesis.generate_candidates.x_post",
+            50,
+            10,
+            estimated_cost=0.0003,
+        )
+
+        rows = db.get_model_usage_summary(since_days=1)
+
+        assert len(rows) == 1
+        assert rows[0]["call_count"] == 2
+        assert rows[0]["input_tokens"] == 150
+        assert rows[0]["output_tokens"] == 30
+        assert rows[0]["total_tokens"] == 180
+        assert rows[0]["estimated_cost"] == pytest.approx(0.0009)
 
 
 # --- Schema migration logic ---

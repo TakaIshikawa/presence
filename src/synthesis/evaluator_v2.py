@@ -7,6 +7,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+from model_usage import record_anthropic_usage
+
 logger = logging.getLogger(__name__)
 
 
@@ -224,6 +226,12 @@ class CrossModelEvaluator:
                 model=self.model,
                 max_tokens=800,
                 messages=[{"role": "user", "content": filled}],
+            )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.model,
+                operation_name="synthesis.evaluate_candidates",
             )
         except anthropic.APIConnectionError as e:
             logger.error(f"Failed to connect to Anthropic API: {e}")

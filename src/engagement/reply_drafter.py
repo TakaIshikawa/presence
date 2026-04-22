@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 import anthropic
 
+from model_usage import record_anthropic_usage
+
 if TYPE_CHECKING:
     from engagement.cultivate_bridge import PersonContext
     from knowledge.store import KnowledgeStore, KnowledgeItem
@@ -92,12 +94,14 @@ class ReplyDrafter:
         knowledge_store: Optional["KnowledgeStore"] = None,
         restricted_prompt_behavior: str = KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
         freshness_half_life_days: Optional[float] = None,
+        db=None,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.knowledge_store = knowledge_store
         self.restricted_prompt_behavior = restricted_prompt_behavior
         self.freshness_half_life_days = freshness_half_life_days
+        self.db = db
 
     def draft(
         self,
@@ -172,6 +176,12 @@ class ReplyDrafter:
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
+        record_anthropic_usage(
+            self.db,
+            response,
+            model_name=self.model,
+            operation_name="engagement.draft_reply",
+        )
 
         reply_text = response.content[0].text.strip().strip('"')
 
@@ -244,6 +254,12 @@ class ReplyDrafter:
             max_tokens=150,
             system=PROACTIVE_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
+        )
+        record_anthropic_usage(
+            self.db,
+            response,
+            model_name=self.model,
+            operation_name="engagement.draft_proactive_reply",
         )
 
         reply_text = response.content[0].text.strip().strip('"')

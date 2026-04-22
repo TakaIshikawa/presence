@@ -183,6 +183,25 @@ CREATE TABLE IF NOT EXISTS engagement_predictions (
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_content ON engagement_predictions(content_id);
 
+-- Model usage accounting for Anthropic calls
+CREATE TABLE IF NOT EXISTS model_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_name TEXT NOT NULL,
+    operation_name TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost REAL NOT NULL DEFAULT 0,
+    content_id INTEGER REFERENCES generated_content(id),
+    pipeline_run_id INTEGER REFERENCES pipeline_runs(id),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_model_usage_created ON model_usage(created_at);
+CREATE INDEX IF NOT EXISTS idx_model_usage_operation_model
+    ON model_usage(operation_name, model_name);
+CREATE INDEX IF NOT EXISTS idx_model_usage_content ON model_usage(content_id);
+CREATE INDEX IF NOT EXISTS idx_model_usage_pipeline_run ON model_usage(pipeline_run_id);
+
 -- Prompt versions for eval tracking
 CREATE TABLE IF NOT EXISTS prompt_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

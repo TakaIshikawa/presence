@@ -7,6 +7,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+from model_usage import record_anthropic_usage
+
 logger = logging.getLogger(__name__)
 
 
@@ -82,6 +84,12 @@ class ContentRefiner:
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": filled}],
             )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.refine_model,
+                operation_name=f"synthesis.refine.{content_type}",
+            )
             return response.content[0].text.strip()
         except anthropic.APIConnectionError as e:
             logger.error(f"Failed to connect to Anthropic API: {e}")
@@ -99,6 +107,12 @@ class ContentRefiner:
                 model=self.gate_model,
                 max_tokens=200,
                 messages=[{"role": "user", "content": filled}],
+            )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.gate_model,
+                operation_name=f"synthesis.final_gate.{content_type}",
             )
         except anthropic.APIConnectionError as e:
             logger.error(f"Failed to connect to Anthropic API: {e}")

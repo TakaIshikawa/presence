@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
+from model_usage import record_anthropic_usage
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,6 +82,12 @@ class ContentGenerator:
                 max_tokens=500,
                 messages=[{"role": "user", "content": filled}]
             )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.model,
+                operation_name="synthesis.generate_x_post",
+            )
         except anthropic.APIConnectionError as e:
             error_name = type(e).__name__
             logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
@@ -124,6 +132,12 @@ class ContentGenerator:
                 model=self.model,
                 max_tokens=500,
                 messages=[{"role": "user", "content": filled}]
+            )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.model,
+                operation_name="synthesis.generate_x_post_batched",
             )
         except anthropic.APIConnectionError as e:
             error_name = type(e).__name__
@@ -237,6 +251,12 @@ class ContentGenerator:
                     temperature=temp,
                     messages=[{"role": "user", "content": filled}],
                 )
+                record_anthropic_usage(
+                    self.db,
+                    response,
+                    model_name=self.model,
+                    operation_name=f"synthesis.generate_candidates.{content_type}",
+                )
             except anthropic.APIConnectionError as e:
                 error_name = type(e).__name__
                 logger.error(f"Failed to connect to Anthropic API: {error_name}: {e}")
@@ -270,6 +290,12 @@ class ContentGenerator:
                 model=self.model,
                 max_tokens=200,
                 messages=[{"role": "user", "content": filled}],
+            )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.model,
+                operation_name="synthesis.condense",
             )
         except anthropic.APIConnectionError as e:
             error_name = type(e).__name__
@@ -306,6 +332,12 @@ class ContentGenerator:
                 model=self.model,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": filled}]
+            )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.model,
+                operation_name="synthesis.generate_x_thread",
             )
         except anthropic.APIConnectionError as e:
             error_name = type(e).__name__
@@ -350,6 +382,12 @@ class ContentGenerator:
                 model=self.model,
                 max_tokens=4000,
                 messages=[{"role": "user", "content": filled}]
+            )
+            record_anthropic_usage(
+                self.db,
+                response,
+                model_name=self.model,
+                operation_name="synthesis.generate_blog_post",
             )
         except anthropic.APIConnectionError as e:
             error_name = type(e).__name__

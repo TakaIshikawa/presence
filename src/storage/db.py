@@ -254,6 +254,36 @@ class Database:
                 self.conn.execute("ALTER TABLE engagement_predictions ADD COLUMN prompt_type TEXT")
             if ep_cols and "prompt_hash" not in ep_cols:
                 self.conn.execute("ALTER TABLE engagement_predictions ADD COLUMN prompt_hash TEXT")
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS model_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_name TEXT NOT NULL,
+                    operation_name TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost REAL NOT NULL DEFAULT 0,
+                    content_id INTEGER REFERENCES generated_content(id),
+                    pipeline_run_id INTEGER REFERENCES pipeline_runs(id),
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_model_usage_created "
+                "ON model_usage(created_at)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_model_usage_operation_model "
+                "ON model_usage(operation_name, model_name)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_model_usage_content "
+                "ON model_usage(content_id)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_model_usage_pipeline_run "
+                "ON model_usage(pipeline_run_id)"
+            )
             # Migrate: create meta table if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS meta (
@@ -597,6 +627,68 @@ class Database:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    def record_model_usage(
+        self,
+        model_name: str,
+        operation_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int | None = None,
+        estimated_cost: float = 0.0,
+        content_id: int | None = None,
+        pipeline_run_id: int | None = None,
+    ) -> int:
+        """Persist one model usage event."""
+        if not model_name:
+            raise ValueError("model_name is required")
+        if not operation_name:
+            raise ValueError("operation_name is required")
+
+        input_tokens = max(0, int(input_tokens or 0))
+        output_tokens = max(0, int(output_tokens or 0))
+        total_tokens = (
+            input_tokens + output_tokens
+            if total_tokens is None
+            else max(0, int(total_tokens or 0))
+        )
+        cursor = self.conn.execute(
+            """INSERT INTO model_usage
+               (model_name, operation_name, input_tokens, output_tokens,
+                total_tokens, estimated_cost, content_id, pipeline_run_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                model_name,
+                operation_name,
+                input_tokens,
+                output_tokens,
+                total_tokens,
+                float(estimated_cost or 0.0),
+                content_id,
+                pipeline_run_id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_model_usage_summary(self, since_days: int = 30) -> list[dict]:
+        """Summarize model usage by day, operation, and model."""
+        cursor = self.conn.execute(
+            """SELECT date(created_at) AS day,
+                      operation_name,
+                      model_name,
+                      COUNT(*) AS call_count,
+                      SUM(input_tokens) AS input_tokens,
+                      SUM(output_tokens) AS output_tokens,
+                      SUM(total_tokens) AS total_tokens,
+                      SUM(estimated_cost) AS estimated_cost
+               FROM model_usage
+               WHERE created_at >= datetime('now', ?)
+               GROUP BY day, operation_name, model_name
+               ORDER BY day DESC, operation_name, model_name""",
+            (f"-{since_days} days",),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     # Claude messages
     def is_message_processed(self, message_uuid: str) -> bool:
