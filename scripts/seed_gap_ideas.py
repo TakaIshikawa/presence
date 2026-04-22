@@ -190,16 +190,13 @@ def seed_gap_ideas(
 
     results: list[SeedResult] = []
     for candidate in candidates:
-        existing = None
         metadata = candidate.source_metadata
-        if candidate.kind == "planned":
-            existing = db.find_open_content_idea_for_planned_topic(
-                metadata["planned_topic_id"],
-            )
-        else:
-            existing = db.find_open_content_idea_for_gap_fingerprint(
-                metadata["gap_fingerprint"],
-            )
+        existing = db.find_active_content_idea_for_source_metadata(
+            note=candidate.note,
+            topic=candidate.topic,
+            source=SOURCE_NAME,
+            source_metadata=metadata,
+        )
 
         if existing:
             results.append(
@@ -208,7 +205,7 @@ def seed_gap_ideas(
                     kind=candidate.kind,
                     topic=candidate.topic,
                     idea_id=existing["id"],
-                    reason="open duplicate",
+                    reason=f"{existing['status']} duplicate",
                     note=candidate.note,
                 )
             )

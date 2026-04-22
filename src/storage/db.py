@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import json
 import hashlib
+import re
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,18 @@ from datetime import datetime, timedelta, timezone
 from output.publish_errors import classify_publish_error, normalize_error_category
 
 MAX_RETRIES = 3
+CONTENT_IDEA_METADATA_ID_KEYS = {
+    "activity_id",
+    "gap_fingerprint",
+    "planned_topic_id",
+    "release_id",
+    "source_id",
+}
+CONTENT_IDEA_METADATA_ID_EXCLUSIONS = {
+    "campaign_id",
+    "content_id",
+    "content_idea_id",
+}
 
 
 class DatabaseError(Exception):
@@ -4771,6 +4784,83 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def find_similar_content_ideas(
+        self,
+        *,
+        note: str | None = None,
+        topic: str | None = None,
+        source: str | None = None,
+        source_metadata: dict | str | None = None,
+        statuses: tuple[str, ...] = ("open", "promoted"),
+        exclude_id: int | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Find active content ideas that duplicate topic, note, or source IDs."""
+        if limit <= 0:
+            return []
+
+        normalized_topic = self._normalize_content_idea_text(topic)
+        normalized_note = self._normalize_content_idea_text(note)
+        normalized_source = self._normalize_content_idea_text(source)
+        metadata_ids = self._content_idea_source_metadata_ids(source_metadata)
+        statuses = tuple(
+            self._normalize_content_idea_status(status)
+            for status in (statuses or ("open", "promoted"))
+        )
+        if not statuses:
+            return []
+
+        filters = [f"status IN ({','.join('?' for _ in statuses)})"]
+        params: list[object] = list(statuses)
+        if exclude_id is not None:
+            filters.append("id != ?")
+            params.append(exclude_id)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM content_ideas
+                WHERE {' AND '.join(filters)}
+                ORDER BY created_at ASC, id ASC""",
+            params,
+        )
+
+        matches: list[dict] = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            reasons: list[str] = []
+            if (
+                normalized_topic
+                and normalized_topic
+                == self._normalize_content_idea_text(item.get("topic"))
+            ):
+                reasons.append("topic")
+            if (
+                normalized_note
+                and normalized_note
+                == self._normalize_content_idea_text(item.get("note"))
+            ):
+                reasons.append("note")
+
+            existing_source = self._normalize_content_idea_text(item.get("source"))
+            existing_ids = self._content_idea_source_metadata_ids(
+                item.get("source_metadata"),
+            )
+            for key, value in sorted(metadata_ids.items()):
+                if existing_ids.get(key) != value:
+                    continue
+                if (
+                    normalized_source
+                    and existing_source
+                    and normalized_source != existing_source
+                ):
+                    continue
+                reasons.append(f"source_metadata.{key}")
+
+            if reasons:
+                item["duplicate_reasons"] = reasons
+                matches.append(item)
+                if len(matches) >= limit:
+                    break
+        return matches
+
     def find_open_content_idea_for_planned_topic(
         self,
         planned_topic_id: int,
@@ -4816,6 +4906,25 @@ class Database:
             ):
                 return item
         return None
+
+    def find_active_content_idea_for_source_metadata(
+        self,
+        *,
+        note: str | None = None,
+        topic: str | None = None,
+        source: str | None = None,
+        source_metadata: dict | str | None = None,
+    ) -> dict | None:
+        """Return the first open/promoted idea matching source identity metadata."""
+        matches = self.find_similar_content_ideas(
+            note=note,
+            topic=topic,
+            source=source,
+            source_metadata=source_metadata,
+            statuses=("open", "promoted"),
+            limit=1,
+        )
+        return matches[0] if matches else None
 
     def _find_open_content_idea_by_metadata(
         self,
@@ -4944,6 +5053,51 @@ class Database:
         if value not in {"open", "promoted", "dismissed"}:
             raise ValueError("status must be one of: open, promoted, dismissed")
         return value
+
+    @staticmethod
+    def _normalize_content_idea_text(value: object | None) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+    @staticmethod
+    def _content_idea_metadata_value(value: object) -> str:
+        if isinstance(value, (dict, list, tuple)):
+            return json.dumps(value, sort_keys=True, separators=(",", ":"))
+        return str(value).strip().lower()
+
+    @classmethod
+    def _content_idea_source_metadata_ids(
+        cls,
+        source_metadata: dict | str | None,
+    ) -> dict[str, str]:
+        if not source_metadata:
+            return {}
+        if isinstance(source_metadata, str):
+            try:
+                metadata = json.loads(source_metadata)
+            except (TypeError, ValueError):
+                return {}
+        elif isinstance(source_metadata, dict):
+            metadata = source_metadata
+        else:
+            return {}
+        if not isinstance(metadata, dict):
+            return {}
+
+        ids: dict[str, str] = {}
+        for key, value in metadata.items():
+            if value in (None, ""):
+                continue
+            normalized_key = str(key).strip().lower()
+            is_identity_key = (
+                normalized_key in CONTENT_IDEA_METADATA_ID_KEYS
+                or (
+                    normalized_key.endswith("_id")
+                    and normalized_key not in CONTENT_IDEA_METADATA_ID_EXCLUSIONS
+                )
+            )
+            if is_identity_key:
+                ids[normalized_key] = cls._content_idea_metadata_value(value)
+        return ids
 
     def get_content_without_topics(self) -> list[dict]:
         """Get published content that doesn't have topic entries yet.

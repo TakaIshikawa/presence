@@ -140,9 +140,11 @@ def seed_release_ideas(
     results: list[SeedResult] = []
     for row in releases:
         candidate = release_to_candidate(row)
-        existing = db.find_active_content_idea_for_release(
-            candidate.repo_name,
-            candidate.release_id,
+        existing = db.find_active_content_idea_for_source_metadata(
+            note=candidate.note,
+            topic=candidate.topic,
+            source=SOURCE_NAME,
+            source_metadata=candidate.source_metadata,
         )
         if existing:
             results.append(

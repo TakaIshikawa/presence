@@ -139,3 +139,63 @@ def test_content_ideas_cli_helpers_print_expected_output(db, capsys):
     output = capsys.readouterr().out
     assert f"Dismissed content idea {idea_id}" in output
     assert db.get_content_idea(idea_id)["status"] == "dismissed"
+
+
+def test_cmd_add_skips_duplicate_unless_forced(db, capsys):
+    existing_id = cmd_add(
+        db,
+        "  Turn duplicate seeds into one durable idea. ",
+        topic="Testing",
+        source="manual",
+    )
+    capsys.readouterr()
+
+    duplicate_id = cmd_add(
+        db,
+        "Turn duplicate seeds into one durable idea.",
+        topic="testing",
+        source="manual",
+    )
+    output = capsys.readouterr().out
+
+    assert duplicate_id == existing_id
+    assert "Skipped duplicate content idea" in output
+    assert len(db.get_content_ideas(status="open")) == 1
+
+    forced_id = cmd_add(
+        db,
+        "Turn duplicate seeds into one durable idea.",
+        topic="testing",
+        source="manual",
+        force=True,
+    )
+    output = capsys.readouterr().out
+
+    assert forced_id != existing_id
+    assert "Warning: similar content idea" in output
+    assert len(db.get_content_ideas(status="open")) == 2
+
+
+def test_cmd_promote_skips_similar_active_idea_unless_forced(db, capsys):
+    first_id = db.add_content_idea("First note", topic="testing")
+    second_id = db.add_content_idea("Second note", topic="TESTING")
+
+    skipped = cmd_promote(db, first_id, target_date="2026-05-01")
+    output = capsys.readouterr().out
+
+    assert skipped is None
+    assert "Skipped promoting content idea" in output
+    assert db.get_content_idea(first_id)["status"] == "open"
+
+    planned_id = cmd_promote(
+        db,
+        first_id,
+        target_date="2026-05-01",
+        force=True,
+    )
+    output = capsys.readouterr().out
+
+    assert planned_id is not None
+    assert "Warning: promoting despite similar content idea" in output
+    assert db.get_content_idea(first_id)["status"] == "promoted"
+    assert db.get_content_idea(second_id)["status"] == "open"

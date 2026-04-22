@@ -1031,6 +1031,46 @@ class TestGitHubActivity:
         assert found["id"] == open_id
         assert found["id"] != dismissed_id
 
+    def test_find_similar_content_ideas_matches_topic_note_and_metadata_ids(self, db):
+        topic_id = db.add_content_idea("Topic seed", topic="  Reliability  ")
+        note_id = db.add_content_idea("Same   note seed", topic="ops")
+        metadata_id = db.add_content_idea(
+            "Release seed",
+            topic="release",
+            source="github_release_seed",
+            source_metadata={
+                "source": "github_release_seed",
+                "repo_name": "repo",
+                "release_id": 101,
+            },
+        )
+        dismissed_id = db.add_content_idea(
+            "Dismissed release seed",
+            topic="ignored",
+            status="dismissed",
+            source="github_release_seed",
+            source_metadata={
+                "source": "github_release_seed",
+                "repo_name": "repo",
+                "release_id": 101,
+            },
+        )
+
+        topic_matches = db.find_similar_content_ideas(topic="reliability")
+        note_matches = db.find_similar_content_ideas(note="same note seed")
+        metadata_matches = db.find_similar_content_ideas(
+            source="github_release_seed",
+            source_metadata={"release_id": "101"},
+        )
+
+        assert topic_matches[0]["id"] == topic_id
+        assert topic_matches[0]["duplicate_reasons"] == ["topic"]
+        assert note_matches[0]["id"] == note_id
+        assert note_matches[0]["duplicate_reasons"] == ["note"]
+        assert metadata_matches[0]["id"] == metadata_id
+        assert "source_metadata.release_id" in metadata_matches[0]["duplicate_reasons"]
+        assert dismissed_id not in [item["id"] for item in metadata_matches]
+
     def test_github_activity_recent_and_unresolved_helpers(self, db):
         db.upsert_github_activity(
             repo_name="repo",

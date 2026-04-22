@@ -19,8 +19,30 @@ def cmd_add(
     topic: str | None = None,
     priority: str = "normal",
     source: str | None = None,
+    force: bool = False,
 ) -> int:
     """Add a seed note to the content idea inbox."""
+    duplicates = db.find_similar_content_ideas(
+        note=note,
+        topic=topic,
+        source=source,
+        statuses=("open", "promoted"),
+        limit=1,
+    )
+    if duplicates and not force:
+        duplicate = duplicates[0]
+        print(
+            f"Skipped duplicate content idea {duplicate['id']} "
+            f"({duplicate.get('status')}; {', '.join(duplicate['duplicate_reasons'])}). "
+            "Use --force to add anyway."
+        )
+        return duplicate["id"]
+    if duplicates:
+        duplicate = duplicates[0]
+        print(
+            f"Warning: similar content idea {duplicate['id']} exists "
+            f"({duplicate.get('status')}; {', '.join(duplicate['duplicate_reasons'])})."
+        )
     idea_id = db.add_content_idea(
         note=note,
         topic=topic,
@@ -76,8 +98,35 @@ def cmd_promote(
     topic: str | None = None,
     angle: str | None = None,
     force: bool = False,
-) -> int:
+) -> int | None:
     """Promote an idea into planned_topics."""
+    idea = db.get_content_idea(idea_id)
+    if idea is None:
+        raise ValueError(f"Content idea {idea_id} does not exist")
+    source_metadata = idea.get("source_metadata")
+    duplicates = db.find_similar_content_ideas(
+        note=idea.get("note"),
+        topic=topic or idea.get("topic"),
+        source=idea.get("source"),
+        source_metadata=source_metadata,
+        statuses=("open", "promoted"),
+        exclude_id=idea_id,
+        limit=1,
+    )
+    if duplicates and not force:
+        duplicate = duplicates[0]
+        print(
+            f"Skipped promoting content idea {idea_id}; similar content idea "
+            f"{duplicate['id']} is {duplicate.get('status')} "
+            f"({', '.join(duplicate['duplicate_reasons'])}). Use --force to promote anyway."
+        )
+        return None
+    if duplicates:
+        duplicate = duplicates[0]
+        print(
+            f"Warning: promoting despite similar content idea {duplicate['id']} "
+            f"({duplicate.get('status')}; {', '.join(duplicate['duplicate_reasons'])})."
+        )
     planned_topic_id = db.promote_content_idea(
         idea_id,
         target_date=_validate_date(target_date),
@@ -110,6 +159,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Idea priority (default: normal)",
     )
     add_parser.add_argument("--source", help="Where this idea came from")
+    add_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Add even if a similar open or promoted idea exists",
+    )
 
     list_parser = subparsers.add_parser("list", help="List content ideas")
     list_parser.add_argument(
@@ -166,6 +220,7 @@ def main() -> None:
                     topic=args.topic,
                     priority=args.priority,
                     source=args.source,
+                    force=args.force,
                 )
             elif args.command == "list":
                 status = None if args.status == "all" else args.status
