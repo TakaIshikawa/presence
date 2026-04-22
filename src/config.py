@@ -177,6 +177,21 @@ class OperationsHealthConfig:
 
 
 @dataclass
+class OperationsAlertsConfig:
+    max_consecutive_publish_failures: int = 3
+    max_ingestion_age_minutes: int = 60
+    max_queue_backlog_items: int = 10
+    evaluation_window_hours: int = 24
+    min_evaluation_runs: int = 3
+    min_evaluation_pass_rate: float = 0.5
+
+
+@dataclass
+class OperationsConfig:
+    alerts: OperationsAlertsConfig = field(default_factory=OperationsAlertsConfig)
+
+
+@dataclass
 class ImageGenConfig:
     provider: str = "pillow"
     output_dir: str = "generated_images"
@@ -220,6 +235,7 @@ class Config:
     publish_queue: PublishQueueConfig
     rate_limits: RateLimitsConfig
     operations_health: OperationsHealthConfig
+    operations: OperationsConfig
     proactive: Optional[ProactiveConfig]
     image_gen: Optional[ImageGenConfig]
 
@@ -465,6 +481,28 @@ def load_config(config_path: Optional[str] = None) -> Config:
             ),
         )
 
+    operations_alerts_data = data.get("operations", {}).get("alerts", {})
+    operations_config = OperationsConfig(
+        alerts=OperationsAlertsConfig(
+            max_consecutive_publish_failures=operations_alerts_data.get(
+                "max_consecutive_publish_failures", 3
+            ),
+            max_ingestion_age_minutes=operations_alerts_data.get(
+                "max_ingestion_age_minutes", 60
+            ),
+            max_queue_backlog_items=operations_alerts_data.get(
+                "max_queue_backlog_items", 10
+            ),
+            evaluation_window_hours=operations_alerts_data.get(
+                "evaluation_window_hours", 24
+            ),
+            min_evaluation_runs=operations_alerts_data.get("min_evaluation_runs", 3),
+            min_evaluation_pass_rate=operations_alerts_data.get(
+                "min_evaluation_pass_rate", 0.5
+            ),
+        )
+    )
+
     # Parse proactive engagement config if present
     proactive_config = None
     if "proactive" in data:
@@ -541,6 +579,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         publish_queue=publish_queue_config,
         rate_limits=rate_limits_config,
         operations_health=operations_health_config,
+        operations=operations_config,
         proactive=proactive_config,
         image_gen=image_gen_config,
     )

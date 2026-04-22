@@ -20,6 +20,8 @@ from config import (
     PublishQueueConfig,
     RateLimitsConfig,
     OperationsHealthConfig,
+    OperationsAlertsConfig,
+    OperationsConfig,
     NewsletterConfig,
     CuratedSource,
     CuratedSourcesConfig,
@@ -439,6 +441,38 @@ class TestDefaults:
         assert cfg.operations_health.max_poll_age_minutes == 15
         assert cfg.operations_health.max_failed_queue_items == 2
         assert cfg.operations_health.max_pipeline_rejection_rate == 0.25
+
+    def test_operations_alerts_defaults(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert isinstance(cfg.operations, OperationsConfig)
+        assert isinstance(cfg.operations.alerts, OperationsAlertsConfig)
+        assert cfg.operations.alerts.max_consecutive_publish_failures == 3
+        assert cfg.operations.alerts.max_ingestion_age_minutes == 60
+        assert cfg.operations.alerts.max_queue_backlog_items == 10
+        assert cfg.operations.alerts.evaluation_window_hours == 24
+        assert cfg.operations.alerts.min_evaluation_runs == 3
+        assert cfg.operations.alerts.min_evaluation_pass_rate == 0.5
+
+    def test_operations_alerts_overrides(self, tmp_path):
+        data = _minimal_config_dict(
+            operations={
+                "alerts": {
+                    "max_consecutive_publish_failures": 1,
+                    "max_ingestion_age_minutes": 20,
+                    "max_queue_backlog_items": 4,
+                    "evaluation_window_hours": 12,
+                    "min_evaluation_runs": 5,
+                    "min_evaluation_pass_rate": 0.8,
+                }
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.operations.alerts.max_consecutive_publish_failures == 1
+        assert cfg.operations.alerts.max_ingestion_age_minutes == 20
+        assert cfg.operations.alerts.max_queue_backlog_items == 4
+        assert cfg.operations.alerts.evaluation_window_hours == 12
+        assert cfg.operations.alerts.min_evaluation_runs == 5
+        assert cfg.operations.alerts.min_evaluation_pass_rate == 0.8
 
     def test_replies_defaults_when_section_missing(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

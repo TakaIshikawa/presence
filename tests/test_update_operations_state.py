@@ -2,6 +2,7 @@
 
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,16 @@ import yaml
 # Add scripts/ to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from update_operations_state import OPERATION_QUERIES, sync_operation, update_operations_yaml
+from update_operations_state import (
+    OPERATION_QUERIES,
+    OperationsAlertThresholds,
+    compute_alert_statuses,
+    sync_operation,
+    update_operations_yaml,
+)
+
+
+NOW = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
 
 
 # --- fixtures ---
@@ -187,3 +197,144 @@ class TestUpdateOperationsYaml:
         cursor = ops_db.cursor()
         sync_operation(cursor, ops_data, "run-poll")
         assert len(ops_data["runs"]) == 1
+
+
+class TestAlertStatuses:
+    def _thresholds(self, **overrides):
+        values = {
+            "max_consecutive_publish_failures": 3,
+            "max_ingestion_age_minutes": 60,
+            "max_queue_backlog_items": 2,
+            "evaluation_window_hours": 24,
+            "min_evaluation_runs": 3,
+            "min_evaluation_pass_rate": 0.5,
+        }
+        values.update(overrides)
+        return OperationsAlertThresholds(**values)
+
+    def _ts(self, minutes_ago=0):
+        return (NOW - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _seed_ingestion(self, conn, minutes_ago=0):
+        conn.execute(
+            "INSERT OR REPLACE INTO poll_state (id, last_poll_time) VALUES (1, ?)",
+            (self._ts(minutes_ago),),
+        )
+        conn.commit()
+
+    def test_consecutive_publish_failures_alerts_only_above_threshold(self, db):
+        self._seed_ingestion(db.conn)
+        for i in range(3):
+            db.conn.execute(
+                """INSERT INTO content_publications
+                   (content_id, platform, status, last_error_at, updated_at)
+                   VALUES (?, 'x', 'failed', ?, ?)""",
+                (i + 1, self._ts(i), self._ts(i)),
+            )
+        db.conn.commit()
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+
+        check = summary["checks"]["consecutive_publish_failures"]
+        assert check["value"] == 3
+        assert check["status"] == "ok"
+
+        db.conn.execute(
+            """INSERT INTO content_publications
+               (content_id, platform, status, last_error_at, updated_at)
+               VALUES (4, 'x', 'failed', ?, ?)""",
+            (self._ts(-1), self._ts(-1)),
+        )
+        db.conn.commit()
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+        check = summary["checks"]["consecutive_publish_failures"]
+        assert check["value"] == 4
+        assert check["status"] == "alert"
+
+    def test_stale_ingestion_alerts_only_above_threshold(self, db):
+        self._seed_ingestion(db.conn, minutes_ago=60)
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+
+        check = summary["checks"]["stale_ingestion"]
+        assert check["ageMinutes"] == 60
+        assert check["status"] == "ok"
+
+        db.conn.execute(
+            "UPDATE poll_state SET last_poll_time = ? WHERE id = 1",
+            (self._ts(61),),
+        )
+        db.conn.commit()
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+        check = summary["checks"]["stale_ingestion"]
+        assert check["ageMinutes"] == 61
+        assert check["status"] == "alert"
+
+    def test_queue_backlog_alerts_only_above_threshold(self, db):
+        self._seed_ingestion(db.conn)
+        for i in range(2):
+            db.conn.execute(
+                """INSERT INTO publish_queue (content_id, scheduled_at, status)
+                   VALUES (?, ?, 'queued')""",
+                (i + 1, self._ts()),
+            )
+        db.conn.commit()
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+
+        check = summary["checks"]["queue_backlog"]
+        assert check["value"] == 2
+        assert check["status"] == "ok"
+
+        db.conn.execute(
+            """INSERT INTO publish_queue (content_id, scheduled_at, status)
+               VALUES (3, ?, 'failed')""",
+            (self._ts(),),
+        )
+        db.conn.commit()
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+        check = summary["checks"]["queue_backlog"]
+        assert check["value"] == 3
+        assert check["status"] == "alert"
+
+    def test_low_evaluation_pass_rate_alerts_only_below_threshold(self, db):
+        self._seed_ingestion(db.conn)
+        for i, outcome in enumerate(
+            ["published", "published", "below_threshold", "all_filtered"]
+        ):
+            db.conn.execute(
+                """INSERT INTO pipeline_runs
+                   (batch_id, content_type, outcome, published, created_at)
+                   VALUES (?, 'x_post', ?, ?, ?)""",
+                (f"boundary-{i}", outcome, int(outcome == "published"), self._ts(10)),
+            )
+        db.conn.commit()
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+
+        check = summary["checks"]["evaluation_pass_rate"]
+        assert check["total"] == 4
+        assert check["passed"] == 2
+        assert check["passRate"] == 0.5
+        assert check["status"] == "ok"
+
+        db.conn.execute("DELETE FROM pipeline_runs")
+        for i, outcome in enumerate(
+            ["published", "below_threshold", "below_threshold", "all_filtered"]
+        ):
+            db.conn.execute(
+                """INSERT INTO pipeline_runs
+                   (batch_id, content_type, outcome, published, created_at)
+                   VALUES (?, 'x_post', ?, ?, ?)""",
+                (f"low-{i}", outcome, int(outcome == "published"), self._ts(10)),
+            )
+        db.conn.commit()
+
+        summary = compute_alert_statuses(db.conn, self._thresholds(), now=NOW)
+        check = summary["checks"]["evaluation_pass_rate"]
+        assert check["passRate"] == 0.25
+        assert check["status"] == "alert"
+        assert "evaluation_pass_rate" in summary["triggered"]

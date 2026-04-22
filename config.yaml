@@ -133,6 +133,16 @@ operations_health:
   max_pipeline_rejection_rate: 0.5
   max_engagement_fetch_age_hours: 36
 
+# Operational state alerts written into .tact/config/operations.yaml
+operations:
+  alerts:
+    max_consecutive_publish_failures: 3
+    max_ingestion_age_minutes: 60
+    max_queue_backlog_items: 10
+    evaluation_window_hours: 24
+    min_evaluation_runs: 3
+    min_evaluation_pass_rate: 0.5
+
 # Image generation for visual posts
 image_gen:
   provider: "pillow"
