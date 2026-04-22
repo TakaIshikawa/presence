@@ -36,6 +36,23 @@ if importlib.util.find_spec("tweepy") is None:
     tweepy_stub.OAuth1UserHandler = OAuth1UserHandler
     sys.modules["tweepy"] = tweepy_stub
 
+if importlib.util.find_spec("requests") is None:
+    requests_stub = types.ModuleType("requests")
+
+    class HTTPError(Exception):
+        pass
+
+    class ConnectionError(Exception):
+        pass
+
+    def post(*args, **kwargs):
+        raise NotImplementedError("requests.post stub must be patched in tests")
+
+    requests_stub.HTTPError = HTTPError
+    requests_stub.ConnectionError = ConnectionError
+    requests_stub.post = post
+    sys.modules["requests"] = requests_stub
+
 if importlib.util.find_spec("atproto") is None:
     atproto_stub = types.ModuleType("atproto")
     atproto_exceptions_stub = types.ModuleType("atproto.exceptions")
@@ -43,11 +60,19 @@ if importlib.util.find_spec("atproto") is None:
     class AtProtocolError(Exception):
         pass
 
+    class NetworkError(AtProtocolError):
+        pass
+
+    class UnauthorizedError(AtProtocolError):
+        pass
+
     class Client:
         pass
 
     atproto_stub.Client = Client
     atproto_exceptions_stub.AtProtocolError = AtProtocolError
+    atproto_exceptions_stub.NetworkError = NetworkError
+    atproto_exceptions_stub.UnauthorizedError = UnauthorizedError
     sys.modules["atproto"] = atproto_stub
     sys.modules["atproto.exceptions"] = atproto_exceptions_stub
 

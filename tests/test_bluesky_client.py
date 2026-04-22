@@ -641,3 +641,59 @@ class TestGetPostMetricsBatch:
 
         assert results == []
         mock_sleep.assert_not_called()
+
+
+# --- BlueskyClient.get_profile_metrics() ---
+
+
+class TestGetProfileMetrics:
+    def test_success_returns_profile_metrics_dict(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.app.bsky.actor.get_profile.return_value = SimpleNamespace(
+            followers_count=123,
+            follows_count=45,
+            posts_count=678,
+        )
+
+        result = client.get_profile_metrics()
+
+        assert result == {
+            "follower_count": 123,
+            "following_count": 45,
+            "tweet_count": 678,
+            "listed_count": None,
+        }
+        mock_client.app.bsky.actor.get_profile.assert_called_once_with(
+            params={"actor": "test.bsky.social"}
+        )
+
+    def test_missing_counts_default_to_zero(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.app.bsky.actor.get_profile.return_value = SimpleNamespace()
+
+        result = client.get_profile_metrics()
+
+        assert result == {
+            "follower_count": 0,
+            "following_count": 0,
+            "tweet_count": 0,
+            "listed_count": None,
+        }
+
+    def test_returns_none_when_profile_missing(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.app.bsky.actor.get_profile.return_value = None
+
+        assert client.get_profile_metrics() is None
+
+    def test_atprotocol_error_logs_warning_and_returns_none(self):
+        client, mock_client = make_bluesky_client()
+        mock_client.app.bsky.actor.get_profile.side_effect = NetworkError(
+            "Profile unavailable"
+        )
+
+        with patch("output.bluesky_client.logger") as mock_logger:
+            result = client.get_profile_metrics()
+
+        assert result is None
+        mock_logger.warning.assert_called_once()

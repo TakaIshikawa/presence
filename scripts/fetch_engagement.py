@@ -5,6 +5,8 @@ import logging
 import sys
 from pathlib import Path
 
+import tweepy
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -59,6 +61,34 @@ def backfill_tweet_ids(db) -> int:
     return count
 
 
+def fetch_bluesky_profile_metrics(config, db) -> bool:
+    """Fetch and store a Bluesky profile metrics snapshot when enabled."""
+    if not config.bluesky or getattr(config.bluesky, "enabled", False) is not True:
+        return False
+
+    try:
+        from output.bluesky_client import BlueskyClient
+
+        bluesky_client = BlueskyClient(
+            handle=config.bluesky.handle,
+            app_password=config.bluesky.app_password,
+        )
+        metrics = bluesky_client.get_profile_metrics()
+        if not metrics:
+            return False
+
+        db.insert_profile_metrics("bluesky", **metrics)
+        logger.info(
+            f"Bluesky profile: {metrics['follower_count']} followers, "
+            f"{metrics['following_count']} following, "
+            f"{metrics['tweet_count']} posts"
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Bluesky profile metrics fetch failed (non-fatal): {e}")
+        return False
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -84,8 +114,6 @@ def main() -> None:
             mark_x_api_blocked_if_needed(db, e)
             logger.error(f"Failed to get X bearer token: {e}")
             return
-        import tweepy
-
         client = tweepy.Client(bearer_token=bearer_token)
 
         # Get posts that need metrics (published in last 30 days, not fetched in 6h)
@@ -222,6 +250,8 @@ def main() -> None:
         except Exception as e:
             mark_x_api_blocked_if_needed(db, e)
             logger.warning(f"Profile metrics fetch failed (non-fatal): {e}")
+
+        fetch_bluesky_profile_metrics(config, db)
 
         logger.info(f"\nDone. Fetched X metrics for {fetched} posts, Bluesky metrics for {bluesky_fetched} posts.")
 

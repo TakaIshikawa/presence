@@ -13,7 +13,11 @@ import tweepy
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from fetch_engagement import backfill_tweet_ids, get_bearer_token
+from fetch_engagement import (
+    backfill_tweet_ids,
+    fetch_bluesky_profile_metrics,
+    get_bearer_token,
+)
 
 
 # --- helpers ---
@@ -41,6 +45,9 @@ def _make_config():
     config.x.api_secret = "secret"
     config.x.access_token = "at"
     config.x.access_token_secret = "ats"
+    config.bluesky.enabled = False
+    config.bluesky.handle = "test.bsky.social"
+    config.bluesky.app_password = "app-password"
     config.synthesis.eval_threshold = 0.7
     return config
 
@@ -396,6 +403,57 @@ class TestMain:
         assert mock_db.insert_engagement.call_count == 1
         call_kwargs = mock_db.insert_engagement.call_args[1]
         assert call_kwargs["tweet_id"] == "100"
+
+
+# --- TestFetchBlueskyProfileMetrics ---
+
+
+class TestFetchBlueskyProfileMetrics:
+    @patch("output.bluesky_client.BlueskyClient")
+    def test_stores_bluesky_profile_snapshot(self, MockBlueskyClient, db):
+        config = _make_config()
+        config.bluesky.enabled = True
+        MockBlueskyClient.return_value.get_profile_metrics.return_value = {
+            "follower_count": 42,
+            "following_count": 12,
+            "tweet_count": 88,
+            "listed_count": None,
+        }
+
+        stored = fetch_bluesky_profile_metrics(config, db)
+
+        assert stored is True
+        latest = db.get_latest_profile_metrics("bluesky")
+        assert latest["follower_count"] == 42
+        assert latest["following_count"] == 12
+        assert latest["tweet_count"] == 88
+        assert latest["listed_count"] is None
+        MockBlueskyClient.assert_called_once_with(
+            handle="test.bsky.social",
+            app_password="app-password",
+        )
+
+    @patch("output.bluesky_client.BlueskyClient")
+    def test_skips_when_bluesky_disabled(self, MockBlueskyClient, db):
+        config = _make_config()
+        config.bluesky.enabled = False
+
+        stored = fetch_bluesky_profile_metrics(config, db)
+
+        assert stored is False
+        assert db.get_latest_profile_metrics("bluesky") is None
+        MockBlueskyClient.assert_not_called()
+
+    @patch("output.bluesky_client.BlueskyClient")
+    def test_skips_when_profile_metrics_unavailable(self, MockBlueskyClient, db):
+        config = _make_config()
+        config.bluesky.enabled = True
+        MockBlueskyClient.return_value.get_profile_metrics.return_value = None
+
+        stored = fetch_bluesky_profile_metrics(config, db)
+
+        assert stored is False
+        assert db.get_latest_profile_metrics("bluesky") is None
 
 
 # --- TestGetBearerToken ---

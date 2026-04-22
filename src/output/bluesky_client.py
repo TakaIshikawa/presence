@@ -270,3 +270,28 @@ class BlueskyClient:
             if len(results) < len(uris):
                 time.sleep(1.0)
         return results
+
+    def get_profile_metrics(self) -> dict | None:
+        """Fetch authenticated user's public profile metrics.
+
+        Returns:
+            Dict with follower_count, following_count, tweet_count, listed_count.
+            Bluesky does not expose listed_count here, so it is always None.
+        """
+        self._ensure_login()
+        try:
+            profile = self.client.app.bsky.actor.get_profile(
+                params={"actor": self.handle}
+            )
+            if not profile:
+                return None
+
+            return {
+                "follower_count": getattr(profile, "followers_count", None) or 0,
+                "following_count": getattr(profile, "follows_count", None) or 0,
+                "tweet_count": getattr(profile, "posts_count", None) or 0,
+                "listed_count": None,
+            }
+        except AtProtocolError as e:
+            logger.warning("Failed to fetch Bluesky profile metrics: %s", e)
+            return None
