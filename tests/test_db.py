@@ -3324,6 +3324,80 @@ class TestNewsletterMethods:
         assert rows[1]["source_content_ids"] == [10, 20]
         assert rows[1]["metadata"] == {"source": "heuristic"}
 
+    def test_newsletter_subject_performance_joins_latest_metrics(self, db):
+        """Selected subject candidates are joined to sends and engagement rates."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-subject-1",
+            subject="Specific AI notes",
+            content_ids=[10, 20],
+            subscriber_count=100,
+        )
+        candidate_ids = db.insert_newsletter_subject_candidates(
+            [
+                {
+                    "subject": "Specific AI notes",
+                    "score": 8.5,
+                    "rationale": "issue-specific",
+                },
+                {
+                    "subject": "Weekly Digest",
+                    "score": 6.0,
+                    "rationale": "baseline",
+                },
+            ],
+            content_ids=[10, 20],
+            selected_subject="Specific AI notes",
+            newsletter_send_id=send_id,
+            issue_id="issue-subject-1",
+        )
+        db.insert_newsletter_engagement(
+            newsletter_send_id=send_id,
+            issue_id="issue-subject-1",
+            opens=42,
+            clicks=7,
+            unsubscribes=1,
+        )
+
+        rows = db.get_newsletter_subject_performance(days=30)
+        alternatives = db.get_newsletter_subject_alternatives(
+            newsletter_send_id=send_id,
+            issue_id="issue-subject-1",
+        )
+
+        assert rows[0]["candidate_id"] == candidate_ids[0]
+        assert rows[0]["subject"] == "Specific AI notes"
+        assert rows[0]["open_rate"] == 0.42
+        assert rows[0]["click_rate"] == 0.07
+        assert alternatives[0]["subject"] == "Weekly Digest"
+
+    def test_update_newsletter_subject_candidates_send_links_issue(self, db):
+        """Stored candidate rows can be linked after Buttondown returns issue id."""
+        candidate_ids = db.insert_newsletter_subject_candidates(
+            [{"subject": "Manual subject", "score": 7.0}],
+            selected_subject="Manual subject",
+        )
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-linked",
+            subject="Manual subject",
+            content_ids=[],
+            subscriber_count=10,
+        )
+
+        db.update_newsletter_subject_candidates_send(
+            candidate_ids,
+            newsletter_send_id=send_id,
+            issue_id="issue-linked",
+        )
+        row = db.conn.execute(
+            """SELECT newsletter_send_id, issue_id
+               FROM newsletter_subject_candidates
+               WHERE id = ?""",
+            (candidate_ids[0],),
+        ).fetchone()
+
+        assert row["newsletter_send_id"] == send_id
+        assert row["issue_id"] == "issue-linked"
+
     def test_resonant_newsletter_source_patterns_uses_source_content(self, db):
         """Source content from resonant sends becomes future assembly preference data."""
         tip_id = db.insert_generated_content(

@@ -141,10 +141,11 @@ def main():
             selected_subject=selected_subject,
             manual_subject=manual_subject,
         )
+        candidate_ids = []
         inserter = getattr(db, "insert_newsletter_subject_candidates", None)
         if callable(inserter) and candidates_for_storage:
             try:
-                inserter(
+                candidate_ids = inserter(
                     candidates_for_storage,
                     content_ids=content.source_content_ids,
                     week_start=week_start,
@@ -165,7 +166,17 @@ def main():
             }
             if content.metadata:
                 send_kwargs["metadata"] = content.metadata
-            db.insert_newsletter_send(**send_kwargs)
+            newsletter_send_id = db.insert_newsletter_send(**send_kwargs)
+            updater = getattr(db, "update_newsletter_subject_candidates_send", None)
+            if callable(updater) and candidate_ids:
+                try:
+                    updater(
+                        candidate_ids,
+                        newsletter_send_id=newsletter_send_id,
+                        issue_id=result.issue_id or "",
+                    )
+                except Exception as e:
+                    logger.debug("Newsletter subject candidate linking failed: %s", e)
             logger.info(f"Newsletter sent: {result.url}")
         else:
             logger.error(f"Send failed: {result.error}")

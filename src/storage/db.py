@@ -3044,6 +3044,123 @@ class Database:
             rows.append(item)
         return rows
 
+    def update_newsletter_subject_candidates_send(
+        self,
+        candidate_ids: list[int],
+        newsletter_send_id: int,
+        issue_id: str,
+    ) -> None:
+        """Attach stored subject candidates to the delivered Buttondown issue."""
+        if not candidate_ids:
+            return
+
+        placeholders = ",".join("?" for _ in candidate_ids)
+        self.conn.execute(
+            f"""UPDATE newsletter_subject_candidates
+                SET newsletter_send_id = ?, issue_id = ?
+                WHERE id IN ({placeholders})""",
+            (newsletter_send_id, issue_id, *candidate_ids),
+        )
+        self.conn.commit()
+
+    def get_newsletter_subject_performance(self, days: int = 90) -> list[dict]:
+        """Return selected subject candidates joined to latest send metrics."""
+        cursor = self.conn.execute(
+            """WITH latest_engagement AS (
+                   SELECT ne.*
+                   FROM newsletter_engagement ne
+                   WHERE ne.id = (
+                       SELECT latest.id
+                       FROM newsletter_engagement latest
+                       WHERE latest.newsletter_send_id = ne.newsletter_send_id
+                       ORDER BY latest.fetched_at DESC, latest.id DESC
+                       LIMIT 1
+                   )
+               )
+               SELECT c.id AS candidate_id,
+                      c.subject,
+                      c.score AS candidate_score,
+                      c.rationale,
+                      c.source,
+                      c.rank,
+                      c.metadata AS candidate_metadata,
+                      ns.id AS newsletter_send_id,
+                      ns.issue_id,
+                      ns.subscriber_count,
+                      ns.sent_at,
+                      ne.opens,
+                      ne.clicks,
+                      ne.unsubscribes,
+                      ne.fetched_at,
+                      CASE
+                          WHEN ns.subscriber_count > 0
+                          THEN CAST(ne.opens AS REAL) / ns.subscriber_count
+                          ELSE NULL
+                      END AS open_rate,
+                      CASE
+                          WHEN ns.subscriber_count > 0
+                          THEN CAST(ne.clicks AS REAL) / ns.subscriber_count
+                          ELSE NULL
+                      END AS click_rate
+               FROM newsletter_subject_candidates c
+               JOIN newsletter_sends ns
+                 ON c.newsletter_send_id = ns.id
+               JOIN latest_engagement ne
+                 ON ne.newsletter_send_id = ns.id
+               WHERE c.selected = 1
+                 AND datetime(ns.sent_at) >= datetime('now', ?)
+               ORDER BY open_rate DESC, click_rate DESC, ns.sent_at DESC""",
+            (f"-{int(days)} days",),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                item["candidate_metadata"] = json.loads(
+                    item.get("candidate_metadata") or "{}"
+                )
+            except (TypeError, json.JSONDecodeError):
+                item["candidate_metadata"] = {}
+            rows.append(item)
+        return rows
+
+    def get_newsletter_subject_alternatives(
+        self,
+        newsletter_send_id: int,
+        issue_id: Optional[str] = None,
+    ) -> list[dict]:
+        """Return unselected subject candidates recorded for the same issue."""
+        if issue_id:
+            cursor = self.conn.execute(
+                """SELECT id, newsletter_send_id, issue_id, subject, score,
+                          rationale, source, rank, selected, metadata, created_at
+                   FROM newsletter_subject_candidates
+                   WHERE selected = 0
+                     AND (newsletter_send_id = ? OR issue_id = ?)
+                   ORDER BY rank ASC, score DESC, id ASC""",
+                (newsletter_send_id, issue_id),
+            )
+        else:
+            cursor = self.conn.execute(
+                """SELECT id, newsletter_send_id, issue_id, subject, score,
+                          rationale, source, rank, selected, metadata, created_at
+                   FROM newsletter_subject_candidates
+                   WHERE selected = 0
+                     AND newsletter_send_id = ?
+                   ORDER BY rank ASC, score DESC, id ASC""",
+                (newsletter_send_id,),
+            )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item["metadata"] = {}
+            item["selected"] = bool(item.get("selected"))
+            rows.append(item)
+        return rows
+
     def insert_newsletter_engagement(
         self,
         newsletter_send_id: int,
