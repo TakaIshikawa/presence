@@ -86,6 +86,34 @@ def _enforce_license_guard(preview: dict) -> bool:
     return not license_guard.get("blocked")
 
 
+def _attribution_guard_messages(preview: dict) -> list[str]:
+    attribution_guard = preview.get("attribution_guard") or {}
+    return [
+        "knowledge {knowledge_id}: {license} {author} {source_url}".format(
+            knowledge_id=source["knowledge_id"],
+            license=source["license"],
+            author=source.get("author") or "unknown author",
+            source_url=source.get("source_url") or "no source URL",
+        )
+        for source in attribution_guard.get("missing_sources", [])
+    ]
+
+
+def _enforce_attribution_guard(preview: dict) -> bool:
+    attribution_guard = preview.get("attribution_guard") or {}
+    messages = _attribution_guard_messages(preview)
+    if not messages:
+        return True
+
+    if attribution_guard.get("blocked"):
+        print("Attribution guard blocked:", file=sys.stderr)
+    else:
+        print("Attribution guard warning:", file=sys.stderr)
+    for message in messages:
+        print(f"- {message}", file=sys.stderr)
+    return not attribution_guard.get("blocked")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     target = parser.add_mutually_exclusive_group(required=True)
@@ -139,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         if not _enforce_license_guard(preview):
+            return 1
+
+        if not _enforce_attribution_guard(preview):
             return 1
 
         if not _enforce_alt_text_guard(preview, config):

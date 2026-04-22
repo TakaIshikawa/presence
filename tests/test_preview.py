@@ -94,3 +94,51 @@ def test_preview_surfaces_restricted_knowledge_license_guard(db):
     text = format_preview(preview)
     assert "License guard: blocked (1 restricted sources)" in text
     assert f"- knowledge {knowledge_id}: restricted https://source.example/restricted" in text
+
+
+def test_preview_surfaces_attribution_required_guard(db):
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=[],
+        source_messages=[],
+        content="Source-backed post without citation",
+        eval_score=8.0,
+        eval_feedback="Good",
+    )
+    knowledge_id = db.conn.execute(
+        """INSERT INTO knowledge
+           (source_type, source_id, source_url, author, content, license, approved)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "curated_article",
+            "attribution-article",
+            "https://source.example/attribution",
+            "Source Author",
+            "Attribution-required source context",
+            "attribution_required",
+            1,
+        ),
+    ).lastrowid
+    db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.9)])
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    assert preview["attribution_guard"]["status"] == "blocked"
+    assert preview["attribution_guard"]["blocked"] is True
+    assert preview["attribution_guard"]["missing_sources"][0] == {
+        "knowledge_id": knowledge_id,
+        "source_url": "https://source.example/attribution",
+        "author": "Source Author",
+        "license": "attribution_required",
+    }
+    assert preview["platforms"]["x"]["attribution_guard"]["status"] == "blocked"
+
+    payload = json.loads(preview_to_json(preview))
+    assert payload["attribution_guard"]["missing_sources"][0]["knowledge_id"] == knowledge_id
+
+    text = format_preview(preview)
+    assert "Attribution guard: blocked (1 missing citations, 1 attribution-required sources)" in text
+    assert (
+        f"- knowledge {knowledge_id}: attribution_required "
+        "Source Author https://source.example/attribution"
+    ) in text

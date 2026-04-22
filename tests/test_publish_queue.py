@@ -801,6 +801,120 @@ def test_main_allows_restricted_knowledge_with_cli_override(test_db, base_time):
     mock_x_client.post.assert_called_once_with("Restricted source post")
 
 
+def test_main_holds_attribution_required_knowledge_without_visible_citation(test_db, base_time):
+    """Attribution-required linked knowledge holds the queue item before publishing."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Attribution source post", "x_post", 7.0, 0),
+    ).lastrowid
+    knowledge_id = test_db.conn.execute(
+        """INSERT INTO knowledge
+           (source_type, source_id, source_url, author, content, license, approved)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "curated_article",
+            "attribution-publish",
+            "https://source.example/attribution",
+            "Source Author",
+            "Attribution-required source context",
+            "attribution_required",
+            1,
+        ),
+    ).lastrowid
+    test_db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.9)])
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+
+    mock_config = make_config(bluesky_enabled=False)
+    mock_x_client = MagicMock()
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    row = test_db.conn.execute(
+        "SELECT status, hold_reason FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    assert row["status"] == "held"
+    assert "Attribution guard blocked missing citations" in row["hold_reason"]
+    assert (
+        f"knowledge {knowledge_id}: attribution_required "
+        "Source Author https://source.example/attribution"
+    ) in row["hold_reason"]
+    mock_x_client.post.assert_not_called()
+
+
+def test_main_publishes_attribution_required_knowledge_with_visible_citation(test_db, base_time):
+    """Visible citation URLs satisfy the attribution guard."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        (
+            "Attribution source post\nSource: https://source.example/attribution",
+            "x_post",
+            7.0,
+            0,
+        ),
+    ).lastrowid
+    knowledge_id = test_db.conn.execute(
+        """INSERT INTO knowledge
+           (source_type, source_id, source_url, author, content, license, approved)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "curated_article",
+            "attribution-publish-cited",
+            "https://source.example/attribution",
+            "Source Author",
+            "Attribution-required source context",
+            "attribution_required",
+            1,
+        ),
+    ).lastrowid
+    test_db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.9)])
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+
+    mock_config = make_config(bluesky_enabled=False)
+    mock_x_client = MagicMock()
+    mock_x_client.post.return_value = FakePostResult(
+        success=True,
+        url="https://x.com/test/status/123",
+        tweet_id="123",
+    )
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    row = test_db.conn.execute(
+        "SELECT status, hold_reason FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    assert row["status"] == "published"
+    assert row["hold_reason"] is None
+    mock_x_client.post.assert_called_once_with(
+        "Attribution source post\nSource: https://source.example/attribution"
+    )
+
+
 def test_main_handles_x_posting_failure(test_db, base_time):
     """Test that main() marks queue item as failed when X posting fails."""
     # Create one post

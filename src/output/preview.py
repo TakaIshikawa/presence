@@ -8,6 +8,7 @@ from typing import Any
 from synthesis.alt_text_guard import validate_alt_text
 from synthesis.hashtag_suggester import HashtagSuggestions, suggest_hashtags
 
+from .attribution_guard import check_publication_attribution_guard
 from .license_guard import (
     STRICT_RESTRICTED_BEHAVIOR,
     check_publication_license_guard,
@@ -341,10 +342,27 @@ def build_publication_preview(
         restricted_prompt_behavior=restricted_prompt_behavior,
         allow_restricted=allow_restricted_knowledge,
     ).as_dict()
+    attribution_guard = check_publication_attribution_guard(
+        db,
+        content["id"],
+        content.get("content") or "",
+    ).as_dict()
 
     platforms = {}
     for platform in ("x", "bluesky"):
         state = _fetch_publication_state(db, content["id"], platform)
+        posts = _render_platform_posts(
+            platform,
+            x_posts,
+            content["content_type"],
+            adapter,
+            hashtag_suggestions,
+        )
+        platform_attribution_guard = check_publication_attribution_guard(
+            db,
+            content["id"],
+            [post["text"] for post in posts],
+        ).as_dict()
         platforms[platform] = {
             "status": _platform_status(
                 content,
@@ -353,13 +371,7 @@ def build_publication_preview(
                 queue,
                 platform in requested,
             ),
-            "posts": _render_platform_posts(
-                platform,
-                x_posts,
-                content["content_type"],
-                adapter,
-                hashtag_suggestions,
-            ),
+            "posts": posts,
             "suggested_hashtags": (
                 list(hashtag_suggestions.for_platform(platform))
                 if hashtag_suggestions
@@ -369,6 +381,7 @@ def build_publication_preview(
             "image_alt_text": content.get("image_alt_text"),
             "alt_text": alt_text,
             "license_guard": license_guard,
+            "attribution_guard": platform_attribution_guard,
         }
 
     return {
@@ -388,6 +401,7 @@ def build_publication_preview(
         "persona_guard": persona_guard,
         "alt_text": alt_text,
         "license_guard": license_guard,
+        "attribution_guard": attribution_guard,
         "hashtag_suggestions": (
             hashtag_suggestions.as_dict() if hashtag_suggestions else None
         ),
@@ -464,6 +478,30 @@ def format_preview(preview: dict) -> str:
                 "- knowledge {knowledge_id}: {license} {source_url}".format(
                     knowledge_id=source["knowledge_id"],
                     license=source["license"],
+                    source_url=source_url,
+                )
+            )
+
+    attribution_guard = preview.get("attribution_guard")
+    if attribution_guard:
+        missing_sources = attribution_guard.get("missing_sources") or []
+        required_sources = attribution_guard.get("required_sources") or []
+        lines.append(
+            "Attribution guard: {status} ({missing} missing citations, "
+            "{required} attribution-required sources)".format(
+                status=attribution_guard["status"],
+                missing=len(missing_sources),
+                required=len(required_sources),
+            )
+        )
+        for source in missing_sources:
+            source_url = source.get("source_url") or "no source URL"
+            author = source.get("author") or "unknown author"
+            lines.append(
+                "- knowledge {knowledge_id}: {license} {author} {source_url}".format(
+                    knowledge_id=source["knowledge_id"],
+                    license=source["license"],
+                    author=author,
                     source_url=source_url,
                 )
             )
