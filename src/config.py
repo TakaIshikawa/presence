@@ -6,6 +6,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ingestion.redaction import DEFAULT_REDACTION_PATTERNS
+
 
 @dataclass
 class GitHubConfig:
@@ -209,6 +211,13 @@ class ImageGenConfig:
 
 
 @dataclass
+class PrivacyConfig:
+    redaction_patterns: list[dict | str] = field(
+        default_factory=lambda: [dict(pattern) for pattern in DEFAULT_REDACTION_PATTERNS]
+    )
+
+
+@dataclass
 class ProactiveConfig:
     enabled: bool = False
     max_daily_replies: int = 5
@@ -251,6 +260,7 @@ class Config:
     proactive: Optional[ProactiveConfig]
     image_gen: Optional[ImageGenConfig]
     blog: BlogConfig
+    privacy: PrivacyConfig
 
 
 def _resolve_env_var(value: str) -> str:
@@ -550,6 +560,19 @@ def load_config(config_path: Optional[str] = None) -> Config:
             output_dir=data["image_gen"].get("output_dir", "generated_images"),
         )
 
+    privacy_data = data.get("privacy", {})
+    configured_redaction_patterns = privacy_data.get("redaction_patterns", [])
+    if privacy_data.get("replace_default_redaction_patterns", False):
+        redaction_patterns = configured_redaction_patterns
+    else:
+        redaction_patterns = [
+            *[dict(pattern) for pattern in DEFAULT_REDACTION_PATTERNS],
+            *configured_redaction_patterns,
+        ]
+    privacy_config = PrivacyConfig(
+        redaction_patterns=redaction_patterns,
+    )
+
     blog_data = data.get("blog", {})
     blog_config = BlogConfig(
         manifest_path=_resolve_env_var(blog_data.get("manifest_path"))
@@ -611,4 +634,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         proactive=proactive_config,
         image_gen=image_gen_config,
         blog=blog_config,
+        privacy=privacy_config,
     )

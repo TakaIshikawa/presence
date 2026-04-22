@@ -113,7 +113,12 @@ def main() -> None:
     signal.alarm(WATCHDOG_TIMEOUT)
 
     with script_context() as (config, db):
-        github = GitHubClient(config.github.token, config.github.username, timeout=config.timeouts.github_seconds)
+        github = GitHubClient(
+            config.github.token,
+            config.github.username,
+            timeout=config.timeouts.github_seconds,
+            redaction_patterns=config.privacy.redaction_patterns,
+        )
 
         # Initialize embedder for semantic dedup
         embedder = None
@@ -317,7 +322,11 @@ def main() -> None:
             return
 
         # Gather all Claude prompts since last post
-        parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
+        parser = ClaudeLogParser(
+            config.paths.claude_logs,
+            config.paths.allowed_projects,
+            redaction_patterns=config.privacy.redaction_patterns,
+        )
         prompts_since = list(parser.get_messages_since(last_post_time))
         parser.log_skipped_project_counts("poll_commits")
 

@@ -131,6 +131,39 @@ class TestParseGlobalHistory:
         assert messages[0].session_id == "s1"
         assert messages[1].prompt_text == "Add tests"
 
+    def test_redacts_prompt_text(self, tmp_path):
+        entries = [
+            _make_global_entry(
+                "Use token=ghp_abcdefghijklmnopqrstuvwxyz123456 from /Users/taka/app and email dev@example.com"
+            ),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path))
+        msg = next(parser.parse_global_history())
+
+        assert msg.prompt_text == (
+            "Use token=[REDACTED_SECRET] from [REDACTED_PATH] and email [REDACTED_EMAIL]"
+        )
+
+    def test_accepts_custom_redaction_patterns(self, tmp_path):
+        entries = [_make_global_entry("Deploy host-123.internal")]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(
+            str(tmp_path),
+            redaction_patterns=[
+                {
+                    "name": "internal_host",
+                    "pattern": r"host-\d+\.internal",
+                    "placeholder": "[REDACTED_HOST]",
+                }
+            ],
+        )
+        msg = next(parser.parse_global_history())
+
+        assert msg.prompt_text == "Deploy [REDACTED_HOST]"
+
     def test_timestamp_converted_from_epoch_ms(self, tmp_path):
         ts = datetime(2025, 6, 1, 12, 30, 0, tzinfo=timezone.utc)
         entries = [_make_global_entry("prompt", ts=ts)]
@@ -294,6 +327,18 @@ class TestParseSessionFile:
         assert messages[0].prompt_text == "What is 1+1?"
         assert messages[0].message_uuid == "u1"
         assert messages[1].prompt_text == "Explain the code"
+
+    def test_redacts_session_file_prompt_text(self, tmp_path):
+        session_file = tmp_path / "session.jsonl"
+        entries = [
+            _make_session_entry("Send Authorization: Bearer abcdefghijklmnopqrstuvwxyz"),
+        ]
+        _write_global_history(session_file, entries)
+
+        parser = ClaudeLogParser(str(tmp_path))
+        msg = next(parser.parse_session_file(session_file))
+
+        assert msg.prompt_text == "Send Authorization: [REDACTED_BEARER]"
 
     def test_timestamp_parsed_from_iso(self, tmp_path):
         ts = datetime(2025, 7, 10, 8, 0, 0, tzinfo=timezone.utc)

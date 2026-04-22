@@ -8,6 +8,8 @@ from typing import Iterator, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from ingestion.redaction import Redactor
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,11 +36,13 @@ class ClaudeLogParser:
         self,
         claude_dir: str = "~/.claude",
         allowed_project_paths: Iterable[str] | None = None,
+        redaction_patterns: Iterable[str | dict] | None = None,
     ):
         self.claude_dir = Path(claude_dir).expanduser()
         self.history_file = self.claude_dir / "history.jsonl"
         self.projects_dir = self.claude_dir / "projects"
         self.allowed_project_paths = self._normalize_allowed_projects(allowed_project_paths)
+        self.redactor = Redactor(redaction_patterns)
         self.skipped_project_counts: Counter[str] = Counter()
 
     def _normalize_allowed_projects(
@@ -102,7 +106,7 @@ class ClaudeLogParser:
                                 message_uuid=f"{entry.get('sessionId', 'unknown')}_{entry.get('timestamp', 0)}",
                                 project_path=project_path,
                                 timestamp=datetime.fromtimestamp(entry["timestamp"] / 1000, tz=timezone.utc),
-                                prompt_text=entry["display"]
+                                prompt_text=self.redactor.redact(entry["display"])
                             )
                     except json.JSONDecodeError as e:
                         logger.debug(f"Skipping malformed line in global history: {e}")
@@ -140,7 +144,7 @@ class ClaudeLogParser:
                                     timestamp=datetime.fromisoformat(
                                         entry["timestamp"].replace("Z", "+00:00")
                                     ),
-                                    prompt_text=content
+                                    prompt_text=self.redactor.redact(content)
                                 )
                     except (json.JSONDecodeError, KeyError, ValueError) as e:
                         logger.debug(f"Skipping malformed entry in session {session_path.name}: {e}")
@@ -177,7 +181,8 @@ class ClaudeLogParser:
 def get_prompts_around_timestamp(
     timestamp: datetime,
     window_minutes: int = 30,
-    claude_dir: str = "~/.claude"
+    claude_dir: str = "~/.claude",
+    redaction_patterns: Iterable[str | dict] | None = None,
 ) -> list[ClaudeMessage]:
     """Get prompts within a time window around a given timestamp.
 
@@ -185,7 +190,7 @@ def get_prompts_around_timestamp(
     """
     from datetime import timedelta
 
-    parser = ClaudeLogParser(claude_dir)
+    parser = ClaudeLogParser(claude_dir, redaction_patterns=redaction_patterns)
     start = timestamp - timedelta(minutes=window_minutes)
     end = timestamp + timedelta(minutes=window_minutes)
 

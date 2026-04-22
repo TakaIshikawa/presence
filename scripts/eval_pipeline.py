@@ -53,7 +53,11 @@ def main() -> None:
         )
 
         # Gather prompts and commits for different time windows
-        log_parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
+        log_parser = ClaudeLogParser(
+            config.paths.claude_logs,
+            config.paths.allowed_projects,
+            redaction_patterns=config.privacy.redaction_patterns,
+        )
         now = datetime.now(timezone.utc)
 
         # Time slices: 8h, 16h, 24h (or fewer if --runs < 3)

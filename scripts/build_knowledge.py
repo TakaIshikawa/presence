@@ -85,7 +85,11 @@ def main() -> None:
 
     # 2. Ingest Claude Code conversations (last 30 days)
     logger.info("=== Ingesting Claude Code conversations ===")
-    parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
+    parser = ClaudeLogParser(
+        config.paths.claude_logs,
+        config.paths.allowed_projects,
+        redaction_patterns=config.privacy.redaction_patterns,
+    )
     since = datetime.now(timezone.utc) - timedelta(days=30)
 
     conversations = list(parser.get_messages_since(since))

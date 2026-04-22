@@ -1,9 +1,11 @@
 """Fetch GitHub commits from user's repositories."""
 
 import requests
-from typing import Iterator, Optional
-from dataclasses import dataclass
+from typing import Iterator, Optional, Iterable
+from dataclasses import dataclass, replace
 from datetime import datetime
+
+from ingestion.redaction import Redactor
 
 
 # Custom exception classes for GitHub API errors
@@ -50,10 +52,17 @@ class Commit:
 class GitHubClient:
     BASE_URL = "https://api.github.com"
 
-    def __init__(self, token: str, username: str, timeout: int = 30):
+    def __init__(
+        self,
+        token: str,
+        username: str,
+        timeout: int = 30,
+        redaction_patterns: Optional[Iterable[str | dict]] = None,
+    ):
         self.token = token
         self.username = username
         self.timeout = timeout
+        self.redactor = Redactor(redaction_patterns)
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github.v3+json"
@@ -148,7 +157,7 @@ class GitHubClient:
             yield Commit(
                 repo_name=repo_name,
                 sha=commit_data["sha"],
-                message=commit["message"],
+                message=self.redactor.redact(commit["message"]),
                 timestamp=datetime.fromisoformat(
                     commit["author"]["date"].replace("Z", "+00:00")
                 ),
@@ -177,17 +186,20 @@ def poll_new_commits(
     token: str,
     username: str,
     since: datetime,
-    db
+    db,
+    redaction_patterns: Optional[Iterable[str | dict]] = None,
 ) -> list[Commit]:
     """Poll for new commits and store them in the database.
 
     Returns list of newly discovered commits.
     """
-    client = GitHubClient(token, username)
+    client = GitHubClient(token, username, redaction_patterns=redaction_patterns)
+    redactor = Redactor(redaction_patterns)
     new_commits = []
 
     for commit in client.get_all_recent_commits(since=since):
         if not db.is_commit_processed(commit.sha):
+            commit = replace(commit, message=redactor.redact(commit.message))
             db.insert_commit(
                 repo_name=commit.repo_name,
                 commit_sha=commit.sha,

@@ -96,7 +96,11 @@ def main():
         logger.info(f"Found {len(commits)} commits")
 
         # Get today's Claude prompts
-        parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
+        parser = ClaudeLogParser(
+            config.paths.claude_logs,
+            config.paths.allowed_projects,
+            redaction_patterns=config.privacy.redaction_patterns,
+        )
         prompts = [
             msg for msg in parser.parse_global_history()
             if today <= msg.timestamp < tomorrow

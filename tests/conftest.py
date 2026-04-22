@@ -40,16 +40,39 @@ if importlib.util.find_spec("requests") is None:
     requests_stub = types.ModuleType("requests")
 
     class HTTPError(Exception):
+        def __init__(self, *args, response=None, **kwargs):
+            super().__init__(*args)
+            self.response = response
+
+    class RequestException(Exception):
         pass
 
-    class ConnectionError(Exception):
+    class ConnectionError(RequestException):
         pass
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {}
+
+        def raise_for_status(self):
+            return None
+
+    def get(*args, **kwargs):
+        raise NotImplementedError("requests.get stub must be patched in tests")
 
     def post(*args, **kwargs):
         raise NotImplementedError("requests.post stub must be patched in tests")
 
-    requests_stub.HTTPError = HTTPError
-    requests_stub.ConnectionError = ConnectionError
+    exceptions_stub = types.SimpleNamespace(
+        ConnectionError=ConnectionError,
+        HTTPError=HTTPError,
+        RequestException=RequestException,
+    )
+    requests_stub.Response = Response
+    requests_stub.exceptions = exceptions_stub
+    requests_stub.get = get
     requests_stub.post = post
     sys.modules["requests"] = requests_stub
 

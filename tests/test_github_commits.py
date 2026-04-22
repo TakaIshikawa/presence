@@ -210,6 +210,39 @@ class TestGetRepoCommits:
         assert c.timestamp == datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
 
     @patch("requests.get")
+    def test_redacts_commit_message_secrets(self, mock_get):
+        payload = _make_commit_payload(
+            "sha-secret",
+            "fix: remove token=ghp_abcdefghijklmnopqrstuvwxyz123456 from /Users/taka/app",
+        )
+        mock_get.return_value = _mock_response(json_data=[payload])
+
+        client = GitHubClient(token="tok", username="taka")
+        commits = list(client.get_repo_commits("repo-a"))
+
+        assert commits[0].message == "fix: remove token=[REDACTED_SECRET] from [REDACTED_PATH]"
+
+    @patch("requests.get")
+    def test_accepts_custom_redaction_patterns(self, mock_get):
+        payload = _make_commit_payload("sha-secret", "deploy host-123.internal")
+        mock_get.return_value = _mock_response(json_data=[payload])
+
+        client = GitHubClient(
+            token="tok",
+            username="taka",
+            redaction_patterns=[
+                {
+                    "name": "internal_host",
+                    "pattern": r"host-\d+\.internal",
+                    "placeholder": "[REDACTED_HOST]",
+                }
+            ],
+        )
+        commits = list(client.get_repo_commits("repo-a"))
+
+        assert commits[0].message == "deploy [REDACTED_HOST]"
+
+    @patch("requests.get")
     def test_since_parameter_passed_as_iso(self, mock_get):
         mock_get.return_value = _mock_response(json_data=[])
 
@@ -356,7 +389,7 @@ class TestGetAllRecentCommits:
 
 class TestPollNewCommits:
     def test_inserts_and_returns_only_new_commits(self):
-        commit_new = Commit("repo", "sha-new", "new", TIMESTAMP, "taka", "u1")
+        commit_new = Commit("repo", "sha-new", "new token=ghp_abcdefghijklmnopqrstuvwxyz123456", TIMESTAMP, "taka", "u1")
         commit_existing = Commit("repo", "sha-old", "old", TIMESTAMP, "taka", "u2")
 
         with patch.object(GitHubClient, "get_all_recent_commits") as mock_all:
@@ -380,10 +413,11 @@ class TestPollNewCommits:
         db.insert_commit.assert_called_once_with(
             repo_name="repo",
             commit_sha="sha-new",
-            commit_message="new",
+            commit_message="new token=[REDACTED_SECRET]",
             timestamp=TIMESTAMP.isoformat(),
             author="taka",
         )
+        assert result[0].message == "new token=[REDACTED_SECRET]"
 
     def test_no_new_commits_returns_empty_list(self):
         commit = Commit("repo", "sha-old", "old", TIMESTAMP, "taka", "u")

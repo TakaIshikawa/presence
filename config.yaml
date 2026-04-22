@@ -22,6 +22,13 @@ paths:
   static_site: "/Users/taka/Project/experiments/me"
   database: "./presence.db"
 
+privacy:
+  # Additional regex rules applied after built-in secret, email, and local path
+  # redaction. Each rule supports name, pattern, placeholder or replacement,
+  # and optional flags such as IGNORECASE, MULTILINE, or DOTALL.
+  redaction_patterns: []
+  replace_default_redaction_patterns: false
+
 synthesis:
   model: "claude-sonnet-4-6"
   eval_model: "claude-opus-4-7"

@@ -25,6 +25,7 @@ from config import (
     OperationsConfig,
     NewsletterConfig,
     BlogConfig,
+    PrivacyConfig,
     CuratedSource,
     CuratedSourcesConfig,
     TimeoutsConfig,
@@ -303,6 +304,50 @@ class TestDataclassParsing:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert isinstance(cfg.blog, BlogConfig)
         assert cfg.blog.manifest_path == "data/blog-drafts.json"
+
+    def test_privacy_config_defaults_redaction_patterns(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert isinstance(cfg.privacy, PrivacyConfig)
+        assert cfg.privacy.redaction_patterns
+        assert any(
+            pattern.get("name") == "email"
+            for pattern in cfg.privacy.redaction_patterns
+            if isinstance(pattern, dict)
+        )
+
+    def test_privacy_config_appends_custom_redaction_patterns(self, tmp_path):
+        data = _minimal_config_dict(
+            privacy={
+                "redaction_patterns": [
+                    {
+                        "name": "internal_host",
+                        "pattern": r"host-\d+\.internal",
+                        "placeholder": "[REDACTED_HOST]",
+                    }
+                ]
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert any(
+            pattern.get("name") == "email"
+            for pattern in cfg.privacy.redaction_patterns
+            if isinstance(pattern, dict)
+        )
+        assert cfg.privacy.redaction_patterns[-1]["name"] == "internal_host"
+
+    def test_privacy_config_can_replace_default_redaction_patterns(self, tmp_path):
+        data = _minimal_config_dict(
+            privacy={
+                "replace_default_redaction_patterns": True,
+                "redaction_patterns": [
+                    {"name": "only_rule", "pattern": "secret", "placeholder": "[X]"}
+                ],
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.privacy.redaction_patterns == [
+            {"name": "only_rule", "pattern": "secret", "placeholder": "[X]"}
+        ]
 
 
 # ---------------------------------------------------------------------------
