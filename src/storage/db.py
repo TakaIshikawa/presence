@@ -940,6 +940,36 @@ class Database:
         )
         return [self._github_activity_from_row(row) for row in cursor.fetchall()]
 
+    def get_recent_github_releases(
+        self,
+        days: int = 7,
+        repo_name: str | None = None,
+        limit: int | None = 10,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return recently updated GitHub release activity, newest first."""
+        if days <= 0 or (limit is not None and limit <= 0):
+            return []
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+        params: list[object] = [cutoff]
+        repo_filter = ""
+        if repo_name:
+            repo_filter = " AND repo_name = ?"
+            params.append(repo_name)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE updated_at >= ?
+                  AND activity_type = 'release'{repo_filter}
+                ORDER BY updated_at DESC, id DESC{limit_clause}""",
+            tuple(params),
+        )
+        return [self._github_activity_from_row(row) for row in cursor.fetchall()]
+
     def get_unresolved_github_activity(
         self,
         limit: int = 10,
@@ -4760,6 +4790,32 @@ class Database:
             "gap_fingerprint",
             str(gap_fingerprint),
         )
+
+    def find_active_content_idea_for_release(
+        self,
+        repo_name: str,
+        release_id: int | str,
+    ) -> dict | None:
+        """Return an open/promoted release-seeded idea for a GitHub release."""
+        cursor = self.conn.execute(
+            """SELECT * FROM content_ideas
+               WHERE status IN ('open', 'promoted')
+                 AND source_metadata IS NOT NULL
+               ORDER BY created_at ASC, id ASC"""
+        )
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                metadata = json.loads(item.get("source_metadata") or "{}")
+            except (TypeError, ValueError):
+                continue
+            if (
+                metadata.get("source") == "github_release_seed"
+                and metadata.get("repo_name") == repo_name
+                and str(metadata.get("release_id")) == str(release_id)
+            ):
+                return item
+        return None
 
     def _find_open_content_idea_by_metadata(
         self,

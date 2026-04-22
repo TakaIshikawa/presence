@@ -961,6 +961,76 @@ class TestGitHubActivity:
         assert rows[0]["metadata"]["draft"] is False
         assert [row["activity_id"] for row in recent] == ["repo#101:release"]
 
+    def test_recent_github_releases_filters_repo_and_activity_type(self, db):
+        db.upsert_github_activity(
+            repo_name="repo-a",
+            activity_type="release",
+            number=101,
+            title="Release 1.0.0",
+            state="published",
+            author="taka",
+            url="url-a",
+            updated_at="2026-04-01T12:00:00+00:00",
+            metadata={"tag_name": "v1.0.0"},
+        )
+        db.upsert_github_activity(
+            repo_name="repo-b",
+            activity_type="release",
+            number=102,
+            title="Release 2.0.0",
+            state="published",
+            author="taka",
+            url="url-b",
+            updated_at="2026-04-02T12:00:00+00:00",
+            metadata={"tag_name": "v2.0.0"},
+        )
+        db.upsert_github_activity(
+            repo_name="repo-a",
+            activity_type="issue",
+            number=7,
+            title="Issue",
+            state="open",
+            author="taka",
+            url="url-issue",
+            updated_at="2026-04-03T12:00:00+00:00",
+        )
+
+        rows = db.get_recent_github_releases(
+            days=7,
+            repo_name="repo-a",
+            now=datetime(2026, 4, 4, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert [row["activity_id"] for row in rows] == ["repo-a#101:release"]
+
+    def test_find_active_content_idea_for_release_checks_open_and_promoted(self, db):
+        dismissed_id = db.add_content_idea(
+            "Dismissed release idea",
+            topic="repo v1 release",
+            status="dismissed",
+            source="github_release_seed",
+            source_metadata={
+                "source": "github_release_seed",
+                "repo_name": "repo",
+                "release_id": 101,
+            },
+        )
+        open_id = db.add_content_idea(
+            "Open release idea",
+            topic="repo v1 release",
+            source="github_release_seed",
+            source_metadata={
+                "source": "github_release_seed",
+                "repo_name": "repo",
+                "release_id": 101,
+            },
+        )
+
+        found = db.find_active_content_idea_for_release("repo", 101)
+
+        assert found["id"] == open_id
+        assert found["id"] != dismissed_id
+
     def test_github_activity_recent_and_unresolved_helpers(self, db):
         db.upsert_github_activity(
             repo_name="repo",
