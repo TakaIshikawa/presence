@@ -32,6 +32,12 @@ from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
 )
+from evaluation.posting_schedule import (
+    PostingScheduleAnalyzer,
+    embargo_windows_from_config,
+    is_embargoed,
+    next_allowed_slot,
+)
 from knowledge.embeddings import (
     VoyageEmbeddings,
     serialize_embedding,
@@ -466,10 +472,11 @@ def main() -> None:
                 outcome = "below_threshold"
                 rejection_reason = "Already posted this cycle"
             else:
+                embargo_windows = embargo_windows_from_config(config)
+
                 # Check if we should queue for optimal posting time
                 should_queue = False
                 if config.scheduling and config.scheduling.enabled:
-                    from evaluation.posting_schedule import PostingScheduleAnalyzer
                     analyzer = PostingScheduleAnalyzer(db, min_samples=config.scheduling.min_samples)
                     current_hour = now.hour
                     current_dow = now.weekday()
@@ -477,10 +484,10 @@ def main() -> None:
 
                 if should_queue:
                     # Queue for optimal time instead of posting now
-                    from evaluation.posting_schedule import PostingScheduleAnalyzer
                     analyzer = PostingScheduleAnalyzer(db, min_samples=config.scheduling.min_samples)
                     next_slot = analyzer.next_optimal_slot(exclude_hours=2)
                     if next_slot:
+                        next_slot = next_allowed_slot(next_slot, embargo_windows)
                         db.queue_for_publishing(content_id, next_slot.isoformat(), platform='all')
                         logger.info(f"Queued for optimal time: {next_slot.isoformat()}")
                         outcome = "queued"
@@ -488,6 +495,15 @@ def main() -> None:
                     else:
                         # No optimal slot found, post now as fallback
                         should_queue = False
+
+                if not should_queue:
+                    if is_embargoed(now, embargo_windows):
+                        next_slot = next_allowed_slot(now, embargo_windows)
+                        db.queue_for_publishing(content_id, next_slot.isoformat(), platform='all')
+                        logger.info(f"Publishing embargo active; queued for {next_slot.isoformat()}")
+                        outcome = "queued"
+                        rejection_reason = None
+                        should_queue = True
 
                 if not should_queue:
                     # Post immediately

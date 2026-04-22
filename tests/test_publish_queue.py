@@ -472,6 +472,51 @@ def test_main_processes_due_items(test_db, base_time):
     assert mock_x_client.post.call_count == 3
 
 
+def test_main_defers_due_items_during_embargo(test_db, base_time):
+    """Test that due items are rescheduled instead of published during embargo."""
+    for i in range(2):
+        content_id = test_db.conn.execute(
+            """INSERT INTO generated_content
+               (content, content_type, eval_score, published)
+               VALUES (?, ?, ?, ?)""",
+            (f"Post {i}", "x_post", 7.0, 0)
+        ).lastrowid
+        test_db.conn.execute(
+            """INSERT INTO publish_queue (content_id, scheduled_at, platform, status)
+               VALUES (?, ?, ?, ?)""",
+            (content_id, (base_time - timedelta(hours=i + 1)).isoformat(), "x", "queued")
+        )
+    test_db.conn.commit()
+
+    mock_config = make_config(bluesky_enabled=False)
+    mock_config.publishing.embargo_windows = [
+        {"timezone": "UTC", "start": "12:00", "end": "13:00"},
+    ]
+    mock_x_client = MagicMock()
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    rows = test_db.conn.execute(
+        "SELECT status, scheduled_at FROM publish_queue ORDER BY id"
+    ).fetchall()
+    assert [row["status"] for row in rows] == ["queued", "queued"]
+    assert all(
+        row["scheduled_at"] == datetime(2026, 4, 17, 13, 0, tzinfo=timezone.utc).isoformat()
+        for row in rows
+    )
+    mock_x_client.post.assert_not_called()
+
+
 def test_main_handles_empty_queue(test_db, base_time):
     """Test that main() handles empty queue gracefully."""
     mock_config = MagicMock()

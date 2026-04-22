@@ -1,8 +1,9 @@
 """Posting schedule optimization based on historical engagement patterns."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from storage.db import Database
 
@@ -15,6 +16,195 @@ class TimeWindow:
     avg_engagement: float
     sample_size: int
     confidence: float  # 0-1, based on sample size
+
+
+_DAY_NAMES = {
+    "monday": 0,
+    "mon": 0,
+    "tuesday": 1,
+    "tue": 1,
+    "wednesday": 2,
+    "wed": 2,
+    "thursday": 3,
+    "thu": 3,
+    "friday": 4,
+    "fri": 4,
+    "saturday": 5,
+    "sat": 5,
+    "sunday": 6,
+    "sun": 6,
+}
+
+
+def _window_value(window: Any, key: str, default: Any = None) -> Any:
+    if isinstance(window, dict):
+        return window.get(key, default)
+    return getattr(window, key, default)
+
+
+def _window_timezone(window: Any) -> timezone | ZoneInfo:
+    tz_name = _window_value(window, "timezone", _window_value(window, "tz", "UTC"))
+    if not tz_name:
+        return timezone.utc
+    if str(tz_name).upper() == "UTC":
+        return timezone.utc
+    try:
+        return ZoneInfo(str(tz_name))
+    except ZoneInfoNotFoundError:
+        return timezone.utc
+
+
+def _parse_local_time(value: Any) -> Optional[time]:
+    if value is None:
+        return None
+    if isinstance(value, time):
+        return value.replace(tzinfo=None)
+    try:
+        parts = str(value).split(":")
+        if len(parts) < 2:
+            return None
+        hour = int(parts[0])
+        minute = int(parts[1])
+        return time(hour=hour, minute=minute)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_local_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalise_date_values(value: Any) -> set[date]:
+    if value is None:
+        return set()
+    values = value if isinstance(value, list) else [value]
+    return {parsed for item in values if (parsed := _parse_local_date(item))}
+
+
+def _normalise_weekdays(value: Any) -> Optional[set[int]]:
+    if value is None:
+        return None
+    values = value if isinstance(value, list) else [value]
+    weekdays = set()
+    for item in values:
+        if isinstance(item, int) and 0 <= item <= 6:
+            weekdays.add(item)
+            continue
+        mapped = _DAY_NAMES.get(str(item).strip().lower())
+        if mapped is not None:
+            weekdays.add(mapped)
+    return weekdays
+
+
+def _matches_embargo_calendar(window: Any, local_day: date) -> bool:
+    explicit_dates = _normalise_date_values(
+        _window_value(window, "dates", _window_value(window, "date"))
+    )
+    if explicit_dates and local_day not in explicit_dates:
+        return False
+
+    start_date = _parse_local_date(_window_value(window, "start_date"))
+    end_date = _parse_local_date(_window_value(window, "end_date"))
+    if start_date and local_day < start_date:
+        return False
+    if end_date and local_day > end_date:
+        return False
+
+    weekdays = _normalise_weekdays(
+        _window_value(window, "weekdays", _window_value(window, "days"))
+    )
+    if weekdays is not None and local_day.weekday() not in weekdays:
+        return False
+
+    return bool(explicit_dates or start_date or end_date or weekdays is not None)
+
+
+def is_embargoed(when: datetime, embargo_windows: Optional[list[Any]]) -> bool:
+    """Return True when a UTC or aware datetime falls inside an embargo window.
+
+    Window dictionaries support:
+      - timezone/tz: IANA timezone name, default UTC
+      - date/dates or start_date/end_date: local dates, inclusive
+      - start/end: local HH:MM time range, including overnight ranges
+      - days/weekdays: local weekdays, names or 0=Monday integers
+    """
+    if not embargo_windows:
+        return False
+
+    aware_when = when if when.tzinfo is not None else when.replace(tzinfo=timezone.utc)
+
+    for window in embargo_windows:
+        if _window_value(window, "enabled", True) is False:
+            continue
+
+        local_dt = aware_when.astimezone(_window_timezone(window))
+        start_time = _parse_local_time(_window_value(window, "start"))
+        end_time = _parse_local_time(_window_value(window, "end"))
+
+        if start_time and end_time:
+            local_time = local_dt.time().replace(tzinfo=None)
+            if start_time <= end_time:
+                in_time_range = start_time <= local_time < end_time
+                calendar_day = local_dt.date()
+            else:
+                in_time_range = local_time >= start_time or local_time < end_time
+                calendar_day = (
+                    local_dt.date() - timedelta(days=1)
+                    if local_time < end_time
+                    else local_dt.date()
+                )
+            if not in_time_range:
+                continue
+
+            has_calendar_filter = any(
+                _window_value(window, key) is not None
+                for key in ("date", "dates", "start_date", "end_date", "days", "weekdays")
+            )
+            if not has_calendar_filter or _matches_embargo_calendar(window, calendar_day):
+                return True
+            continue
+
+        if _matches_embargo_calendar(window, local_dt.date()):
+            return True
+
+    return False
+
+
+def next_allowed_slot(
+    after: datetime,
+    embargo_windows: Optional[list[Any]],
+    step_minutes: int = 15,
+    max_days: int = 366,
+) -> datetime:
+    """Find the next non-embargoed slot at or after ``after``."""
+    if not is_embargoed(after, embargo_windows):
+        return after
+
+    step = timedelta(minutes=max(1, step_minutes))
+    current = after if after.tzinfo is not None else after.replace(tzinfo=timezone.utc)
+    current = current.replace(second=0, microsecond=0) + step
+    deadline = current + timedelta(days=max_days)
+
+    while current <= deadline:
+        if not is_embargoed(current, embargo_windows):
+            return current
+        current += step
+
+    return deadline
+
+
+def embargo_windows_from_config(config: Any) -> list[Any]:
+    """Return configured publishing embargo windows, tolerating older configs."""
+    publishing = getattr(config, "publishing", None)
+    windows = getattr(publishing, "embargo_windows", None)
+    return windows if isinstance(windows, list) else []
 
 
 class PostingScheduleAnalyzer:

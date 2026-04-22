@@ -14,6 +14,12 @@ from ingestion.claude_logs import ClaudeLogParser
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 from output.bluesky_client import BlueskyClient
+from evaluation.posting_schedule import (
+    PostingScheduleAnalyzer,
+    embargo_windows_from_config,
+    is_embargoed,
+    next_allowed_slot,
+)
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 from knowledge.store import KnowledgeStore
 
@@ -216,10 +222,11 @@ def main():
             logger.debug("Generated content:")
             logger.debug(result.final_content)
         else:
+            embargo_windows = embargo_windows_from_config(config)
+
             # Check if we should queue for optimal posting time
             should_queue = False
             if config.scheduling and config.scheduling.enabled:
-                from evaluation.posting_schedule import PostingScheduleAnalyzer
                 now = datetime.now(timezone.utc)
                 analyzer = PostingScheduleAnalyzer(db, min_samples=config.scheduling.min_samples)
                 current_hour = now.hour
@@ -228,10 +235,10 @@ def main():
 
             if should_queue:
                 # Queue for optimal time instead of posting now
-                from evaluation.posting_schedule import PostingScheduleAnalyzer
                 analyzer = PostingScheduleAnalyzer(db, min_samples=config.scheduling.min_samples)
                 next_slot = analyzer.next_optimal_slot(exclude_hours=2)
                 if next_slot:
+                    next_slot = next_allowed_slot(next_slot, embargo_windows)
                     db.queue_for_publishing(content_id, next_slot.isoformat(), platform='all')
                     logger.info(f"Queued for optimal time: {next_slot.isoformat()}")
                     outcome = "queued"
@@ -239,6 +246,16 @@ def main():
                 else:
                     # No optimal slot found, post now as fallback
                     should_queue = False
+
+            if not should_queue:
+                now = datetime.now(timezone.utc)
+                if is_embargoed(now, embargo_windows):
+                    next_slot = next_allowed_slot(now, embargo_windows)
+                    db.queue_for_publishing(content_id, next_slot.isoformat(), platform='all')
+                    logger.info(f"Publishing embargo active; queued for {next_slot.isoformat()}")
+                    outcome = "queued"
+                    rejection_reason = None
+                    should_queue = True
 
             if not should_queue:
                 # Post immediately

@@ -119,6 +119,17 @@ scheduling:
 publish_queue:
   max_retry_delay_minutes: 360  # Cap exponential backoff at 6 hours
 
+# Optional publishing embargo windows. Times and dates are interpreted in each
+# window's local timezone.
+publishing:
+  embargo_windows: []
+  # Examples:
+  # - timezone: "Asia/Tokyo"
+  #   start: "22:00"
+  #   end: "07:00"
+  # - timezone: "America/Los_Angeles"
+  #   date: "2026-12-25"
+
 # Optional polling is skipped when stored remaining API budget is this low.
 # Publish/reply posting paths are not guarded by these thresholds.
 rate_limits:

@@ -9,7 +9,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from storage.db import Database
-from evaluation.posting_schedule import PostingScheduleAnalyzer, TimeWindow
+from evaluation.posting_schedule import (
+    PostingScheduleAnalyzer,
+    TimeWindow,
+    embargo_windows_from_config,
+    is_embargoed,
+    next_allowed_slot,
+)
 
 
 @pytest.fixture
@@ -218,6 +224,61 @@ def test_should_queue_no_data(db):
     result = analyzer.should_queue(current_hour_utc=10, current_dow=0)
 
     assert result is False
+
+
+def test_is_embargoed_for_local_time_range():
+    """Embargo windows use the configured local timezone."""
+    windows = [
+        {"timezone": "Asia/Tokyo", "start": "21:00", "end": "23:00"},
+    ]
+
+    assert is_embargoed(datetime(2026, 4, 17, 12, 30, tzinfo=timezone.utc), windows)
+    assert not is_embargoed(datetime(2026, 4, 17, 14, 30, tzinfo=timezone.utc), windows)
+
+
+def test_is_embargoed_for_overnight_weekday_range():
+    """Post-midnight overnight hours belong to the previous local day."""
+    windows = [
+        {
+            "timezone": "Asia/Tokyo",
+            "days": ["friday"],
+            "start": "22:00",
+            "end": "02:00",
+        },
+    ]
+
+    # Friday 23:00 JST.
+    assert is_embargoed(datetime(2026, 4, 17, 14, 0, tzinfo=timezone.utc), windows)
+    # Saturday 01:00 JST, still inside Friday's overnight embargo.
+    assert is_embargoed(datetime(2026, 4, 17, 16, 0, tzinfo=timezone.utc), windows)
+    # Saturday 03:00 JST, outside the range.
+    assert not is_embargoed(datetime(2026, 4, 17, 18, 0, tzinfo=timezone.utc), windows)
+
+
+def test_is_embargoed_for_local_date():
+    windows = [{"timezone": "America/Los_Angeles", "date": "2026-05-01"}]
+
+    assert is_embargoed(datetime(2026, 5, 1, 20, 0, tzinfo=timezone.utc), windows)
+    assert not is_embargoed(datetime(2026, 5, 2, 20, 0, tzinfo=timezone.utc), windows)
+
+
+def test_next_allowed_slot_moves_past_embargo():
+    windows = [{"timezone": "UTC", "start": "12:00", "end": "13:00"}]
+
+    next_slot = next_allowed_slot(
+        datetime(2026, 4, 17, 12, 10, tzinfo=timezone.utc),
+        windows,
+        step_minutes=10,
+    )
+
+    assert next_slot == datetime(2026, 4, 17, 13, 0, tzinfo=timezone.utc)
+
+
+def test_embargo_windows_from_config_tolerates_missing_config():
+    class Config:
+        pass
+
+    assert embargo_windows_from_config(Config()) == []
 
 
 def test_queue_methods(db):

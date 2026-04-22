@@ -53,10 +53,25 @@ def _timeout_handler(signum, frame):
     sys.exit(1)
 
 
+def _defer_queue_item(db, queue_id: int, scheduled_at: str) -> None:
+    db.conn.execute(
+        """UPDATE publish_queue
+           SET scheduled_at = ?, status = 'queued', error = NULL
+           WHERE id = ?""",
+        (scheduled_at, queue_id),
+    )
+    db.conn.commit()
+
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
+from evaluation.posting_schedule import (
+    embargo_windows_from_config,
+    is_embargoed,
+    next_allowed_slot,
+)
 from output.bluesky_client import BlueskyClient
 
 try:
@@ -114,12 +129,24 @@ def main() -> None:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         max_retry_delay_minutes = _max_retry_delay_minutes(config)
+        embargo_windows = embargo_windows_from_config(config)
 
         # Get due queue items
         due_items = db.get_due_queue_items(now_iso)
 
         if not due_items:
             logger.info("No posts due for publishing")
+            update_monitoring("run-publish-queue")
+            return
+
+        if is_embargoed(now, embargo_windows):
+            next_slot = next_allowed_slot(now, embargo_windows)
+            next_slot_iso = next_slot.isoformat()
+            for item in due_items:
+                _defer_queue_item(db, item["id"], next_slot_iso)
+            logger.info(
+                f"Publishing embargo active; deferred {len(due_items)} posts to {next_slot_iso}"
+            )
             update_monitoring("run-publish-queue")
             return
 
