@@ -9,7 +9,7 @@ import json
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from storage.db import Database
@@ -46,6 +46,39 @@ class CrossPlatformReport:
     bluesky_only_count: int
     both_count: int
     platform_winner: dict[int, str]  # content_id -> 'x', 'bluesky', or 'tie'
+
+
+@dataclass
+class PlatformGrowthStats:
+    """Profile growth and posting/engagement summary for one platform."""
+
+    platform: str
+    start_followers: Optional[int]
+    end_followers: Optional[int]
+    follower_delta: Optional[int]
+    follower_delta_pct: Optional[float]
+    start_following: Optional[int]
+    end_following: Optional[int]
+    following_delta: Optional[int]
+    start_post_count: Optional[int]
+    end_post_count: Optional[int]
+    profile_post_delta: Optional[int]
+    posting_volume: int
+    engagement_count: int
+    avg_engagement_score: float
+    min_engagement_score: float
+    max_engagement_score: float
+    total_engagement_score: float
+
+
+@dataclass
+class ProfileGrowthReport:
+    """Profile growth report across one or more platforms."""
+
+    period_days: int
+    period_start: datetime
+    period_end: datetime
+    platforms: dict[str, PlatformGrowthStats]
 
 
 class PipelineAnalytics:
@@ -454,3 +487,156 @@ class PipelineAnalytics:
             both_count=both_count,
             platform_winner=platform_winner,
         )
+
+    def profile_growth_report(
+        self,
+        days: int = 30,
+        platform: str = "all",
+    ) -> ProfileGrowthReport:
+        """Summarize profile growth, posting volume, and engagement by platform.
+
+        Args:
+            days: Number of days to look back
+            platform: 'x', 'bluesky', or 'all'
+
+        Returns:
+            ProfileGrowthReport with one PlatformGrowthStats per requested platform
+        """
+        if platform == "all":
+            platforms = ["x", "bluesky"]
+        elif platform in {"x", "bluesky"}:
+            platforms = [platform]
+        else:
+            raise ValueError("platform must be one of: x, bluesky, all")
+
+        period_end = datetime.now(timezone.utc)
+        period_start = period_end - timedelta(days=days)
+
+        return ProfileGrowthReport(
+            period_days=days,
+            period_start=period_start,
+            period_end=period_end,
+            platforms={
+                name: self._profile_growth_for_platform(name, days)
+                for name in platforms
+            },
+        )
+
+    def _profile_growth_for_platform(
+        self,
+        platform: str,
+        days: int,
+    ) -> PlatformGrowthStats:
+        """Build profile growth stats for a single platform."""
+        profile_rows = self._profile_metric_bounds(platform, days)
+        first_profile = profile_rows[0] if profile_rows else None
+        latest_profile = profile_rows[-1] if profile_rows else None
+
+        start_followers = first_profile["follower_count"] if first_profile else None
+        end_followers = latest_profile["follower_count"] if latest_profile else None
+        follower_delta = (
+            end_followers - start_followers
+            if start_followers is not None and end_followers is not None
+            else None
+        )
+        follower_delta_pct = (
+            (follower_delta / start_followers * 100)
+            if follower_delta is not None and start_followers
+            else None
+        )
+
+        start_following = first_profile["following_count"] if first_profile else None
+        end_following = latest_profile["following_count"] if latest_profile else None
+        following_delta = (
+            end_following - start_following
+            if start_following is not None and end_following is not None
+            else None
+        )
+
+        start_post_count = first_profile["tweet_count"] if first_profile else None
+        end_post_count = latest_profile["tweet_count"] if latest_profile else None
+        profile_post_delta = (
+            end_post_count - start_post_count
+            if start_post_count is not None and end_post_count is not None
+            else None
+        )
+
+        posting_volume = self._posting_volume(platform, days)
+        engagement_scores = self._latest_engagement_scores(platform, days)
+
+        return PlatformGrowthStats(
+            platform=platform,
+            start_followers=start_followers,
+            end_followers=end_followers,
+            follower_delta=follower_delta,
+            follower_delta_pct=round(follower_delta_pct, 2)
+            if follower_delta_pct is not None else None,
+            start_following=start_following,
+            end_following=end_following,
+            following_delta=following_delta,
+            start_post_count=start_post_count,
+            end_post_count=end_post_count,
+            profile_post_delta=profile_post_delta,
+            posting_volume=posting_volume,
+            engagement_count=len(engagement_scores),
+            avg_engagement_score=round(sum(engagement_scores) / len(engagement_scores), 2)
+            if engagement_scores else 0.0,
+            min_engagement_score=round(min(engagement_scores), 2)
+            if engagement_scores else 0.0,
+            max_engagement_score=round(max(engagement_scores), 2)
+            if engagement_scores else 0.0,
+            total_engagement_score=round(sum(engagement_scores), 2),
+        )
+
+    def _profile_metric_bounds(self, platform: str, days: int) -> list[dict]:
+        """Return profile metric snapshots in the requested period."""
+        cursor = self.db.conn.execute(
+            """SELECT follower_count, following_count, tweet_count,
+                      listed_count, fetched_at
+               FROM profile_metrics
+               WHERE platform = ?
+                 AND fetched_at >= datetime('now', ?)
+               ORDER BY fetched_at ASC""",
+            (platform, f'-{days} days'),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _posting_volume(self, platform: str, days: int) -> int:
+        """Count successful platform publications in the requested period."""
+        cursor = self.db.conn.execute(
+            """SELECT COUNT(*)
+               FROM content_publications
+               WHERE platform = ?
+                 AND status = 'published'
+                 AND published_at >= datetime('now', ?)""",
+            (platform, f'-{days} days'),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    def _latest_engagement_scores(self, platform: str, days: int) -> list[float]:
+        """Return latest engagement score per published item for one platform."""
+        if platform == "x":
+            engagement_table = "post_engagement"
+        elif platform == "bluesky":
+            engagement_table = "bluesky_engagement"
+        else:
+            raise ValueError("platform must be one of: x, bluesky")
+
+        cursor = self.db.conn.execute(
+            f"""SELECT latest.engagement_score
+                FROM content_publications cp
+                INNER JOIN (
+                    SELECT content_id, engagement_score,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY content_id ORDER BY fetched_at DESC
+                           ) AS rn
+                    FROM {engagement_table}
+                    WHERE engagement_score IS NOT NULL
+                ) latest ON latest.content_id = cp.content_id AND latest.rn = 1
+                WHERE cp.platform = ?
+                  AND cp.status = 'published'
+                  AND cp.published_at >= datetime('now', ?)""",
+            (platform, f'-{days} days'),
+        )
+        return [float(row[0]) for row in cursor.fetchall()]

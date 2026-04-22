@@ -11,6 +11,7 @@ from evaluation.pipeline_analytics import (
     CrossPlatformReport,
     PipelineAnalytics,
     PipelineHealthReport,
+    ProfileGrowthReport,
 )
 
 
@@ -1166,3 +1167,136 @@ class TestCrossPlatformComparison:
         assert report.avg_x_score == 25.0
         assert report.avg_bluesky_score == 35.0
         assert report.platform_winner[content_id] == 'bluesky'
+
+
+class TestProfileGrowthReport:
+    """Tests for profile growth analytics."""
+
+    def _insert_profile_metric(
+        self,
+        db,
+        platform: str,
+        followers: int,
+        following: int,
+        posts: int,
+        fetched_at: datetime,
+    ) -> None:
+        db.conn.execute(
+            """INSERT INTO profile_metrics
+               (platform, follower_count, following_count, tweet_count,
+                listed_count, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (platform, followers, following, posts, None, fetched_at.isoformat()),
+        )
+
+    def _published_content(
+        self,
+        db,
+        platform: str,
+        published_at: datetime,
+        engagement_score: float,
+        index: int,
+    ) -> int:
+        content_id = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=[f"commit-{platform}-{index}"],
+            source_messages=[f"message-{platform}-{index}"],
+            content=f"{platform} content {index}",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.upsert_publication_success(
+            content_id=content_id,
+            platform=platform,
+            platform_post_id=f"{platform}-{index}",
+            platform_url=f"https://example.com/{platform}/{index}",
+            published_at=published_at.isoformat(),
+        )
+        if platform == "x":
+            db.insert_engagement(
+                content_id=content_id,
+                tweet_id=f"tweet-{index}",
+                like_count=10,
+                retweet_count=1,
+                reply_count=1,
+                quote_count=0,
+                engagement_score=engagement_score,
+            )
+        else:
+            db.insert_bluesky_engagement(
+                content_id=content_id,
+                bluesky_uri=f"at://did:plc:test/app.bsky.feed.post/{index}",
+                like_count=10,
+                repost_count=1,
+                reply_count=1,
+                quote_count=0,
+                engagement_score=engagement_score,
+            )
+        return content_id
+
+    def test_profile_growth_report_seeded_x_and_bluesky_metrics(self, db):
+        """Summarizes follower deltas, posting volume, and engagement."""
+        now = datetime.now(timezone.utc)
+
+        self._insert_profile_metric(db, "x", 100, 50, 300, now - timedelta(days=20))
+        self._insert_profile_metric(db, "x", 115, 52, 304, now - timedelta(days=1))
+        self._insert_profile_metric(db, "bluesky", 40, 25, 80, now - timedelta(days=20))
+        self._insert_profile_metric(db, "bluesky", 55, 26, 83, now - timedelta(days=1))
+
+        self._published_content(db, "x", now - timedelta(days=3), 12.0, 1)
+        self._published_content(db, "x", now - timedelta(days=2), 18.0, 2)
+        self._published_content(db, "bluesky", now - timedelta(days=2), 30.0, 3)
+        self._published_content(db, "x", now - timedelta(days=45), 100.0, 4)
+        db.conn.commit()
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.profile_growth_report(days=30, platform="all")
+
+        assert isinstance(report, ProfileGrowthReport)
+        assert set(report.platforms) == {"x", "bluesky"}
+
+        x_stats = report.platforms["x"]
+        assert x_stats.start_followers == 100
+        assert x_stats.end_followers == 115
+        assert x_stats.follower_delta == 15
+        assert x_stats.follower_delta_pct == 15.0
+        assert x_stats.following_delta == 2
+        assert x_stats.profile_post_delta == 4
+        assert x_stats.posting_volume == 2
+        assert x_stats.engagement_count == 2
+        assert x_stats.avg_engagement_score == 15.0
+        assert x_stats.min_engagement_score == 12.0
+        assert x_stats.max_engagement_score == 18.0
+        assert x_stats.total_engagement_score == 30.0
+
+        bluesky_stats = report.platforms["bluesky"]
+        assert bluesky_stats.follower_delta == 15
+        assert bluesky_stats.profile_post_delta == 3
+        assert bluesky_stats.posting_volume == 1
+        assert bluesky_stats.engagement_count == 1
+        assert bluesky_stats.avg_engagement_score == 30.0
+
+    def test_profile_growth_report_platform_filter(self, db):
+        """Filters growth report to a single requested platform."""
+        now = datetime.now(timezone.utc)
+        self._insert_profile_metric(db, "x", 100, 50, 300, now - timedelta(days=1))
+        self._insert_profile_metric(db, "bluesky", 40, 25, 80, now - timedelta(days=1))
+        db.conn.commit()
+
+        analytics = PipelineAnalytics(db)
+        report = analytics.profile_growth_report(days=30, platform="bluesky")
+
+        assert list(report.platforms) == ["bluesky"]
+
+    def test_profile_growth_report_no_metrics_returns_zeroed_activity(self, db):
+        """Returns empty profile deltas with zero posting and engagement activity."""
+        analytics = PipelineAnalytics(db)
+        report = analytics.profile_growth_report(days=30, platform="x")
+
+        stats = report.platforms["x"]
+        assert stats.start_followers is None
+        assert stats.end_followers is None
+        assert stats.follower_delta is None
+        assert stats.posting_volume == 0
+        assert stats.engagement_count == 0
+        assert stats.avg_engagement_score == 0.0
