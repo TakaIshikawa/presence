@@ -1,5 +1,6 @@
 """Tests for scripts/send_newsletter.py — weekly newsletter delivery orchestration."""
 
+import json
 import logging
 import sys
 from contextlib import contextmanager
@@ -252,6 +253,149 @@ class TestDryRun:
         assert "DRY RUN" in out
         assert "Great content this week." in out
         MockClient.assert_not_called()
+
+
+class TestPreviewOut:
+    """--preview-out writes a review artifact without sending."""
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_preview_json_writes_artifact_without_buttondown_or_send_record(
+        self, mock_ctx, MockAssembler, MockClient, mock_monitoring, tmp_path
+    ):
+        config = _make_config(api_key="")
+        config.newsletter.utm_source = "newsletter"
+        config.newsletter.utm_medium = "email"
+        config.newsletter.utm_campaign_template = "weekly-{week_end_compact}"
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = datetime.now(timezone.utc)
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        content = NewsletterContent(
+            subject="Default subject",
+            body_markdown="# Newsletter\nPreview body.",
+            source_content_ids=[10, 20],
+            metadata={"utm_campaign": "weekly-20260423"},
+            subject_candidates=[
+                NewsletterSubjectCandidate(
+                    subject="Candidate subject",
+                    score=9.1,
+                    rationale="specific",
+                    source="heuristic",
+                    metadata={"reason": "title"},
+                )
+            ],
+        )
+        MockAssembler.return_value.assemble.return_value = content
+        preview_path = tmp_path / "newsletter-preview.json"
+
+        original_argv = sys.argv
+        try:
+            sys.argv = ["send_newsletter.py", "--preview-out", str(preview_path)]
+            main()
+        finally:
+            sys.argv = original_argv
+
+        payload = json.loads(preview_path.read_text())
+        assert payload["selected_subject"] == "Candidate subject"
+        assert payload["body_markdown"] == "# Newsletter\nPreview body."
+        assert payload["source_content_ids"] == [10, 20]
+        assert payload["subject_candidates"][0]["score"] == 9.1
+        assert payload["week_range"]["start"]
+        assert payload["week_range"]["end"]
+        assert payload["utm_metadata"] == {
+            "utm_source": "newsletter",
+            "utm_medium": "email",
+            "utm_campaign_template": "weekly-{week_end_compact}",
+            "utm_campaign": "weekly-20260423",
+        }
+        MockClient.assert_not_called()
+        db.insert_newsletter_send.assert_not_called()
+        db.insert_newsletter_subject_candidates.assert_not_called()
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_preview_markdown_uses_markdown_extension(
+        self, mock_ctx, MockAssembler, MockClient, mock_monitoring, tmp_path
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = None
+        mock_ctx.return_value = _mock_script_context(config, db)()
+        MockAssembler.return_value.assemble.return_value = NewsletterContent(
+            subject="Markdown subject",
+            body_markdown="Markdown body.",
+            source_content_ids=[1],
+        )
+        preview_path = tmp_path / "newsletter-preview.md"
+
+        original_argv = sys.argv
+        try:
+            sys.argv = ["send_newsletter.py", "--preview-out", str(preview_path)]
+            main()
+        finally:
+            sys.argv = original_argv
+
+        rendered = preview_path.read_text()
+        assert rendered.startswith("# Newsletter Preview")
+        assert "## Selected Subject" in rendered
+        assert "Markdown subject" in rendered
+        assert "## Body" in rendered
+        assert "Markdown body." in rendered
+        MockClient.assert_not_called()
+        db.insert_newsletter_send.assert_not_called()
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_preview_persists_candidates_only_with_explicit_flag(
+        self, mock_ctx, MockAssembler, MockClient, mock_monitoring, tmp_path
+    ):
+        config = _make_config()
+        config.newsletter.subject_override = "Manual preview subject"
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = None
+        mock_ctx.return_value = _mock_script_context(config, db)()
+        MockAssembler.return_value.assemble.return_value = NewsletterContent(
+            subject="Default subject",
+            body_markdown="Preview body.",
+            source_content_ids=[5],
+            subject_candidates=[
+                NewsletterSubjectCandidate(
+                    subject="Generated subject",
+                    score=7.0,
+                    rationale="generated",
+                )
+            ],
+        )
+        preview_path = tmp_path / "newsletter-preview.json"
+
+        original_argv = sys.argv
+        try:
+            sys.argv = [
+                "send_newsletter.py",
+                "--preview-out",
+                str(preview_path),
+                "--persist-candidates",
+            ]
+            main()
+        finally:
+            sys.argv = original_argv
+
+        db.insert_newsletter_subject_candidates.assert_called_once()
+        stored_candidates = db.insert_newsletter_subject_candidates.call_args.args[0]
+        assert stored_candidates[0].subject == "Manual preview subject"
+        assert stored_candidates[0].source == "manual"
+        assert db.insert_newsletter_subject_candidates.call_args.kwargs[
+            "selected_subject"
+        ] == "Manual preview subject"
+        MockClient.assert_not_called()
+        db.insert_newsletter_send.assert_not_called()
 
 
 class TestSendSuccess:

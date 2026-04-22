@@ -2,6 +2,7 @@
 """Assemble and send weekly newsletter via Buttondown."""
 
 import sys
+import json
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -79,6 +80,127 @@ def _subject_candidates_for_storage(content, selected_subject: str, manual_subje
     return candidates
 
 
+def _candidate_to_dict(candidate: NewsletterSubjectCandidate) -> dict:
+    """Serialize a subject candidate for preview output."""
+    return {
+        "subject": candidate.subject,
+        "score": candidate.score,
+        "rationale": candidate.rationale,
+        "source": candidate.source,
+        "metadata": candidate.metadata,
+    }
+
+
+def _utm_metadata(config, content) -> dict:
+    """Collect UTM configuration and generated campaign metadata for review."""
+    newsletter = config.newsletter
+    metadata = {
+        "utm_source": _config_text(newsletter, "utm_source"),
+        "utm_medium": _config_text(newsletter, "utm_medium"),
+        "utm_campaign_template": _config_text(newsletter, "utm_campaign_template"),
+    }
+    metadata.update(getattr(content, "metadata", None) or {})
+    return metadata
+
+
+def _preview_payload(
+    config,
+    content,
+    selected_subject: str,
+    candidates: list[NewsletterSubjectCandidate],
+    week_start: datetime,
+    week_end: datetime,
+) -> dict:
+    """Build the structured newsletter preview payload."""
+    return {
+        "selected_subject": selected_subject,
+        "body_markdown": content.body_markdown,
+        "source_content_ids": content.source_content_ids,
+        "subject_candidates": [_candidate_to_dict(candidate) for candidate in candidates],
+        "week_range": {
+            "start": week_start.isoformat(),
+            "end": week_end.isoformat(),
+        },
+        "utm_metadata": _utm_metadata(config, content),
+    }
+
+
+def _format_preview_json(payload: dict) -> str:
+    """Format a newsletter preview as JSON."""
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def _format_preview_markdown(payload: dict) -> str:
+    """Format a newsletter preview as Markdown."""
+    candidates = payload["subject_candidates"]
+    candidate_lines = [
+        (
+            f"- {candidate['subject']} "
+            f"(score: {candidate['score']}, source: {candidate['source']})"
+            + (f" - {candidate['rationale']}" if candidate["rationale"] else "")
+        )
+        for candidate in candidates
+    ]
+    if not candidate_lines:
+        candidate_lines = ["- None"]
+
+    source_ids = ", ".join(str(item) for item in payload["source_content_ids"]) or "None"
+    utm_block = _format_preview_json(payload["utm_metadata"]).strip()
+    return (
+        f"# Newsletter Preview\n\n"
+        f"## Week Range\n\n"
+        f"- Start: {payload['week_range']['start']}\n"
+        f"- End: {payload['week_range']['end']}\n\n"
+        f"## Selected Subject\n\n"
+        f"{payload['selected_subject']}\n\n"
+        f"## Source Content IDs\n\n"
+        f"{source_ids}\n\n"
+        f"## UTM Metadata\n\n"
+        f"```json\n{utm_block}\n```\n\n"
+        f"## Subject Candidates\n\n"
+        f"{chr(10).join(candidate_lines)}\n\n"
+        f"## Body\n\n"
+        f"{payload['body_markdown']}\n"
+    )
+
+
+def _write_preview_artifact(path: Path, payload: dict) -> None:
+    """Write a newsletter preview as JSON or Markdown based on extension."""
+    suffix = path.suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        rendered = _format_preview_markdown(payload)
+    else:
+        rendered = _format_preview_json(payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered, encoding="utf-8")
+
+
+def _persist_subject_candidates(
+    db,
+    candidates: list[NewsletterSubjectCandidate],
+    content_ids: list[int],
+    week_start: datetime,
+    week_end: datetime,
+    selected_subject: str,
+):
+    """Persist evaluated subject candidates when storage support is available."""
+    inserter = getattr(db, "insert_newsletter_subject_candidates", None)
+    if not callable(inserter) or not candidates:
+        return []
+
+    try:
+        return inserter(
+            candidates,
+            content_ids=content_ids,
+            week_start=week_start,
+            week_end=week_end,
+            selected_subject=selected_subject,
+        )
+    except Exception as e:
+        logger.debug("Newsletter subject candidate storage failed: %s", e)
+        return []
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -87,13 +209,20 @@ def main():
             logger.info("Newsletter not enabled, skipping")
             return
 
-        if not config.newsletter.api_key:
+        preview_out = _arg_value("--preview-out")
+        preview_mode = bool(preview_out)
+
+        if not preview_mode and not config.newsletter.api_key:
             logger.warning("Newsletter API key not configured, skipping")
             return
 
         # Idempotency: skip if already sent this week
         last_send = db.get_last_newsletter_send()
-        if last_send and (datetime.now(timezone.utc) - last_send).days < 6:
+        if (
+            not preview_mode
+            and last_send
+            and (datetime.now(timezone.utc) - last_send).days < 6
+        ):
             logger.info(f"Newsletter already sent {(datetime.now(timezone.utc) - last_send).days} days ago, skipping")
             return
 
@@ -125,6 +254,34 @@ def main():
         logger.info(f"Subject: {selected_subject}")
         logger.debug(f"Content IDs included: {content.source_content_ids}")
 
+        candidates_for_storage = _subject_candidates_for_storage(
+            content,
+            selected_subject=selected_subject,
+            manual_subject=manual_subject,
+        )
+
+        if preview_mode:
+            payload = _preview_payload(
+                config,
+                content,
+                selected_subject,
+                candidates_for_storage,
+                week_start,
+                week_end,
+            )
+            _write_preview_artifact(Path(preview_out), payload)
+            logger.info(f"Newsletter preview written to {preview_out}")
+            if "--persist-candidates" in sys.argv:
+                _persist_subject_candidates(
+                    db,
+                    candidates_for_storage,
+                    content.source_content_ids,
+                    week_start,
+                    week_end,
+                    selected_subject,
+                )
+            return
+
         # Check for --dry-run flag
         if "--dry-run" in sys.argv:
             logger.info("\n--- DRY RUN (not sending) ---\n")
@@ -136,24 +293,14 @@ def main():
         subscriber_count = client.get_subscriber_count()
         logger.info(f"Subscribers: {subscriber_count}")
 
-        candidates_for_storage = _subject_candidates_for_storage(
-            content,
-            selected_subject=selected_subject,
-            manual_subject=manual_subject,
+        candidate_ids = _persist_subject_candidates(
+            db,
+            candidates_for_storage,
+            content.source_content_ids,
+            week_start,
+            week_end,
+            selected_subject,
         )
-        candidate_ids = []
-        inserter = getattr(db, "insert_newsletter_subject_candidates", None)
-        if callable(inserter) and candidates_for_storage:
-            try:
-                candidate_ids = inserter(
-                    candidates_for_storage,
-                    content_ids=content.source_content_ids,
-                    week_start=week_start,
-                    week_end=week_end,
-                    selected_subject=selected_subject,
-                )
-            except Exception as e:
-                logger.debug("Newsletter subject candidate storage failed: %s", e)
 
         result = client.send(selected_subject, content.body_markdown)
 
