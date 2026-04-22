@@ -20,7 +20,10 @@ from update_operations_state import deliver_operations_alerts, webhook_config_fr
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Summarize operational health across polling, replies, queue, pipeline, and engagement fetches."
+        description=(
+            "Summarize operational health across polling, replies, queue, "
+            "pipeline, engagement fetches, and newsletter audience metrics."
+        )
     )
     parser.add_argument(
         "--format",

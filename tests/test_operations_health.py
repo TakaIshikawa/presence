@@ -80,6 +80,8 @@ def _summary(conn):
             min_pipeline_runs_for_rejection_rate=3,
             max_pipeline_rejection_rate=0.5,
             max_engagement_fetch_age_hours=36,
+            max_newsletter_weekly_unsubscribes=5,
+            max_newsletter_churn_rate=0.05,
         ),
         now=NOW,
     )
@@ -94,6 +96,8 @@ def test_operations_health_healthy(db):
     assert summary["warnings"] == []
     assert summary["checks"]["publish_queue"]["failed_count"] == 0
     assert summary["checks"]["pipeline_runs"]["rejection_rate"] == 0
+    assert summary["checks"]["newsletter_audience"]["status"] == "ok"
+    assert summary["checks"]["newsletter_audience"]["latest_fetched_at"] is None
     assert "OPERATIONS HEALTH" in format_operations_health(summary)
 
 
@@ -149,6 +153,39 @@ def test_operations_health_pipeline_rejection_spike(db):
     assert summary["checks"]["pipeline_runs"]["rejected_runs"] == 3
     assert summary["checks"]["pipeline_runs"]["rejection_rate"] == 0.75
     assert any("pipeline rejection rate is high" in warning for warning in summary["warnings"])
+
+
+def test_operations_health_newsletter_audience_risk(db):
+    _seed_healthy(db.conn)
+    db.conn.execute(
+        """INSERT INTO newsletter_subscriber_metrics
+           (subscriber_count, active_subscriber_count, unsubscribes, churn_rate,
+            new_subscribers, net_subscriber_change, fetched_at)
+           VALUES (100, 80, 6, 0.06, 1, -5, ?)""",
+        (_ts(0.5),),
+    )
+    db.conn.commit()
+
+    summary = _summary(db.conn)
+
+    newsletter = summary["checks"]["newsletter_audience"]
+    assert summary["status"] == "warning"
+    assert newsletter["status"] == "warning"
+    assert newsletter["latest_fetched_at"] == _ts(0.5)
+    assert newsletter["weekly_unsubscribes"] == 6
+    assert newsletter["churn_rate"] == 0.06
+    assert any(
+        "newsletter weekly unsubscribes are high" in warning
+        for warning in summary["warnings"]
+    )
+    assert any(
+        "newsletter churn rate is high" in warning
+        for warning in summary["warnings"]
+    )
+    formatted = format_operations_health(summary)
+    assert "Newsletter audience: warning" in formatted
+    assert "Weekly unsubscribes: 6" in formatted
+    assert "Churn rate: 6.00%" in formatted
 
 
 def test_operations_health_warning_webhook_payload(db):

@@ -18,6 +18,8 @@ class OperationsHealthThresholds:
     min_pipeline_runs_for_rejection_rate: int = 3
     max_pipeline_rejection_rate: float = 0.5
     max_engagement_fetch_age_hours: int = 36
+    max_newsletter_weekly_unsubscribes: int = 5
+    max_newsletter_churn_rate: float = 0.05
 
 
 def thresholds_from_config(config: Any) -> OperationsHealthThresholds:
@@ -34,6 +36,8 @@ def thresholds_from_config(config: Any) -> OperationsHealthThresholds:
         min_pipeline_runs_for_rejection_rate=source.min_pipeline_runs_for_rejection_rate,
         max_pipeline_rejection_rate=source.max_pipeline_rejection_rate,
         max_engagement_fetch_age_hours=source.max_engagement_fetch_age_hours,
+        max_newsletter_weekly_unsubscribes=source.max_newsletter_weekly_unsubscribes,
+        max_newsletter_churn_rate=source.max_newsletter_churn_rate,
     )
 
 
@@ -53,6 +57,7 @@ def summarize_operations_health(
         "publish_queue": _publish_queue(conn, thresholds),
         "pipeline_runs": _pipeline_runs(conn, thresholds, now),
         "engagement_fetches": _engagement_fetches(conn, thresholds, now),
+        "newsletter_audience": _newsletter_audience(conn, thresholds),
     }
     warnings = [
         message
@@ -120,6 +125,22 @@ def format_operations_health(summary: dict) -> str:
             f"  {platform}: tracked {data['tracked_posts']}, "
             f"missing {data['missing_fetches']}, last {last}{age_text}"
         )
+
+    newsletter = checks["newsletter_audience"]
+    if newsletter.get("latest_fetched_at"):
+        lines.append(f"Newsletter audience: {newsletter['status']}")
+        lines.append(f"  Latest fetched: {newsletter['latest_fetched_at']}")
+        lines.append(
+            f"  Subscribers: {newsletter['subscriber_count']} "
+            f"(active {newsletter.get('active_subscriber_count') or 'unknown'})"
+        )
+        lines.append(
+            f"  Weekly unsubscribes: "
+            f"{newsletter.get('weekly_unsubscribes') or 0}"
+        )
+        churn_rate = newsletter.get("churn_rate")
+        churn_text = f"{churn_rate * 100:.2f}%" if churn_rate is not None else "unknown"
+        lines.append(f"  Churn rate: {churn_text}")
 
     if summary["warnings"]:
         lines.extend(["", "Warnings:"])
@@ -313,6 +334,68 @@ def _engagement_fetches(
         for warning in data.get("warnings", [])
     ]
     return {"status": _status(warnings), "platforms": platforms, "warnings": warnings}
+
+
+def _newsletter_audience(
+    conn: sqlite3.Connection,
+    thresholds: OperationsHealthThresholds,
+) -> dict:
+    if not _has_table(conn, "newsletter_subscriber_metrics"):
+        return _newsletter_audience_empty()
+
+    row = _one(
+        conn,
+        """SELECT subscriber_count, active_subscriber_count, unsubscribes,
+                  churn_rate, new_subscribers, net_subscriber_change, fetched_at
+           FROM newsletter_subscriber_metrics
+           ORDER BY fetched_at DESC, id DESC
+           LIMIT 1""",
+    )
+    if row is None:
+        return _newsletter_audience_empty()
+
+    weekly_unsubscribes = row["unsubscribes"]
+    churn_rate = row["churn_rate"]
+    warnings = []
+    if (
+        weekly_unsubscribes is not None
+        and weekly_unsubscribes > thresholds.max_newsletter_weekly_unsubscribes
+    ):
+        warnings.append(
+            f"newsletter weekly unsubscribes are high: {weekly_unsubscribes} "
+            f"> {thresholds.max_newsletter_weekly_unsubscribes}"
+        )
+    if churn_rate is not None and churn_rate > thresholds.max_newsletter_churn_rate:
+        warnings.append(
+            f"newsletter churn rate is high: {churn_rate * 100:.2f}% "
+            f"> {thresholds.max_newsletter_churn_rate * 100:.2f}%"
+        )
+
+    return {
+        "status": _status(warnings),
+        "subscriber_count": row["subscriber_count"],
+        "active_subscriber_count": row["active_subscriber_count"],
+        "weekly_unsubscribes": weekly_unsubscribes,
+        "churn_rate": churn_rate,
+        "new_subscribers": row["new_subscribers"],
+        "net_subscriber_change": row["net_subscriber_change"],
+        "latest_fetched_at": row["fetched_at"],
+        "warnings": warnings,
+    }
+
+
+def _newsletter_audience_empty() -> dict:
+    return {
+        "status": "ok",
+        "subscriber_count": None,
+        "active_subscriber_count": None,
+        "weekly_unsubscribes": None,
+        "churn_rate": None,
+        "new_subscribers": None,
+        "net_subscriber_change": None,
+        "latest_fetched_at": None,
+        "warnings": [],
+    }
 
 
 def _engagement_platform(

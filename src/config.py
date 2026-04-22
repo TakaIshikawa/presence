@@ -207,6 +207,8 @@ class OperationsHealthConfig:
     min_pipeline_runs_for_rejection_rate: int = 3
     max_pipeline_rejection_rate: float = 0.5
     max_engagement_fetch_age_hours: int = 36
+    max_newsletter_weekly_unsubscribes: int = 5
+    max_newsletter_churn_rate: float = 0.05
 
 
 @dataclass
@@ -560,6 +562,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
             ),
             max_engagement_fetch_age_hours=health_data.get(
                 "max_engagement_fetch_age_hours", 36
+            ),
+            max_newsletter_weekly_unsubscribes=health_data.get(
+                "max_newsletter_weekly_unsubscribes", 5
+            ),
+            max_newsletter_churn_rate=health_data.get(
+                "max_newsletter_churn_rate", 0.05
             ),
         )
 
