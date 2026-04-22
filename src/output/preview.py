@@ -8,6 +8,10 @@ from typing import Any
 from synthesis.alt_text_guard import validate_alt_text
 from synthesis.hashtag_suggester import HashtagSuggestions, suggest_hashtags
 
+from .license_guard import (
+    STRICT_RESTRICTED_BEHAVIOR,
+    check_publication_license_guard,
+)
 from .platform_adapter import BlueskyPlatformAdapter, count_graphemes
 from .x_client import parse_thread_content
 
@@ -277,6 +281,8 @@ def build_publication_preview(
     queue_id: int | None = None,
     bluesky_adapter: BlueskyPlatformAdapter | None = None,
     include_hashtag_suggestions: bool = False,
+    restricted_prompt_behavior: str = STRICT_RESTRICTED_BEHAVIOR,
+    allow_restricted_knowledge: bool = False,
 ) -> dict:
     """Build a platform preview for one generated content or queue row."""
     if (content_id is None) == (queue_id is None):
@@ -329,6 +335,12 @@ def build_publication_preview(
         image_path=content.get("image_path"),
         content_type=content.get("content_type"),
     ).as_dict()
+    license_guard = check_publication_license_guard(
+        db,
+        content["id"],
+        restricted_prompt_behavior=restricted_prompt_behavior,
+        allow_restricted=allow_restricted_knowledge,
+    ).as_dict()
 
     platforms = {}
     for platform in ("x", "bluesky"):
@@ -356,6 +368,7 @@ def build_publication_preview(
             "image_path": content.get("image_path"),
             "image_alt_text": content.get("image_alt_text"),
             "alt_text": alt_text,
+            "license_guard": license_guard,
         }
 
     return {
@@ -374,6 +387,7 @@ def build_publication_preview(
         "claim_check": claim_check,
         "persona_guard": persona_guard,
         "alt_text": alt_text,
+        "license_guard": license_guard,
         "hashtag_suggestions": (
             hashtag_suggestions.as_dict() if hashtag_suggestions else None
         ),
@@ -434,6 +448,25 @@ def format_preview(preview: dict) -> str:
         if persona_guard.get("reasons"):
             lines.append("Persona guard reasons:")
             lines.extend(f"- {reason}" for reason in persona_guard["reasons"])
+
+    license_guard = preview.get("license_guard")
+    if license_guard:
+        sources = license_guard.get("restricted_sources") or []
+        lines.append(
+            "License guard: {status} ({count} restricted sources)".format(
+                status=license_guard["status"],
+                count=len(sources),
+            )
+        )
+        for source in sources:
+            source_url = source.get("source_url") or "no source URL"
+            lines.append(
+                "- knowledge {knowledge_id}: {license} {source_url}".format(
+                    knowledge_id=source["knowledge_id"],
+                    license=source["license"],
+                    source_url=source_url,
+                )
+            )
 
     hashtag_suggestions = preview.get("hashtag_suggestions")
     if hashtag_suggestions:

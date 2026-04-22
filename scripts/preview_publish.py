@@ -16,6 +16,9 @@ from output.preview import (  # noqa: E402
     format_preview,
     preview_to_json,
 )
+from output.license_guard import (  # noqa: E402
+    restricted_prompt_behavior_from_config,
+)
 from output.linkedin_export import (  # noqa: E402
     LinkedInExportError,
     LinkedInExportOptions,
@@ -56,6 +59,33 @@ def _enforce_alt_text_guard(preview: dict, config: object) -> bool:
     return mode != "strict"
 
 
+def _license_guard_messages(preview: dict) -> list[str]:
+    license_guard = preview.get("license_guard") or {}
+    return [
+        "knowledge {knowledge_id}: {license} {source_url}".format(
+            knowledge_id=source["knowledge_id"],
+            license=source["license"],
+            source_url=source.get("source_url") or "no source URL",
+        )
+        for source in license_guard.get("restricted_sources", [])
+    ]
+
+
+def _enforce_license_guard(preview: dict) -> bool:
+    license_guard = preview.get("license_guard") or {}
+    messages = _license_guard_messages(preview)
+    if not messages:
+        return True
+
+    if license_guard.get("blocked"):
+        print("License guard blocked:", file=sys.stderr)
+    else:
+        print("License guard warning:", file=sys.stderr)
+    for message in messages:
+        print(f"- {message}", file=sys.stderr)
+    return not license_guard.get("blocked")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     target = parser.add_mutually_exclusive_group(required=True)
@@ -82,6 +112,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Show deterministic hashtag suggestions in the preview without saving them",
     )
+    parser.add_argument(
+        "--allow-restricted-knowledge",
+        action="store_true",
+        help="Allow publication preview for content linked to restricted knowledge",
+    )
     return parser.parse_args(argv)
 
 
@@ -96,9 +131,14 @@ def main(argv: list[str] | None = None) -> int:
                 content_id=args.content_id,
                 queue_id=args.queue_id,
                 include_hashtag_suggestions=args.suggest_hashtags,
+                restricted_prompt_behavior=restricted_prompt_behavior_from_config(config),
+                allow_restricted_knowledge=args.allow_restricted_knowledge,
             )
         except PreviewRecordNotFound as exc:
             print(str(exc), file=sys.stderr)
+            return 1
+
+        if not _enforce_license_guard(preview):
             return 1
 
         if not _enforce_alt_text_guard(preview, config):

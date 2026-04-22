@@ -303,6 +303,91 @@ def test_preview_json_includes_hashtag_suggestions_when_requested(db):
     ]
 
 
+def test_preview_publish_cli_blocks_restricted_knowledge_in_strict_mode(db, capsys):
+    content_id = _insert_content(db, "Restricted-source preview")
+    knowledge_id = db.conn.execute(
+        """INSERT INTO knowledge
+           (source_type, source_id, source_url, author, content, license, approved)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "curated_article",
+            "restricted-preview",
+            "https://source.example/restricted",
+            "Source Author",
+            "Restricted source context",
+            "restricted",
+            1,
+        ),
+    ).lastrowid
+    db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.9)])
+
+    import preview_publish
+
+    class Context:
+        def __enter__(self):
+            config = SimpleNamespace(
+                curated_sources=SimpleNamespace(restricted_prompt_behavior="strict")
+            )
+            return config, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("preview_publish.script_context", return_value=Context()):
+        exit_code = preview_publish.main(["--content-id", str(content_id)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "License guard blocked:" in captured.err
+    assert f"knowledge {knowledge_id}: restricted https://source.example/restricted" in captured.err
+
+
+def test_preview_publish_cli_allows_restricted_knowledge_with_override(db, capsys):
+    content_id = _insert_content(db, "Restricted-source preview")
+    knowledge_id = db.conn.execute(
+        """INSERT INTO knowledge
+           (source_type, source_id, source_url, author, content, license, approved)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "curated_article",
+            "restricted-preview-override",
+            "https://source.example/restricted",
+            "Source Author",
+            "Restricted source context",
+            "restricted",
+            1,
+        ),
+    ).lastrowid
+    db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.9)])
+
+    import preview_publish
+
+    class Context:
+        def __enter__(self):
+            config = SimpleNamespace(
+                curated_sources=SimpleNamespace(restricted_prompt_behavior="strict")
+            )
+            return config, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("preview_publish.script_context", return_value=Context()):
+        exit_code = preview_publish.main(
+            [
+                "--content-id",
+                str(content_id),
+                "--allow-restricted-knowledge",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "License guard warning:" in captured.err
+    assert "License guard: warning (1 restricted sources)" in captured.out
+
+
 def test_preview_includes_claim_check_summary_in_text_and_json(db):
     content_id = _insert_content(db, "Post with 43% unsupported claim")
     db.save_claim_check_summary(

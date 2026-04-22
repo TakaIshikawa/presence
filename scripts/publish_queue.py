@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Process scheduled posts from publish queue at optimal times."""
 
+import argparse
 import signal
 import sys
 import logging
@@ -146,6 +147,10 @@ from evaluation.posting_schedule import (
     next_allowed_slot,
 )
 from output.bluesky_client import BlueskyClient
+from output.license_guard import (
+    check_publication_license_guard,
+    restricted_prompt_behavior_from_config,
+)
 from output.publish_errors import classify_publish_error, normalize_error_category
 from synthesis.alt_text_guard import validate_alt_text
 
@@ -200,7 +205,29 @@ def _alt_text_guard_error(item: dict) -> str | None:
     )
 
 
-def main() -> None:
+def _license_guard_summary(license_guard: dict) -> str:
+    return "; ".join(
+        "knowledge {knowledge_id}: {license} {source_url}".format(
+            knowledge_id=source["knowledge_id"],
+            license=source["license"],
+            source_url=source.get("source_url") or "no source URL",
+        )
+        for source in license_guard.get("restricted_sources", [])
+    )
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--allow-restricted-knowledge",
+        action="store_true",
+        help="Publish content even when it is linked to restricted knowledge",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args([] if argv is None else argv)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     signal.signal(signal.SIGALRM, _timeout_handler)
@@ -230,6 +257,7 @@ def main() -> None:
         embargo_windows = embargo_windows_from_config(config)
         daily_limits = _daily_platform_limits(config)
         daily_counts = {}
+        restricted_prompt_behavior = restricted_prompt_behavior_from_config(config)
 
         # Get due queue items
         due_items = db.get_due_queue_items(now_iso)
@@ -277,6 +305,26 @@ def main() -> None:
                     db.mark_queue_published(queue_id)
                     logger.info(f"  Queue item {queue_id} already completed")
                     continue
+
+                license_guard = check_publication_license_guard(
+                    db,
+                    content_id,
+                    restricted_prompt_behavior=restricted_prompt_behavior,
+                    allow_restricted=args.allow_restricted_knowledge,
+                ).as_dict()
+                if license_guard["blocked"]:
+                    reason = (
+                        "License guard blocked restricted knowledge sources: "
+                        f"{_license_guard_summary(license_guard)}"
+                    )
+                    db.hold_publish_queue_item(queue_id, reason=reason)
+                    logger.error(f"  {reason}")
+                    continue
+                if license_guard["restricted_sources"]:
+                    logger.warning(
+                        "  License guard warning: "
+                        f"{_license_guard_summary(license_guard)}"
+                    )
 
                 alt_text_error = _alt_text_guard_error(item)
                 if alt_text_error:
@@ -439,4 +487,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
