@@ -4335,6 +4335,9 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     # Publish queue for scheduled posting
+    PUBLISH_QUEUE_STATUSES = {"queued", "published", "failed", "cancelled"}
+    PUBLISH_QUEUE_PLATFORMS = {"x", "bluesky", "all"}
+
     def queue_for_publishing(
         self,
         content_id: int,
@@ -4365,6 +4368,44 @@ class Database:
             )
         self.conn.commit()
         return cursor.lastrowid
+
+    def get_publish_queue_items(
+        self,
+        status: str | None = None,
+        platform: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """List publish queue items for operator review."""
+        if status is not None and status not in self.PUBLISH_QUEUE_STATUSES:
+            raise ValueError(f"invalid publish queue status: {status}")
+        if platform is not None and platform not in self.PUBLISH_QUEUE_PLATFORMS:
+            raise ValueError(f"invalid publish queue platform: {platform}")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        filters = []
+        params: list[object] = []
+        if status is not None:
+            filters.append("pq.status = ?")
+            params.append(status)
+        if platform is not None:
+            filters.append("pq.platform = ?")
+            params.append(platform)
+
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
+                      pq.status, pq.published_at, pq.error, pq.error_category,
+                      pq.created_at, gc.content_type, gc.content
+               FROM publish_queue pq
+               INNER JOIN generated_content gc ON gc.id = pq.content_id
+               {where_clause}
+               ORDER BY pq.scheduled_at ASC, pq.id ASC
+               LIMIT ?""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_due_queue_items(self, now: str) -> list[dict]:
         """Get queued items that are ready to publish.
@@ -4425,6 +4466,37 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_publish_queue_item(self, queue_id: int) -> dict | None:
+        """Return a publish queue item by ID."""
+        cursor = self.conn.execute(
+            """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
+                      pq.status, pq.published_at, pq.error, pq.error_category,
+                      pq.created_at, gc.content_type, gc.content
+               FROM publish_queue pq
+               INNER JOIN generated_content gc ON gc.id = pq.content_id
+               WHERE pq.id = ?""",
+            (queue_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def reschedule_publish_queue_item(self, queue_id: int, scheduled_at: str) -> dict:
+        """Move an unpublished publish queue item to a new scheduled time."""
+        row = self.get_publish_queue_item(queue_id)
+        if row is None:
+            raise ValueError(f"publish queue item not found: {queue_id}")
+        if row["status"] == "published":
+            raise ValueError("published queue items cannot be rescheduled")
+
+        self.conn.execute(
+            """UPDATE publish_queue
+               SET scheduled_at = ?
+               WHERE id = ?""",
+            (scheduled_at, queue_id),
+        )
+        self.conn.commit()
+        return self.get_publish_queue_item(queue_id)
+
     def mark_queue_published(self, queue_id: int) -> None:
         """Mark a queue item as successfully published.
 
@@ -4440,6 +4512,53 @@ class Database:
             (now, queue_id)
         )
         self.conn.commit()
+
+    def cancel_publish_queue_item(self, queue_id: int) -> dict:
+        """Cancel an unpublished publish queue item and clear transient errors."""
+        row = self.get_publish_queue_item(queue_id)
+        if row is None:
+            raise ValueError(f"publish queue item not found: {queue_id}")
+        if row["status"] == "published":
+            raise ValueError("published queue items cannot be cancelled")
+
+        self.conn.execute(
+            """UPDATE publish_queue
+               SET status = 'cancelled', error = NULL, error_category = NULL
+               WHERE id = ?""",
+            (queue_id,),
+        )
+        self.conn.commit()
+        return self.get_publish_queue_item(queue_id)
+
+    def restore_publish_queue_item(
+        self,
+        queue_id: int,
+        scheduled_at: str | None = None,
+    ) -> dict:
+        """Restore a cancelled or failed publish queue item to queued."""
+        row = self.get_publish_queue_item(queue_id)
+        if row is None:
+            raise ValueError(f"publish queue item not found: {queue_id}")
+        if row["status"] not in {"cancelled", "failed"}:
+            raise ValueError("only cancelled or failed queue items can be restored")
+
+        if scheduled_at is None:
+            self.conn.execute(
+                """UPDATE publish_queue
+                   SET status = 'queued', error = NULL, error_category = NULL
+                   WHERE id = ?""",
+                (queue_id,),
+            )
+        else:
+            self.conn.execute(
+                """UPDATE publish_queue
+                   SET status = 'queued', scheduled_at = ?,
+                       error = NULL, error_category = NULL
+                   WHERE id = ?""",
+                (scheduled_at, queue_id),
+            )
+        self.conn.commit()
+        return self.get_publish_queue_item(queue_id)
 
     def mark_queue_failed(
         self,
