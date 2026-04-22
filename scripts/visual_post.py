@@ -159,6 +159,9 @@ def main():
             image_path=result.image.path,
             image_prompt=result.image_prompt,
         )
+        if pr.planned_topic_id and content_id:
+            db.mark_planned_topic_generated(pr.planned_topic_id, content_id)
+            logger.info(f"  Linked planned topic {pr.planned_topic_id}")
 
         # Embed content for future semantic dedup
         if embedder and content_id:

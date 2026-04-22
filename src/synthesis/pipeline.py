@@ -6,6 +6,7 @@ import random
 import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -38,6 +39,7 @@ class PipelineResult:
     content_format: Optional[str] = None  # Format used for generation (e.g., 'micro_story', 'bold_claim')
     predictor_override: bool = False  # True when predictor tie-breaker changed best_idx
     predictor_override_detail: Optional[dict] = None  # {evaluator_top, predictor_top, margin, ...}
+    planned_topic_id: Optional[int] = None  # planned_topics.id used for campaign guidance
 
 
 class SynthesisPipeline:
@@ -369,6 +371,95 @@ class SynthesisPipeline:
         lines.append("")
         return "\n".join(lines)
 
+    def _campaign_limit_status(
+        self,
+        campaign: dict,
+        now: datetime | None = None,
+    ) -> tuple[bool, str]:
+        """Return whether the active campaign has reached its pacing limits."""
+        campaign_id = campaign.get("id")
+        if campaign_id is None:
+            return False, ""
+
+        daily_limit = campaign.get("daily_limit")
+        weekly_limit = campaign.get("weekly_limit")
+        if daily_limit is None and weekly_limit is None:
+            return False, ""
+
+        try:
+            counts = self.db.get_campaign_pacing_counts(campaign_id, now=now)
+        except Exception as e:
+            logger.warning(f"  Campaign pacing check skipped: {e}")
+            return False, ""
+
+        if daily_limit is not None and counts["daily_count"] >= daily_limit:
+            return True, (
+                f"daily limit reached ({counts['daily_count']}/{daily_limit})"
+            )
+        if weekly_limit is not None and counts["weekly_count"] >= weekly_limit:
+            return True, (
+                f"weekly limit reached ({counts['weekly_count']}/{weekly_limit})"
+            )
+        return False, ""
+
+    def _select_planned_campaign_topic(
+        self,
+        campaign: dict,
+        limits_reached: bool,
+    ) -> dict | None:
+        """Choose the next planned topic unless campaign pacing is capped."""
+        if limits_reached:
+            return None
+
+        planned = self.db.get_planned_topics(status="planned")
+        campaign_id = campaign.get("id")
+        for topic in planned:
+            if campaign_id is None or topic.get("campaign_id") == campaign_id:
+                return topic
+        return None
+
+    def _build_campaign_context(self) -> tuple[str, int | None]:
+        """Build campaign guidance and return the planned topic ID, if any."""
+        try:
+            campaign = self.db.get_active_campaign()
+        except Exception as e:
+            logger.debug(f"Campaign context unavailable: {e}")
+            return "", None
+
+        if not campaign or not isinstance(campaign, dict):
+            return "", None
+
+        limits_reached, limit_reason = self._campaign_limit_status(campaign)
+        planned_topic = self._select_planned_campaign_topic(campaign, limits_reached)
+
+        lines = ["CAMPAIGN CONTEXT"]
+        lines.append(f"Campaign: {campaign['name']}")
+        if campaign.get("goal"):
+            lines.append(f"Goal: {campaign['goal']}")
+        if campaign.get("start_date") or campaign.get("end_date"):
+            start = campaign.get("start_date") or "open"
+            end = campaign.get("end_date") or "open"
+            lines.append(f"Window: {start} to {end}")
+        if limits_reached:
+            lines.append(
+                f"Campaign pacing limit reached: {limit_reason}. "
+                "Skip planned campaign topics for this run."
+            )
+        elif planned_topic:
+            topic = planned_topic["topic"]
+            angle = planned_topic.get("angle")
+            if angle:
+                lines.append(f"Next planned topic: {topic} ({angle})")
+            else:
+                lines.append(f"Next planned topic: {topic}")
+            lines.append(
+                "Use this only when the source prompts or commits genuinely support it."
+            )
+        else:
+            lines.append("No planned campaign topic is ready for this run.")
+        lines.append("")
+        return "\n".join(lines), planned_topic.get("id") if planned_topic else None
+
     def _filter_topic_saturated(
         self, candidates: list[str], threshold: float = 0.65
     ) -> tuple[list[str], int]:
@@ -684,6 +775,9 @@ class SynthesisPipeline:
         # Stage 2: Multi-candidate generation with format variation
         avoidance_context = self._build_avoidance_context()
         pattern_context = self._build_pattern_context()
+        campaign_context, planned_topic_id = self._build_campaign_context()
+        if campaign_context:
+            pattern_context = (pattern_context + "\n" + campaign_context).strip() + "\n"
         presence_context = self.presence_context_builder.build_prompt_section(
             content_type
         )
@@ -830,6 +924,7 @@ class SynthesisPipeline:
                 source_prompts=prompts,
                 source_commits=source_commit_messages,
                 filter_stats=filter_stats,
+                planned_topic_id=planned_topic_id,
             )
 
         # Stage 3: Cross-model evaluation with engagement calibration
@@ -1009,4 +1104,5 @@ class SynthesisPipeline:
             content_format=best_format,
             predictor_override=predictor_override,
             predictor_override_detail=predictor_override_detail,
+            planned_topic_id=planned_topic_id,
         )

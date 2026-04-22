@@ -130,7 +130,8 @@ class PresenceContextBuilder:
         )
         frequencies = self._rows("get_topic_frequency", days=30)
         gaps = self._list("get_topic_gaps", days=30, min_gap_days=7)
-        planned = self._rows("get_planned_topics", status="planned")
+        campaign, limits_reached, _ = self._active_campaign_limit_status()
+        planned = self._planned_topics_respecting_pacing(campaign, limits_reached)
 
         lines = [
             "CONTENT MIX PLAN:",
@@ -162,8 +163,8 @@ class PresenceContextBuilder:
         return "\n".join(lines)
 
     def build_campaign_context(self) -> str:
-        campaign = self._dict("get_active_campaign")
-        planned = self._rows("get_planned_topics", status="planned")
+        campaign, limits_reached, limit_reason = self._active_campaign_limit_status()
+        planned = self._planned_topics_respecting_pacing(campaign, limits_reached)
         next_topic = planned[0] if planned else {}
 
         if not campaign and not next_topic:
@@ -189,8 +190,10 @@ class PresenceContextBuilder:
                     if value
                 )
                 lines.append(f"- Date window: {window}.")
+            if limits_reached:
+                lines.append(f"- Campaign pacing limit reached: {limit_reason}. Skip planned campaign topics for this run.")
 
-        if next_topic:
+        if next_topic and not limits_reached:
             topic = next_topic.get("topic")
             angle = next_topic.get("angle") or "no explicit angle"
             target = next_topic.get("target_date")
@@ -201,6 +204,41 @@ class PresenceContextBuilder:
             lines.append(topic_line)
 
         return "\n".join(lines)
+
+    def _active_campaign_limit_status(self) -> tuple[dict[str, Any], bool, str]:
+        campaign = self._dict("get_active_campaign")
+        if not campaign:
+            return {}, False, ""
+
+        campaign_id = campaign.get("id")
+        daily_limit = campaign.get("daily_limit")
+        weekly_limit = campaign.get("weekly_limit")
+        if campaign_id is None or (daily_limit is None and weekly_limit is None):
+            return campaign, False, ""
+
+        counts = self._dict("get_campaign_pacing_counts", campaign_id)
+        if not counts:
+            return campaign, False, ""
+
+        if daily_limit is not None and counts.get("daily_count", 0) >= daily_limit:
+            return campaign, True, f"daily limit reached ({counts.get('daily_count', 0)}/{daily_limit})"
+        if weekly_limit is not None and counts.get("weekly_count", 0) >= weekly_limit:
+            return campaign, True, f"weekly limit reached ({counts.get('weekly_count', 0)}/{weekly_limit})"
+        return campaign, False, ""
+
+    def _planned_topics_respecting_pacing(
+        self,
+        campaign: dict[str, Any],
+        limits_reached: bool,
+    ) -> list[dict]:
+        planned = self._rows("get_planned_topics", status="planned")
+        campaign_id = campaign.get("id")
+        if not limits_reached or campaign_id is None:
+            return planned
+        return [
+            topic for topic in planned
+            if topic.get("campaign_id") != campaign_id
+        ]
 
     def build_outcome_learning(self, content_type: str) -> str:
         stats = self._dict("get_engagement_calibration_stats", content_type)

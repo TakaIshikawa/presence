@@ -14,7 +14,7 @@ from evaluation.topic_extractor import TOPIC_TAXONOMY
 from runner import script_context
 
 
-CAMPAIGN_FIELDS = ("goal", "start_date", "end_date", "status")
+CAMPAIGN_FIELDS = ("goal", "start_date", "end_date", "daily_limit", "weekly_limit", "status")
 PLANNED_TOPIC_FIELDS = ("angle", "source_material", "status")
 
 
@@ -50,6 +50,18 @@ def _optional_str(value) -> str | None:
     return str(value)
 
 
+def _optional_positive_int(value, field_name: str) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a positive integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return parsed
+
+
 def _campaign_payload(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("Each campaign must be a mapping")
@@ -62,6 +74,8 @@ def _campaign_payload(raw: dict) -> dict:
         "goal": _optional_str(raw.get("goal")),
         "start_date": normalize_date(raw.get("start_date"), f"{name} start_date"),
         "end_date": normalize_date(raw.get("end_date"), f"{name} end_date"),
+        "daily_limit": _optional_positive_int(raw.get("daily_limit"), f"{name} daily_limit"),
+        "weekly_limit": _optional_positive_int(raw.get("weekly_limit"), f"{name} weekly_limit"),
         "status": status,
     }
 
@@ -188,7 +202,7 @@ def export_campaigns(db) -> dict:
 
     output_campaigns = []
     for campaign in campaigns:
-        output_campaigns.append({
+        exported_campaign = {
             "name": campaign["name"],
             "goal": campaign.get("goal"),
             "start_date": campaign.get("start_date"),
@@ -198,7 +212,12 @@ def export_campaigns(db) -> dict:
                 _export_topic(topic)
                 for topic in topics_by_campaign.get(campaign["id"], [])
             ],
-        })
+        }
+        if campaign.get("daily_limit") is not None:
+            exported_campaign["daily_limit"] = campaign.get("daily_limit")
+        if campaign.get("weekly_limit") is not None:
+            exported_campaign["weekly_limit"] = campaign.get("weekly_limit")
+        output_campaigns.append(exported_campaign)
 
     output = {"campaigns": output_campaigns}
     uncampaigned = topics_by_campaign.get(None, [])

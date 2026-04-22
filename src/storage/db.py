@@ -175,10 +175,17 @@ class Database:
                     goal TEXT,
                     start_date TEXT,
                     end_date TEXT,
+                    daily_limit INTEGER,
+                    weekly_limit INTEGER,
                     status TEXT DEFAULT 'planned',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cc_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(content_campaigns)")}
+            if "daily_limit" not in cc_cols:
+                self.conn.execute("ALTER TABLE content_campaigns ADD COLUMN daily_limit INTEGER")
+            if "weekly_limit" not in cc_cols:
+                self.conn.execute("ALTER TABLE content_campaigns ADD COLUMN weekly_limit INTEGER")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_campaigns_status ON content_campaigns(status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_campaigns_dates ON content_campaigns(start_date, end_date)")
             pt_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(planned_topics)")}
@@ -332,10 +339,20 @@ class Database:
                 goal TEXT,
                 start_date TEXT,
                 end_date TEXT,
+                daily_limit INTEGER,
+                weekly_limit INTEGER,
                 status TEXT DEFAULT 'planned',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cc_cols = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(content_campaigns)")
+        }
+        if "daily_limit" not in cc_cols:
+            self.conn.execute("ALTER TABLE content_campaigns ADD COLUMN daily_limit INTEGER")
+        if "weekly_limit" not in cc_cols:
+            self.conn.execute("ALTER TABLE content_campaigns ADD COLUMN weekly_limit INTEGER")
         pt_cols = {
             row[1]
             for row in self.conn.execute("PRAGMA table_info(planned_topics)")
@@ -2898,13 +2915,16 @@ class Database:
         goal: str = None,
         start_date: str = None,
         end_date: str = None,
+        daily_limit: int = None,
+        weekly_limit: int = None,
         status: str = "active",
     ) -> int:
         """Create a content campaign for planned topic guidance."""
         cursor = self.conn.execute(
-            """INSERT INTO content_campaigns (name, goal, start_date, end_date, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            (name, goal, start_date, end_date, status),
+            """INSERT INTO content_campaigns
+               (name, goal, start_date, end_date, daily_limit, weekly_limit, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (name, goal, start_date, end_date, daily_limit, weekly_limit, status),
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -2988,13 +3008,16 @@ class Database:
         goal: str = None,
         start_date: str = None,
         end_date: str = None,
+        daily_limit: int = None,
+        weekly_limit: int = None,
         status: str = "planned",
     ) -> int:
         """Create a content campaign for grouping planned topics."""
         cursor = self.conn.execute(
-            """INSERT INTO content_campaigns (name, goal, start_date, end_date, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            (name, goal, start_date, end_date, status)
+            """INSERT INTO content_campaigns
+               (name, goal, start_date, end_date, daily_limit, weekly_limit, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (name, goal, start_date, end_date, daily_limit, weekly_limit, status)
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -3043,18 +3066,81 @@ class Database:
         goal: str = None,
         start_date: str = None,
         end_date: str = None,
+        daily_limit: int = None,
+        weekly_limit: int = None,
         status: str = "planned",
     ) -> None:
         """Update a content campaign."""
         cursor = self.conn.execute(
             """UPDATE content_campaigns
-               SET name = ?, goal = ?, start_date = ?, end_date = ?, status = ?
+               SET name = ?,
+                   goal = ?,
+                   start_date = ?,
+                   end_date = ?,
+                   daily_limit = ?,
+                   weekly_limit = ?,
+                   status = ?
                WHERE id = ?""",
-            (name, goal, start_date, end_date, status, campaign_id)
+            (name, goal, start_date, end_date, daily_limit, weekly_limit, status, campaign_id)
         )
         if cursor.rowcount == 0:
             raise ValueError(f"Campaign {campaign_id} does not exist")
         self.conn.commit()
+
+    def count_campaign_content_in_window(
+        self,
+        campaign_id: int,
+        start_at: str,
+        end_at: str,
+    ) -> int:
+        """Count campaign-linked content generated or published in a date window."""
+        cursor = self.conn.execute(
+            """SELECT COUNT(DISTINCT gc.id)
+               FROM planned_topics pt
+               INNER JOIN generated_content gc ON gc.id = pt.content_id
+               WHERE pt.campaign_id = ?
+                 AND (
+                    (gc.created_at >= ? AND gc.created_at < ?)
+                    OR (gc.published_at IS NOT NULL
+                        AND gc.published_at >= ?
+                        AND gc.published_at < ?)
+                 )""",
+            (campaign_id, start_at, end_at, start_at, end_at),
+        )
+        return int(cursor.fetchone()[0] or 0)
+
+    def get_campaign_pacing_counts(
+        self,
+        campaign_id: int,
+        now: datetime | None = None,
+    ) -> dict:
+        """Return current UTC day and ISO-week campaign content counts."""
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        day_start = now.astimezone(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        day_end = day_start + timedelta(days=1)
+        week_start = day_start - timedelta(days=day_start.weekday())
+        week_end = week_start + timedelta(days=7)
+
+        return {
+            "daily_count": self.count_campaign_content_in_window(
+                campaign_id,
+                day_start.isoformat(),
+                day_end.isoformat(),
+            ),
+            "weekly_count": self.count_campaign_content_in_window(
+                campaign_id,
+                week_start.isoformat(),
+                week_end.isoformat(),
+            ),
+            "day_start": day_start.isoformat(),
+            "day_end": day_end.isoformat(),
+            "week_start": week_start.isoformat(),
+            "week_end": week_end.isoformat(),
+        }
 
     def find_planned_topic(
         self,

@@ -277,6 +277,8 @@ class TestDatabaseTopicMethods:
             goal="Build a multi-post testing arc",
             start_date="2026-05-01",
             end_date="2026-05-15",
+            daily_limit=1,
+            weekly_limit=3,
             status="planned"
         )
 
@@ -289,6 +291,48 @@ class TestDatabaseTopicMethods:
         assert campaigns[0]["goal"] == "Build a multi-post testing arc"
         assert campaigns[0]["start_date"] == "2026-05-01"
         assert campaigns[0]["end_date"] == "2026-05-15"
+        assert campaigns[0]["daily_limit"] == 1
+        assert campaigns[0]["weekly_limit"] == 3
+
+    def test_campaign_content_window_counts_generated_and_published(self, db):
+        """Test campaign pacing counts linked generated or published content."""
+        campaign_id = db.create_campaign(name="Pacing", daily_limit=2, weekly_limit=5)
+        planned_id = db.insert_planned_topic(topic="testing", campaign_id=campaign_id)
+        other_planned_id = db.insert_planned_topic(topic="architecture")
+
+        now = datetime(2026, 5, 6, 12, tzinfo=timezone.utc)
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=["sha"],
+            source_messages=["uuid"],
+            content="Campaign post",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.conn.execute(
+            "UPDATE generated_content SET created_at = ?, published = 1, published_at = ? WHERE id = ?",
+            (
+                now.replace(hour=9).isoformat(),
+                now.replace(hour=10).isoformat(),
+                content_id,
+            ),
+        )
+        db.mark_planned_topic_generated(planned_id, content_id)
+
+        other_content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=["sha"],
+            source_messages=["uuid"],
+            content="Uncampaigned post",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.mark_planned_topic_generated(other_planned_id, other_content_id)
+
+        counts = db.get_campaign_pacing_counts(campaign_id, now=now)
+
+        assert counts["daily_count"] == 1
+        assert counts["weekly_count"] == 1
 
     def test_planned_topic_campaign_assignment(self, db):
         """Test assigning planned topics to a campaign."""

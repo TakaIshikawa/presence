@@ -78,8 +78,12 @@ class TestPipelineConstruction:
             db=db,
             num_candidates=3,
         )
-        MockGen.assert_called_once_with("test-key", "claude-sonnet-4-6", timeout=300.0)
-        MockEval.assert_called_once_with("test-key", "claude-opus-4-7", timeout=300.0)
+        MockGen.assert_called_once_with(
+            "test-key", "claude-sonnet-4-6", timeout=300.0, db=db
+        )
+        MockEval.assert_called_once_with(
+            "test-key", "claude-opus-4-7", timeout=300.0, db=db
+        )
         assert pipeline.num_candidates == 3
 
 
@@ -170,6 +174,57 @@ class TestContentTypeRouting:
         assert "2026-04-01 to 2026-04-30" in pattern_context
         assert "Next planned topic: testing (dry-runs before risky releases)" in pattern_context
         assert "Use this only when the source prompts or commits genuinely support it" in pattern_context
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_campaign_pacing_skips_planned_topic_when_limit_reached(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+        db.get_active_campaign.return_value = {
+            "id": 42,
+            "name": "Reliability Week",
+            "goal": "pace the arc",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-30",
+            "daily_limit": 1,
+            "weekly_limit": None,
+        }
+        db.get_campaign_pacing_counts.return_value = {
+            "daily_count": 1,
+            "weekly_count": 1,
+        }
+        db.get_planned_topics.return_value = [
+            {
+                "id": 7,
+                "campaign_id": 42,
+                "topic": "testing",
+                "angle": "dry-runs before risky releases",
+                "target_date": "2026-04-22",
+            }
+        ]
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Post A", "Post B", "Post C"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(best_score=9.5)
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS, content_type="x_post")
+
+        pattern_context = pipeline.generator.generate_candidates.call_args.kwargs[
+            "pattern_context"
+        ]
+        assert "Campaign pacing limit reached: daily limit reached (1/1)" in pattern_context
+        assert "Next planned topic: testing" not in pattern_context
+        assert result.planned_topic_id is None
 
     @patch("synthesis.pipeline.ContentRefiner")
     @patch("synthesis.pipeline.CrossModelEvaluator")

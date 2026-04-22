@@ -34,6 +34,13 @@ def validate_date(date_value: str, field_name: str = "date") -> None:
         sys.exit(1)
 
 
+def validate_limit(limit_value: int, field_name: str) -> None:
+    """Validate an optional positive pacing limit."""
+    if limit_value is not None and limit_value < 1:
+        logger.error(f"Invalid {field_name}: must be a positive integer.")
+        sys.exit(1)
+
+
 def cmd_backfill(db, config):
     """Extract topics for all published content without topic entries."""
     content_items = db.get_content_without_topics()
@@ -231,17 +238,23 @@ def cmd_campaign_create(
     goal: str = None,
     start_date: str = None,
     end_date: str = None,
+    daily_limit: int = None,
+    weekly_limit: int = None,
     status: str = "planned"
 ):
     """Create a campaign for grouping planned topics."""
     validate_date(start_date, "start date")
     validate_date(end_date, "end date")
+    validate_limit(daily_limit, "daily limit")
+    validate_limit(weekly_limit, "weekly limit")
 
     campaign_id = db.create_campaign(
         name=name,
         goal=goal,
         start_date=start_date,
         end_date=end_date,
+        daily_limit=daily_limit,
+        weekly_limit=weekly_limit,
         status=status
     )
 
@@ -253,6 +266,10 @@ def cmd_campaign_create(
         logger.info(f"  Start:  {start_date}")
     if end_date:
         logger.info(f"  End:    {end_date}")
+    if daily_limit:
+        logger.info(f"  Daily limit:  {daily_limit}")
+    if weekly_limit:
+        logger.info(f"  Weekly limit: {weekly_limit}")
     logger.info(f"  Status: {status}")
     logger.info("")
 
@@ -268,8 +285,14 @@ def cmd_campaign_list(db, status: str = None):
     logger.info("")
     logger.info(f"Campaigns ({len(campaigns)}):")
     logger.info("")
-    logger.info(f"  {'ID':>4s}  {'Name':24s}  {'Status':10s}  {'Start':12s}  {'End':12s}  {'Goal':36s}")
-    logger.info(f"  {'-'*4:>4s}  {'-'*24:24s}  {'-'*10:10s}  {'-'*12:12s}  {'-'*12:12s}  {'-'*36:36s}")
+    logger.info(
+        f"  {'ID':>4s}  {'Name':24s}  {'Status':10s}  {'Start':12s}  {'End':12s}  "
+        f"{'Daily':>6s}  {'Weekly':>6s}  {'Goal':36s}"
+    )
+    logger.info(
+        f"  {'-'*4:>4s}  {'-'*24:24s}  {'-'*10:10s}  {'-'*12:12s}  {'-'*12:12s}  "
+        f"{'-'*6:>6s}  {'-'*6:>6s}  {'-'*36:36s}"
+    )
 
     for campaign in campaigns:
         campaign_id = campaign["id"]
@@ -277,10 +300,13 @@ def cmd_campaign_list(db, status: str = None):
         campaign_status = campaign["status"]
         start = campaign["start_date"][:10] if campaign["start_date"] else ""
         end = campaign["end_date"][:10] if campaign["end_date"] else ""
+        daily_limit = str(campaign["daily_limit"] or "")
+        weekly_limit = str(campaign["weekly_limit"] or "")
         goal = campaign["goal"] or ""
 
         logger.info(
-            f"  {campaign_id:4d}  {name:24s}  {campaign_status:10s}  {start:12s}  {end:12s}  {goal:36s}"
+            f"  {campaign_id:4d}  {name:24s}  {campaign_status:10s}  {start:12s}  {end:12s}  "
+            f"{daily_limit:>6s}  {weekly_limit:>6s}  {goal:36s}"
         )
 
     logger.info("")
@@ -359,6 +385,8 @@ def main():
     campaign_create_parser.add_argument("--goal", help="Campaign goal")
     campaign_create_parser.add_argument("--start-date", help="Campaign start date (YYYY-MM-DD)")
     campaign_create_parser.add_argument("--end-date", help="Campaign end date (YYYY-MM-DD)")
+    campaign_create_parser.add_argument("--daily-limit", type=int, help="Maximum campaign items per day")
+    campaign_create_parser.add_argument("--weekly-limit", type=int, help="Maximum campaign items per week")
     campaign_create_parser.add_argument(
         "--status",
         default="planned",
@@ -402,6 +430,8 @@ def main():
                     goal=args.goal,
                     start_date=args.start_date,
                     end_date=args.end_date,
+                    daily_limit=args.daily_limit,
+                    weekly_limit=args.weekly_limit,
                     status=args.status
                 )
             elif args.campaign_command == "list":

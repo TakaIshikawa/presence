@@ -135,6 +135,9 @@ def main():
             eval_feedback=result.comparison.best_feedback,
             content_format=result.content_format,
         )
+        if result.planned_topic_id and content_id:
+            db.mark_planned_topic_generated(result.planned_topic_id, content_id)
+            logger.info(f"  Linked planned topic {result.planned_topic_id}")
 
         # Store knowledge lineage
         if result.knowledge_ids and content_id:

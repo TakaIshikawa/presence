@@ -368,6 +368,8 @@ CREATE TABLE IF NOT EXISTS content_campaigns (
     goal TEXT,
     start_date TEXT,
     end_date TEXT,
+    daily_limit INTEGER,
+    weekly_limit INTEGER,
     status TEXT DEFAULT 'planned', -- 'planned', 'active', 'completed', 'paused'
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
