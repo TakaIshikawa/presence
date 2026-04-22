@@ -82,6 +82,30 @@ class TestBlueskyPlatformAdapter:
         assert provider.called is True
         assert result == "Shipping today #python #buildinpublic"
 
+    def test_appends_suggested_hashtags_when_context_allows(self):
+        adapter = BlueskyPlatformAdapter()
+
+        result = adapter.adapt(
+            "Shipping today #python",
+            suggested_hashtags=("#Testing", "#Python"),
+        )
+
+        assert result == "Shipping today #python #Testing"
+
+    def test_suppresses_suggested_hashtags_when_context_reduces_hashtags(self):
+        class ContextProvider:
+            def generate_adaptation_context(self, days=60):
+                return "Posts get better on Bluesky with fewer tags"
+
+        adapter = BlueskyPlatformAdapter(context_provider=ContextProvider())
+
+        result = adapter.adapt(
+            "Shipping today #python #buildinpublic #launch",
+            suggested_hashtags=("#Testing",),
+        )
+
+        assert result == "Shipping today #python #buildinpublic"
+
 
 class TestLinkedInPlatformAdapter:
     def test_formats_thread_as_linkedin_paragraphs_and_removes_thread_markers(self):
@@ -109,6 +133,16 @@ class TestLinkedInPlatformAdapter:
         hashtags = [word for word in result.split() if word.startswith("#")]
         assert hashtags == ["#one", "#two", "#three", "#four", "#five"]
         assert len(hashtags) == LINKEDIN_MAX_HASHTAGS
+
+    def test_adds_suggested_hashtags_for_linkedin(self):
+        adapter = LinkedInPlatformAdapter()
+
+        result = adapter.adapt(
+            "Shipping today #python",
+            suggested_hashtags=("#Testing", "#Python", "#DevTools"),
+        )
+
+        assert result.endswith("#python #Testing #DevTools")
 
     def test_truncates_to_linkedin_limit_without_splitting_graphemes(self):
         adapter = LinkedInPlatformAdapter()

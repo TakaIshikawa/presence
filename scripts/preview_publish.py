@@ -46,6 +46,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=3000,
         help="Maximum LinkedIn post length in graphemes for --linkedin-out",
     )
+    parser.add_argument(
+        "--suggest-hashtags",
+        action="store_true",
+        help="Show deterministic hashtag suggestions in the preview without saving them",
+    )
     return parser.parse_args(argv)
 
 
@@ -59,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
                 db,
                 content_id=args.content_id,
                 queue_id=args.queue_id,
+                include_hashtag_suggestions=args.suggest_hashtags,
             )
             if args.linkedin_out:
                 linkedin_export = build_linkedin_export_from_db(

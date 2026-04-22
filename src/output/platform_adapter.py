@@ -117,7 +117,12 @@ class BlueskyPlatformAdapter:
         self.context_provider = context_provider
         self.grapheme_limit = grapheme_limit
 
-    def adapt(self, text: str, content_type: str = "x_post") -> str:
+    def adapt(
+        self,
+        text: str,
+        content_type: str = "x_post",
+        suggested_hashtags: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
         """Return a Bluesky-specific text variant without using an LLM."""
         context = self._adaptation_context()
         hints = self._hints_from_context(context)
@@ -125,6 +130,8 @@ class BlueskyPlatformAdapter:
 
         if hints.reduce_hashtags:
             adapted = self._reduce_hashtags(adapted)
+        else:
+            adapted = self._append_hashtags(adapted, suggested_hashtags, max_hashtags=2)
 
         adapted = self._normalize_spacing(adapted)
         return self._fit_to_limit(adapted)
@@ -180,6 +187,47 @@ class BlueskyPlatformAdapter:
             return match.group(0) if match.span() in keep else ""
 
         return _HASHTAG_RE.sub(replace, text)
+
+    def _append_hashtags(
+        self,
+        text: str,
+        suggested_hashtags: list[str] | tuple[str, ...] | None,
+        *,
+        max_hashtags: int,
+    ) -> str:
+        if not suggested_hashtags:
+            return text
+
+        hashtags = self._merge_hashtags(text, suggested_hashtags, max_hashtags=max_hashtags)
+        if not hashtags:
+            return text
+
+        cleaned = self._normalize_spacing(_HASHTAG_RE.sub("", text))
+        if not cleaned:
+            return " ".join(hashtags)
+        return f"{cleaned} {' '.join(hashtags)}"
+
+    def _merge_hashtags(
+        self,
+        text: str,
+        suggested_hashtags: list[str] | tuple[str, ...] | None,
+        *,
+        max_hashtags: int,
+    ) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for hashtag in [
+            *[match.group(0) for match in _HASHTAG_RE.finditer(text)],
+            *(suggested_hashtags or []),
+        ]:
+            key = hashtag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(hashtag)
+            if len(merged) >= max_hashtags:
+                break
+        return merged
 
     def _fit_to_limit(self, text: str) -> str:
         if count_graphemes(text) <= self.grapheme_limit:
@@ -250,12 +298,18 @@ class LinkedInPlatformAdapter:
     def __init__(self, grapheme_limit: int = LINKEDIN_GRAPHEME_LIMIT):
         self.grapheme_limit = grapheme_limit
 
-    def adapt(self, text: str, content_type: str = "x_post") -> str:
+    def adapt(
+        self,
+        text: str,
+        content_type: str = "x_post",
+        suggested_hashtags: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
         """Return a LinkedIn-specific text variant without publishing it."""
         adapted = self._cleanup_x_wording(text)
         paragraphs = self._paragraphs_from_text(adapted, content_type)
         body, hashtags = self._extract_hashtags(paragraphs)
         body = self._shape_paragraphs(body)
+        hashtags = self._merge_hashtags(hashtags, suggested_hashtags)
 
         if hashtags:
             body.append(" ".join(hashtags[:LINKEDIN_MAX_HASHTAGS]))
@@ -327,6 +381,23 @@ class LinkedInPlatformAdapter:
                 body.append(cleaned)
 
         return body, hashtags
+
+    def _merge_hashtags(
+        self,
+        existing: list[str],
+        suggested_hashtags: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for hashtag in [*existing, *(suggested_hashtags or [])]:
+            key = hashtag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(hashtag)
+            if len(merged) >= LINKEDIN_MAX_HASHTAGS:
+                break
+        return merged
 
     def _shape_paragraphs(self, paragraphs: list[str]) -> list[str]:
         shaped: list[str] = []

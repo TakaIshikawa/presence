@@ -187,6 +187,58 @@ def test_preview_publish_cli_writes_linkedin_artifact(db, tmp_path, capsys):
     assert "CLI artifact post with source" in artifact
 
 
+def test_preview_publish_cli_shows_hashtag_suggestions(db, capsys):
+    content_id = _insert_content(
+        db,
+        "Python API testing workflow shipped today.",
+    )
+    db.insert_content_topics(content_id, [("testing", "api tests", 0.9)])
+
+    import preview_publish
+
+    class Context:
+        def __enter__(self):
+            return None, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("preview_publish.script_context", return_value=Context()):
+        exit_code = preview_publish.main(
+            ["--content-id", str(content_id), "--suggest-hashtags"]
+        )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Suggested hashtags:" in captured.out
+    assert "- X: #Testing #API #Python" in captured.out
+    assert "- BLUESKY: #Testing #API" in captured.out
+    assert "- LINKEDIN: #Testing #API #Python #Workflow" in captured.out
+    assert "Python API testing workflow shipped today. #Testing #API" in captured.out
+
+
+def test_preview_json_includes_hashtag_suggestions_when_requested(db):
+    content_id = _insert_content(db, "Debugging Python latency in production.")
+    db.insert_content_topics(content_id, [("debugging", "latency", 0.8)])
+
+    preview = build_publication_preview(
+        db,
+        content_id=content_id,
+        include_hashtag_suggestions=True,
+    )
+
+    payload = json.loads(preview_to_json(preview))
+    assert payload["hashtag_suggestions"]["x"] == [
+        "#Debugging",
+        "#Performance",
+        "#Python",
+    ]
+    assert payload["platforms"]["bluesky"]["suggested_hashtags"] == [
+        "#Debugging",
+        "#Performance",
+    ]
+
+
 def test_preview_includes_claim_check_summary_in_text_and_json(db):
     content_id = _insert_content(db, "Post with 43% unsupported claim")
     db.save_claim_check_summary(

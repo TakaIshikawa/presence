@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from synthesis.hashtag_suggester import HashtagSuggestions, suggest_hashtags
+
 from .platform_adapter import BlueskyPlatformAdapter, count_graphemes
 from .x_client import parse_thread_content
 
@@ -112,6 +114,31 @@ def _fetch_persona_guard_summary(db: Any, content_id: int) -> dict | None:
     return summary
 
 
+def _fetch_content_topics(db: Any, content_id: int) -> list[dict]:
+    row_factory = getattr(getattr(db, "conn", None), "row_factory", None)
+    try:
+        rows = db.conn.execute(
+            """SELECT topic, subtopic, confidence
+               FROM content_topics
+               WHERE content_id = ?
+               ORDER BY confidence DESC, id ASC""",
+            (content_id,),
+        ).fetchall()
+    except Exception:
+        return []
+
+    if row_factory:
+        return [dict(row) for row in rows]
+    return [
+        {
+            "topic": row[0],
+            "subtopic": row[1],
+            "confidence": row[2],
+        }
+        for row in rows
+    ]
+
+
 def _claim_check_status(summary: dict | None) -> dict:
     if not summary:
         return {
@@ -212,9 +239,21 @@ def _render_platform_posts(
     x_posts: list[str],
     content_type: str,
     adapter: BlueskyPlatformAdapter,
+    suggestions: HashtagSuggestions | None = None,
 ) -> list[dict]:
     if platform == "bluesky":
-        texts = [adapter.adapt(post, content_type) for post in x_posts]
+        texts = [
+            adapter.adapt(
+                post,
+                content_type,
+                suggested_hashtags=(
+                    suggestions.bluesky
+                    if suggestions and index == len(x_posts) - 1
+                    else None
+                ),
+            )
+            for index, post in enumerate(x_posts)
+        ]
     else:
         texts = x_posts
 
@@ -236,6 +275,7 @@ def build_publication_preview(
     content_id: int | None = None,
     queue_id: int | None = None,
     bluesky_adapter: BlueskyPlatformAdapter | None = None,
+    include_hashtag_suggestions: bool = False,
 ) -> dict:
     """Build a platform preview for one generated content or queue row."""
     if (content_id is None) == (queue_id is None):
@@ -268,6 +308,14 @@ def build_publication_preview(
     adapter = bluesky_adapter or BlueskyPlatformAdapter()
     requested = set(_requested_platforms(queue.get("queue_platform") if queue else None))
     x_posts = _split_x_posts(content.get("content") or "", content["content_type"])
+    hashtag_suggestions = (
+        suggest_hashtags(
+            content.get("content") or "",
+            topics=_fetch_content_topics(db, content["id"]),
+        )
+        if include_hashtag_suggestions
+        else None
+    )
     claim_check = _claim_check_status(
         _fetch_claim_check_summary(db, content["id"])
     )
@@ -291,6 +339,12 @@ def build_publication_preview(
                 x_posts,
                 content["content_type"],
                 adapter,
+                hashtag_suggestions,
+            ),
+            "suggested_hashtags": (
+                list(hashtag_suggestions.for_platform(platform))
+                if hashtag_suggestions
+                else []
             ),
             "image_path": content.get("image_path"),
             "image_alt_text": content.get("image_alt_text"),
@@ -311,6 +365,9 @@ def build_publication_preview(
         "queue": queue,
         "claim_check": claim_check,
         "persona_guard": persona_guard,
+        "hashtag_suggestions": (
+            hashtag_suggestions.as_dict() if hashtag_suggestions else None
+        ),
         "platforms": platforms,
     }
 
@@ -362,6 +419,13 @@ def format_preview(preview: dict) -> str:
         if persona_guard.get("reasons"):
             lines.append("Persona guard reasons:")
             lines.extend(f"- {reason}" for reason in persona_guard["reasons"])
+
+    hashtag_suggestions = preview.get("hashtag_suggestions")
+    if hashtag_suggestions:
+        lines.append("Suggested hashtags:")
+        for platform in ("x", "bluesky", "linkedin"):
+            tags = hashtag_suggestions.get(platform) or []
+            lines.append(f"- {platform.upper()}: {' '.join(tags) if tags else 'none'}")
 
     for platform, rendered in preview["platforms"].items():
         status = rendered["status"]
