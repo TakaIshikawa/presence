@@ -198,6 +198,7 @@ class SynthesisPipeline:
         engagement_predictor=None,
         format_weighting_enabled: bool = True,
         claim_check_enabled: bool = True,
+        restricted_prompt_behavior: str = "strict",
     ):
         self.api_key = api_key
         self.generator = ContentGenerator(api_key, generator_model, timeout=anthropic_timeout)
@@ -218,6 +219,7 @@ class SynthesisPipeline:
         self.engagement_predictor = engagement_predictor
         self.format_weighting_enabled = format_weighting_enabled
         self.claim_check_enabled = claim_check_enabled
+        self.restricted_prompt_behavior = restricted_prompt_behavior
         self.claim_checker = ClaimChecker()
         self.presence_context_builder = PresenceContextBuilder(db)
 
@@ -675,6 +677,7 @@ class SynthesisPipeline:
                 api_key=self.api_key,
                 model=self.generator.model,
                 db=self.db,
+                restricted_prompt_behavior=self.restricted_prompt_behavior,
             )
             trend_context, trend_knowledge_ids = trend_builder.build_context_with_ids()
             trend_hooks = trend_builder.build_hook_context(prompts=prompts, commits=commits)

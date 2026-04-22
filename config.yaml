@@ -74,6 +74,7 @@ embeddings:
 
 # Curated external sources (manually approved)
 curated_sources:
+  restricted_prompt_behavior: "strict"  # strict excludes restricted sources from prompts; permissive allows them
   max_x_accounts_per_run: 25
   x_tweets_per_account: 5
   rss_entries_per_source: 5

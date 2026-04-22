@@ -88,6 +88,7 @@ class CuratedSourcesConfig:
     x_accounts: list[CuratedSource]
     blogs: list[CuratedSource]
     newsletters: list[CuratedSource] = field(default_factory=list)
+    restricted_prompt_behavior: str = "strict"
     max_x_accounts_per_run: int = 25
     x_tweets_per_account: int = 5
     rss_entries_per_source: int = 5
@@ -286,6 +287,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
             x_accounts=x_accounts,
             blogs=blogs,
             newsletters=newsletters,
+            restricted_prompt_behavior=data["curated_sources"].get(
+                "restricted_prompt_behavior", "strict"
+            ),
             max_x_accounts_per_run=data["curated_sources"].get("max_x_accounts_per_run", 25),
             x_tweets_per_account=data["curated_sources"].get("x_tweets_per_account", 5),
             rss_entries_per_source=data["curated_sources"].get("rss_entries_per_source", 5),

@@ -27,11 +27,13 @@ class EnhancedContentGenerator:
         api_key: str,
         knowledge_store: Optional[KnowledgeStore] = None,
         model: str = "claude-sonnet-4-6",
-        timeout: float = 300.0
+        timeout: float = 300.0,
+        restricted_prompt_behavior: str = KnowledgeStore.STRICT_LICENSE_BEHAVIOR,
     ):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.knowledge_store = knowledge_store
+        self.restricted_prompt_behavior = restricted_prompt_behavior
 
     def _load_prompt(self, prompt_type: str) -> str:
         # Try enhanced version first, fall back to basic
@@ -68,7 +70,14 @@ class EnhancedContentGenerator:
             min_similarity=0.5
         )
 
-        return own_insights, external_insights
+        return (
+            KnowledgeStore.filter_prompt_safe(
+                own_insights, self.restricted_prompt_behavior
+            ),
+            KnowledgeStore.filter_prompt_safe(
+                external_insights, self.restricted_prompt_behavior
+            ),
+        )
 
     def _format_insights(
         self,

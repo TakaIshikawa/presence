@@ -86,6 +86,12 @@ class Database:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_path TEXT")
             if "image_prompt" not in cols:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_prompt TEXT")
+            # Migrate knowledge licensing for prompt-safety filtering
+            k_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(knowledge)")}
+            if k_cols and "license" not in k_cols:
+                self.conn.execute(
+                    "ALTER TABLE knowledge ADD COLUMN license TEXT DEFAULT 'attribution_required'"
+                )
             # Migrate reply_queue for cultivate enrichment
             rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
             if rq_cols and "relationship_context" not in rq_cols:

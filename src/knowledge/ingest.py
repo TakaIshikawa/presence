@@ -87,7 +87,8 @@ def ingest_own_post(
         embedding=None,  # Will be generated
         attribution_required=False,
         approved=True,  # Own content is auto-approved
-        created_at=None
+        created_at=None,
+        license="open",
     )
     return store.add_item(item)
 
@@ -120,7 +121,8 @@ def ingest_own_conversation(
         embedding=None,
         attribution_required=False,
         approved=True,
-        created_at=None
+        created_at=None,
+        license="open",
     )
     return store.add_item(item)
 
@@ -151,7 +153,8 @@ def ingest_curated_post(
         embedding=None,
         attribution_required=(license_type != "open"),
         approved=True,  # Curated = pre-approved
-        created_at=None
+        created_at=None,
+        license=license_type,
     )
     return store.add_item(item)
 
@@ -185,6 +188,7 @@ def ingest_curated_article(
         embedding=None,
         attribution_required=(license_type != "open"),
         approved=True,
-        created_at=None
+        created_at=None,
+        license=license_type,
     )
     return store.add_item(item)

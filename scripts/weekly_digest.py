@@ -50,6 +50,9 @@ def main():
             semantic_threshold=semantic_threshold,
             knowledge_store=knowledge_store,
             claim_check_enabled=config.synthesis.claim_check_enabled,
+            restricted_prompt_behavior=getattr(
+                config.curated_sources, "restricted_prompt_behavior", "strict"
+            ) if config.curated_sources else "strict",
         )
         blog_writer = BlogWriter(config.paths.static_site)
 

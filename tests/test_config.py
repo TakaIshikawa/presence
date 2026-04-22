@@ -191,6 +191,7 @@ class TestDataclassParsing:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert isinstance(cfg.curated_sources, CuratedSourcesConfig)
+        assert cfg.curated_sources.restricted_prompt_behavior == "strict"
         assert cfg.curated_sources.rss_entries_per_source == 3
 
         assert len(cfg.curated_sources.x_accounts) == 1
@@ -529,6 +530,17 @@ class TestEdgeCases:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.curated_sources.x_accounts[0].license == "attribution_required"
         assert cfg.curated_sources.blogs[0].license == "attribution_required"
+
+    def test_curated_sources_restricted_prompt_behavior_override(self, tmp_path):
+        data = _minimal_config_dict(
+            curated_sources={
+                "restricted_prompt_behavior": "permissive",
+                "x_accounts": [],
+                "blogs": [],
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.curated_sources.restricted_prompt_behavior == "permissive"
 
     def test_missing_required_section_raises(self, tmp_path):
         """Omitting a required top-level section raises ValueError."""
