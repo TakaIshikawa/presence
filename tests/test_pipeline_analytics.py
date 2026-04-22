@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from evaluation.pipeline_analytics import (
+    CampaignPerformanceReport,
     CrossPlatformReport,
     PipelineAnalytics,
     PipelineHealthReport,
@@ -138,6 +139,84 @@ def sample_content_with_engagement(db, sample_pipeline_runs):
     return db
 
 
+@pytest.fixture
+def sample_campaign_data(db):
+    """Create campaign topics with generated content and platform data."""
+    now = datetime.now(timezone.utc)
+    campaign_id = db.create_campaign(
+        name="Launch Campaign",
+        goal="Cover launch lessons",
+        start_date=(now - timedelta(days=5)).date().isoformat(),
+        end_date=(now + timedelta(days=5)).date().isoformat(),
+        status="active",
+    )
+
+    generated_topic = db.insert_planned_topic(
+        topic="architecture",
+        angle="Launch architecture",
+        target_date=(now - timedelta(days=2)).date().isoformat(),
+        campaign_id=campaign_id,
+    )
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=["abc123"],
+        source_messages=["msg-1"],
+        content="Launch architecture post",
+        eval_score=8.5,
+        eval_feedback="Strong",
+    )
+    db.mark_planned_topic_generated(generated_topic, content_id)
+    db.mark_published(content_id, "https://x.com/test/launch", "tweet-launch")
+    db.conn.execute(
+        "UPDATE generated_content SET published_at = ? WHERE id = ?",
+        ((now - timedelta(days=1)).isoformat(), content_id),
+    )
+    db.insert_engagement(content_id, "tweet-launch", 20, 3, 2, 1, 28.0)
+    db.insert_bluesky_engagement(content_id, "at://test/post/launch", 12, 2, 1, 0, 16.0)
+    db.insert_newsletter_send("issue-1", "Launch notes", [content_id], subscriber_count=150)
+
+    no_engagement_topic = db.insert_planned_topic(
+        topic="testing",
+        angle="Launch testing",
+        target_date=(now - timedelta(days=1)).date().isoformat(),
+        campaign_id=campaign_id,
+    )
+    no_engagement_content_id = db.insert_generated_content(
+        content_type="x_thread",
+        source_commits=["def456"],
+        source_messages=["msg-2"],
+        content="Testing launch thread",
+        eval_score=7.5,
+        eval_feedback="Good",
+    )
+    db.mark_planned_topic_generated(no_engagement_topic, no_engagement_content_id)
+    db.mark_published(no_engagement_content_id, "https://x.com/test/testing", "tweet-testing")
+
+    db.insert_planned_topic(
+        topic="developer-experience",
+        angle="Unfilled DX topic",
+        target_date=(now - timedelta(days=3)).date().isoformat(),
+        campaign_id=campaign_id,
+    )
+    skipped_topic = db.insert_planned_topic(
+        topic="ai-agents",
+        angle="Skipped agent angle",
+        target_date=(now - timedelta(days=4)).date().isoformat(),
+        campaign_id=campaign_id,
+    )
+    db.conn.execute(
+        "UPDATE planned_topics SET status = 'skipped' WHERE id = ?",
+        (skipped_topic,),
+    )
+    db.conn.commit()
+
+    return {
+        "campaign_id": campaign_id,
+        "content_id": content_id,
+        "no_engagement_content_id": no_engagement_content_id,
+    }
+
+
 class TestPipelineAnalytics:
     def test_health_report_basic(self, sample_pipeline_runs):
         """Test basic health report generation."""
@@ -260,6 +339,51 @@ class TestPipelineAnalytics:
         # stale_pattern_rejected: 3 / 14 = 21.4%
         assert effectiveness["stale_pattern_rejected"]["count"] == 3
         assert 21 <= effectiveness["stale_pattern_rejected"]["percentage"] <= 22
+
+    def test_campaign_performance_report_summarizes_campaign(self, db, sample_campaign_data):
+        """Campaign report joins topics, content, engagement, and newsletters."""
+        analytics = PipelineAnalytics(db)
+        report = analytics.campaign_performance_report(
+            campaign_id=sample_campaign_data["campaign_id"],
+            days=30,
+        )
+
+        assert isinstance(report, CampaignPerformanceReport)
+        assert report.campaign["name"] == "Launch Campaign"
+        assert report.topic_counts["total"] == 4
+        assert report.topic_counts["generated"] == 2
+        assert report.topic_counts["planned"] == 1
+        assert report.topic_counts["skipped"] == 1
+        assert report.avg_eval_score == 8.0
+
+        assert report.per_platform_engagement["x"]["content_count"] == 1
+        assert report.per_platform_engagement["x"]["avg_engagement_score"] == 28.0
+        assert report.per_platform_engagement["bluesky"]["avg_engagement_score"] == 16.0
+        assert report.per_platform_engagement["newsletter"]["send_count"] == 1
+        assert report.per_platform_engagement["newsletter"]["subscriber_count_total"] == 150
+
+        assert report.top_content[0]["content_id"] == sample_campaign_data["content_id"]
+        assert report.top_content[0]["combined_engagement_score"] == 44.0
+        assert report.top_content[0]["newsletter_sends"][0]["subject"] == "Launch notes"
+
+        gap_types = {gap["type"] for gap in report.gaps}
+        assert "unfilled_topic" in gap_types
+        assert "skipped_topic" in gap_types
+        assert "missing_engagement" in gap_types
+
+    def test_campaign_performance_report_active_campaign(self, db, sample_campaign_data):
+        """Active selection resolves the current active campaign."""
+        analytics = PipelineAnalytics(db)
+        report = analytics.campaign_performance_report(active=True, days=30)
+
+        assert report is not None
+        assert report.campaign["id"] == sample_campaign_data["campaign_id"]
+
+    def test_campaign_performance_report_missing_campaign(self, db):
+        """Missing campaign IDs return None."""
+        analytics = PipelineAnalytics(db)
+
+        assert analytics.campaign_performance_report(campaign_id=999) is None
 
     def test_filter_effectiveness_no_filter_stats(self, db):
         """Test filter effectiveness with runs that have no filter_stats."""
