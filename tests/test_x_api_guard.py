@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from output.x_api_guard import (
+    classify_publish_error,
     get_x_api_block_reason,
     is_x_api_block_error,
     mark_x_api_blocked,
@@ -30,6 +31,15 @@ def test_detects_credit_errors():
     assert is_x_api_block_error("does not have any credits") is True
     assert is_x_api_block_error("429 Too Many Requests") is False
     assert is_x_api_block_error("403 reply not allowed") is False
+
+
+def test_classifies_publish_errors():
+    assert classify_publish_error("401 Unauthorized") == "auth"
+    assert classify_publish_error("429 Too Many Requests") == "rate_limit"
+    assert classify_publish_error("duplicate content") == "duplicate"
+    assert classify_publish_error("Media upload failed") == "media"
+    assert classify_publish_error("Connection timed out") == "network"
+    assert classify_publish_error("unexpected") == "unknown"
 
 
 def test_block_reason_active_until_expiry():

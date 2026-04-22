@@ -6,6 +6,8 @@ import tweepy
 from typing import Optional
 from dataclasses import dataclass
 
+from .publish_errors import classify_publish_error, PublishErrorCategory
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,6 +17,7 @@ class PostResult:
     tweet_id: Optional[str] = None
     url: Optional[str] = None
     error: Optional[str] = None
+    error_category: Optional[PublishErrorCategory] = None
 
 
 class XClient:
@@ -46,6 +49,21 @@ class XClient:
     def _record_error(self, error: object) -> str:
         self.last_error = str(error)
         return self.last_error
+
+    def _failure_result(
+        self,
+        error: object,
+        error_category: Optional[PublishErrorCategory] = None,
+    ) -> PostResult:
+        error_text = self._record_error(error)
+        return PostResult(
+            success=False,
+            error=error_text,
+            error_category=(
+                error_category
+                or classify_publish_error(error_text, platform="x")
+            ),
+        )
 
     def _status_url(self, tweet_id: str) -> str:
         return f"https://x.com/{self.username}/status/{tweet_id}"
@@ -112,7 +130,11 @@ class XClient:
         """
         media_id = self.upload_media(media_path, alt_text)
         if not media_id:
-            return PostResult(success=False, error="Media upload failed")
+            return PostResult(
+                success=False,
+                error="Media upload failed",
+                error_category="media",
+            )
 
         try:
             response = self.client.create_tweet(
@@ -126,7 +148,7 @@ class XClient:
                 url=self._status_url(tweet_id),
             )
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
     def get_profile_metrics(self) -> dict | None:
         """Fetch authenticated user's public metrics (follower/following counts)."""
@@ -383,7 +405,7 @@ class XClient:
                 url=self._status_url(tweet_id)
             )
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
     def reply(self, text: str, reply_to_tweet_id: str) -> PostResult:
         """Post a reply to a specific tweet."""
@@ -400,7 +422,7 @@ class XClient:
                 url=self._status_url(tweet_id)
             )
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
     def quote_post(self, text: str, quoted_tweet_id: str) -> PostResult:
         """Publish a quote post that references another tweet/post."""
@@ -416,7 +438,7 @@ class XClient:
                 url=self._status_url(tweet_id),
             )
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
     def quote_tweet(self, text: str, quote_tweet_id: str) -> PostResult:
         """Post a quote tweet.
@@ -432,7 +454,7 @@ class XClient:
             self._clear_error()
             return PostResult(success=True, tweet_id=tweet_id)
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
     def retweet(self, tweet_id: str) -> PostResult:
         """Retweet a tweet."""
@@ -441,7 +463,7 @@ class XClient:
             self._clear_error()
             return PostResult(success=True, tweet_id=tweet_id)
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
     def follow(self, user_id: str) -> PostResult:
         """Follow a user by ID."""
@@ -450,7 +472,7 @@ class XClient:
             self._clear_error()
             return PostResult(success=True)
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
     def get_user_tweets(
         self, user_id: str, count: int = 10
@@ -545,7 +567,11 @@ class XClient:
     def post_thread(self, tweets: list[str]) -> PostResult:
         """Post a thread of tweets."""
         if not tweets:
-            return PostResult(success=False, error="No tweets to post")
+            return PostResult(
+                success=False,
+                error="No tweets to post",
+                error_category="unknown",
+            )
 
         try:
             previous_id = None
@@ -567,7 +593,7 @@ class XClient:
                 url=self._status_url(first_id)
             )
         except tweepy.TweepyException as e:
-            return PostResult(success=False, error=self._record_error(e))
+            return self._failure_result(e)
 
 
 def parse_thread_content(content: str) -> list[str]:

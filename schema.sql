@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS content_publications (
     platform_post_id TEXT,               -- tweet ID, AT URI, or platform-native ID
     platform_url TEXT,
     error TEXT,
+    error_category TEXT,                 -- auth, rate_limit, duplicate, media, network, unknown
     attempt_count INTEGER NOT NULL DEFAULT 0,
     next_retry_at TEXT,
     last_error_at TEXT,
@@ -474,6 +475,7 @@ CREATE TABLE IF NOT EXISTS publish_queue (
     status TEXT DEFAULT 'queued',   -- 'queued', 'published', 'failed', 'cancelled'
     published_at TEXT,
     error TEXT,
+    error_category TEXT,            -- auth, rate_limit, duplicate, media, network, unknown
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_publish_queue_status ON publish_queue(status);

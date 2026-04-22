@@ -56,11 +56,26 @@ def _timeout_handler(signum, frame):
 def _defer_queue_item(db, queue_id: int, scheduled_at: str) -> None:
     db.conn.execute(
         """UPDATE publish_queue
-           SET scheduled_at = ?, status = 'queued', error = NULL
+           SET scheduled_at = ?, status = 'queued',
+               error = NULL, error_category = NULL
            WHERE id = ?""",
         (scheduled_at, queue_id),
     )
     db.conn.commit()
+
+
+def _result_error_category(result, platform: str) -> str:
+    category = getattr(result, "error_category", None)
+    if category:
+        return normalize_error_category(category)
+    return classify_publish_error(getattr(result, "error", None), platform=platform)
+
+
+def _queue_error_category(errors: list[tuple[str, str]]) -> str:
+    categories = {category for _, category in errors}
+    if len(categories) == 1:
+        return categories.pop()
+    return "unknown"
 
 
 # Add src to path
@@ -73,6 +88,7 @@ from evaluation.posting_schedule import (
     next_allowed_slot,
 )
 from output.bluesky_client import BlueskyClient
+from output.publish_errors import classify_publish_error, normalize_error_category
 
 try:
     from output.x_client import XClient, parse_thread_content
@@ -196,14 +212,16 @@ def main() -> None:
                         db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
                         logger.info(f"  Posted to X: {result.url}")
                     else:
+                        category = _result_error_category(result, "x")
                         logger.error(f"  X posting failed: {result.error}")
                         db.upsert_publication_failure(
                             content_id,
                             "x",
                             str(result.error),
                             max_retry_delay_minutes=max_retry_delay_minutes,
+                            error_category=category,
                         )
-                        platform_errors.append(f"X: {result.error}")
+                        platform_errors.append((f"X: {result.error}", category))
 
                 # Cross-post to Bluesky if needed and configured
                 if 'bluesky' in pending_platforms:
@@ -224,27 +242,36 @@ def main() -> None:
                             )
                             logger.info(f"  Posted to Bluesky: {bsky_result.url}")
                         else:
+                            category = _result_error_category(bsky_result, "bluesky")
                             logger.error(f"  Bluesky posting failed: {bsky_result.error}")
                             db.upsert_publication_failure(
                                 content_id,
                                 "bluesky",
                                 str(bsky_result.error),
                                 max_retry_delay_minutes=max_retry_delay_minutes,
+                                error_category=category,
                             )
-                            platform_errors.append(f"Bluesky: {bsky_result.error}")
+                            platform_errors.append((f"Bluesky: {bsky_result.error}", category))
                     else:
+                        category = "auth"
                         logger.error("  Bluesky posting failed: client not configured")
                         db.upsert_publication_failure(
                             content_id,
                             "bluesky",
                             "client not configured",
                             max_retry_delay_minutes=max_retry_delay_minutes,
+                            error_category=category,
                         )
-                        platform_errors.append("Bluesky: client not configured")
+                        platform_errors.append(("Bluesky: client not configured", category))
 
                 if platform_errors:
-                    db.mark_queue_failed(queue_id, "; ".join(platform_errors))
-                    logger.info(f"  Queue item {queue_id} failed for: {', '.join(platform_errors)}")
+                    error_text = "; ".join(error for error, _ in platform_errors)
+                    db.mark_queue_failed(
+                        queue_id,
+                        error_text,
+                        error_category=_queue_error_category(platform_errors),
+                    )
+                    logger.info(f"  Queue item {queue_id} failed for: {error_text}")
                 else:
                     # Mark queue item as published
                     db.mark_queue_published(queue_id)
@@ -252,7 +279,11 @@ def main() -> None:
 
             except (sqlite3.Error, KeyError, IndexError, AttributeError, TypeError, ValueError) as e:
                 logger.error(f"  Unexpected error publishing content {content_id}: {e}")
-                db.mark_queue_failed(queue_id, str(e))
+                db.mark_queue_failed(
+                    queue_id,
+                    str(e),
+                    error_category=classify_publish_error(e),
+                )
 
     update_monitoring("run-publish-queue")
     logger.info("Done")

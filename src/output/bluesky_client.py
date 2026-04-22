@@ -7,6 +7,8 @@ from typing import Optional
 from atproto import Client
 from atproto.exceptions import AtProtocolError
 
+from .publish_errors import classify_publish_error, PublishErrorCategory
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,6 +19,7 @@ class BlueskyPostResult:
     cid: Optional[str] = None
     url: Optional[str] = None  # https://bsky.app/... URL
     error: Optional[str] = None
+    error_category: Optional[PublishErrorCategory] = None
 
 
 class BlueskyClient:
@@ -38,6 +41,14 @@ class BlueskyClient:
             self.client.login(self.handle, self.app_password)
             self._logged_in = True
 
+    def _failure_result(self, error: object) -> BlueskyPostResult:
+        error_text = f"{type(error).__name__}: {error}"
+        return BlueskyPostResult(
+            success=False,
+            error=error_text,
+            error_category=classify_publish_error(error_text, platform="bluesky"),
+        )
+
     def post(self, text: str) -> BlueskyPostResult:
         """Create a single Bluesky post (max 300 graphemes).
 
@@ -47,8 +58,8 @@ class BlueskyClient:
         Returns:
             BlueskyPostResult with success status and post details
         """
-        self._ensure_login()
         try:
+            self._ensure_login()
             response = self.client.send_post(text=text)
             # Extract rkey from URI: at://did:plc:.../app.bsky.feed.post/{rkey}
             uri = response.uri
@@ -61,7 +72,7 @@ class BlueskyClient:
                 url=url
             )
         except AtProtocolError as e:
-            return BlueskyPostResult(success=False, error=f'{type(e).__name__}: {e}')
+            return self._failure_result(e)
 
     def post_thread(self, texts: list[str]) -> BlueskyPostResult:
         """Post a thread as a series of replies to self.
@@ -73,10 +84,14 @@ class BlueskyClient:
             BlueskyPostResult for the first post in the thread
         """
         if not texts:
-            return BlueskyPostResult(success=False, error="No texts to post")
+            return BlueskyPostResult(
+                success=False,
+                error="No texts to post",
+                error_category="unknown",
+            )
 
-        self._ensure_login()
         try:
+            self._ensure_login()
             first_response = None
             parent_ref = None
             root_ref = None
@@ -105,7 +120,7 @@ class BlueskyClient:
                 url=url
             )
         except AtProtocolError as e:
-            return BlueskyPostResult(success=False, error=f'{type(e).__name__}: {e}')
+            return self._failure_result(e)
 
     def reply(
         self,
@@ -127,8 +142,8 @@ class BlueskyClient:
         Returns:
             BlueskyPostResult with reply details
         """
-        self._ensure_login()
         try:
+            self._ensure_login()
             response = self.client.send_post(
                 text=text,
                 reply_to={
@@ -145,7 +160,7 @@ class BlueskyClient:
                 url=url
             )
         except AtProtocolError as e:
-            return BlueskyPostResult(success=False, error=f'{type(e).__name__}: {e}')
+            return self._failure_result(e)
 
     def get_notifications(
         self,

@@ -73,6 +73,7 @@ class TestSchemaInit:
             "platform_post_id",
             "platform_url",
             "error",
+            "error_category",
             "attempt_count",
             "next_retry_at",
             "last_error_at",
@@ -80,6 +81,13 @@ class TestSchemaInit:
             "updated_at",
         }
         assert expected.issubset(cols)
+
+    def test_publish_queue_error_category_column_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(publish_queue)")
+        }
+        assert "error_category" in cols
 
     def test_content_variants_columns_exist(self, db):
         cols = {
@@ -1098,6 +1106,7 @@ class TestGeneratedContent:
         assert x_state["error"] is None
         assert bsky_state["status"] == "failed"
         assert bsky_state["error"] == "Authentication failed"
+        assert bsky_state["error_category"] == "auth"
         assert bsky_state["attempt_count"] == 1
 
     def test_publication_failure_retry_increments_attempt_count(self, db):
@@ -1108,6 +1117,7 @@ class TestGeneratedContent:
         state = db.get_publication_state(content_id, "bluesky")
         assert state["status"] == "failed"
         assert state["error"] == "rate limit"
+        assert state["error_category"] == "rate_limit"
         assert state["attempt_count"] == 2
 
     def test_publication_first_failure_sets_retry_backoff(self, db):

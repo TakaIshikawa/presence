@@ -398,12 +398,13 @@ def test_mark_queue_failed_updates_with_error(test_db, base_time):
 
     # Verify status and error updated
     row = test_db.conn.execute(
-        "SELECT status, error FROM publish_queue WHERE id = ?",
+        "SELECT status, error, error_category FROM publish_queue WHERE id = ?",
         (queue_id,)
     ).fetchone()
 
     assert row["status"] == "failed"
     assert row["error"] == error_msg
+    assert row["error_category"] == "rate_limit"
 
 
 def test_main_processes_due_items(test_db, base_time):

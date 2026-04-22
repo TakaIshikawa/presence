@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
+from output.publish_errors import classify_publish_error, normalize_error_category
+
 MAX_RETRIES = 3
 
 
@@ -326,6 +328,7 @@ class Database:
                     platform_post_id TEXT,
                     platform_url TEXT,
                     error TEXT,
+                    error_category TEXT,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     next_retry_at TEXT,
                     last_error_at TEXT,
@@ -342,6 +345,14 @@ class Database:
                 self.conn.execute("ALTER TABLE content_publications ADD COLUMN next_retry_at TEXT")
             if "last_error_at" not in cp_cols:
                 self.conn.execute("ALTER TABLE content_publications ADD COLUMN last_error_at TEXT")
+            if "error_category" not in cp_cols:
+                self.conn.execute("ALTER TABLE content_publications ADD COLUMN error_category TEXT")
+            pq_cols = {
+                row[1]
+                for row in self.conn.execute("PRAGMA table_info(publish_queue)")
+            }
+            if pq_cols and "error_category" not in pq_cols:
+                self.conn.execute("ALTER TABLE publish_queue ADD COLUMN error_category TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publications(content_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_retry ON content_publications(status, next_retry_at)")
@@ -1088,13 +1099,15 @@ class Database:
         self.conn.execute(
             """INSERT INTO content_publications
                (content_id, platform, status, platform_post_id, platform_url,
-                error, attempt_count, next_retry_at, published_at, updated_at)
-               VALUES (?, ?, 'published', ?, ?, NULL, 1, NULL, ?, ?)
+                error, error_category, attempt_count, next_retry_at, published_at,
+                updated_at)
+               VALUES (?, ?, 'published', ?, ?, NULL, NULL, 1, NULL, ?, ?)
                ON CONFLICT(content_id, platform) DO UPDATE SET
                status = 'published',
                platform_post_id = excluded.platform_post_id,
                platform_url = excluded.platform_url,
                error = NULL,
+               error_category = NULL,
                next_retry_at = NULL,
                attempt_count = content_publications.attempt_count + 1,
                published_at = excluded.published_at,
@@ -1134,10 +1147,16 @@ class Database:
         platform: str,
         error: str,
         max_retry_delay_minutes: int = 360,
+        error_category: str = None,
     ) -> None:
         """Record a failed publish attempt for one platform."""
         if not isinstance(max_retry_delay_minutes, (int, float)) or max_retry_delay_minutes <= 0:
             max_retry_delay_minutes = 360
+        category = (
+            normalize_error_category(error_category)
+            if error_category is not None
+            else classify_publish_error(error, platform=platform)
+        )
         now_dt = datetime.now(timezone.utc)
         now = now_dt.isoformat()
         existing = self.conn.execute(
@@ -1153,17 +1172,18 @@ class Database:
         next_retry_at = (now_dt + timedelta(minutes=delay_minutes)).isoformat()
         self.conn.execute(
             """INSERT INTO content_publications
-               (content_id, platform, status, error, attempt_count,
+               (content_id, platform, status, error, error_category, attempt_count,
                 next_retry_at, last_error_at, updated_at)
-               VALUES (?, ?, 'failed', ?, 1, ?, ?, ?)
+               VALUES (?, ?, 'failed', ?, ?, 1, ?, ?, ?)
                ON CONFLICT(content_id, platform) DO UPDATE SET
                status = 'failed',
                error = excluded.error,
+               error_category = excluded.error_category,
                attempt_count = content_publications.attempt_count + 1,
                next_retry_at = excluded.next_retry_at,
                last_error_at = excluded.last_error_at,
                updated_at = excluded.updated_at""",
-            (content_id, platform, error, next_retry_at, now, now),
+            (content_id, platform, error, category, next_retry_at, now, now),
         )
         self.conn.commit()
 
@@ -1190,6 +1210,10 @@ class Database:
                END,
                error = CASE
                    WHEN content_publications.status = 'published' THEN content_publications.error
+                   ELSE NULL
+               END,
+               error_category = CASE
+                   WHEN content_publications.status = 'published' THEN content_publications.error_category
                    ELSE NULL
                END,
                next_retry_at = CASE
@@ -4037,24 +4061,35 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute(
             """UPDATE publish_queue
-               SET status = 'published', published_at = ?, error = NULL
+               SET status = 'published', published_at = ?, error = NULL,
+                   error_category = NULL
                WHERE id = ?""",
             (now, queue_id)
         )
         self.conn.commit()
 
-    def mark_queue_failed(self, queue_id: int, error: str) -> None:
+    def mark_queue_failed(
+        self,
+        queue_id: int,
+        error: str,
+        error_category: str = None,
+    ) -> None:
         """Mark a queue item as failed with error message.
 
         Args:
             queue_id: ID of the publish_queue entry
             error: Error message describing the failure
         """
+        category = (
+            normalize_error_category(error_category)
+            if error_category is not None
+            else classify_publish_error(error)
+        )
         self.conn.execute(
             """UPDATE publish_queue
-               SET status = 'failed', error = ?
+               SET status = 'failed', error = ?, error_category = ?
                WHERE id = ?""",
-            (error, queue_id)
+            (error, category, queue_id)
         )
         self.conn.commit()
 
@@ -4066,7 +4101,7 @@ class Database:
         """
         self.conn.execute(
             """UPDATE publish_queue
-               SET status = 'cancelled'
+               SET status = 'cancelled', error_category = NULL
                WHERE content_id = ? AND status = 'queued'""",
             (content_id,)
         )

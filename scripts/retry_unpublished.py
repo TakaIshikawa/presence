@@ -15,6 +15,7 @@ from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
 )
+from output.publish_errors import classify_publish_error, normalize_error_category
 
 # Rate limiting: seconds between X posts
 POST_DELAY_SECONDS = 30
@@ -63,6 +64,17 @@ def main():
                 logger.info("Posted: %s", result.url)
                 posts_made += 1
             else:
+                category = getattr(result, "error_category", None)
+                if category:
+                    category = normalize_error_category(category)
+                else:
+                    category = classify_publish_error(result.error, platform="x")
+                db.upsert_publication_failure(
+                    item["id"],
+                    "x",
+                    str(result.error),
+                    error_category=category,
+                )
                 if mark_x_api_blocked_if_needed(db, result.error):
                     logger.warning("X API blocked; stopping retries")
                     break
