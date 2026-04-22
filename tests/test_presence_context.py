@@ -185,6 +185,8 @@ def test_github_activity_context_includes_recent_and_unresolved_activity(db):
         author="taka",
         url="https://github.com/taka/presence/pull/13",
         updated_at=datetime.now(timezone.utc).isoformat(),
+        merged_at=datetime.now(timezone.utc).isoformat(),
+        metadata={"merged": True, "changed_files": 3},
     )
     db.upsert_github_activity(
         repo_name="presence",
@@ -206,6 +208,7 @@ def test_github_activity_context_includes_recent_and_unresolved_activity(db):
     assert "unresolved" in section
     assert "content, provenance" in section
     assert "presence PR #13" in section
+    assert "merged; 3 files changed" in section
     assert "presence discussion #14" in section
 
 

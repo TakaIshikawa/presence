@@ -310,7 +310,7 @@ class PresenceContextBuilder:
 
         lines = [
             "GITHUB ACTIVITY CONTEXT (issues, PRs, releases, and discussions):",
-            "- Use this as source context only when it connects to the commits/prompts; do not imply unresolved work is finished.",
+            "- Use this as source context only when it connects to the commits, prompts, or activity record; do not imply unresolved work is finished.",
         ]
 
         recent_ids = {self._activity_id(row) for row in recent[:5]}
@@ -330,8 +330,9 @@ class PresenceContextBuilder:
             state = row.get("state") or "unknown"
             labels = row.get("labels") or []
             label_text = f"; labels: {', '.join(str(label) for label in labels[:3])}" if labels else ""
+            detail_text = self._activity_detail(row)
             lines.append(
-                f"- {repo} {activity_type} #{number}: {title} ({state}{marker}{label_text})"
+                f"- {repo} {activity_type} #{number}: {title} ({state}{marker}{detail_text}{label_text})"
             )
         return "\n".join(lines)
 
@@ -473,3 +474,17 @@ class PresenceContextBuilder:
         if activity_type == "discussion":
             return "discussion"
         return str(activity_type or "activity")
+
+    @staticmethod
+    def _activity_detail(row: dict) -> str:
+        if row.get("activity_type") != "pull_request":
+            return ""
+
+        metadata = row.get("metadata") or {}
+        details = []
+        if metadata.get("merged") or row.get("merged_at"):
+            details.append("merged")
+        changed_files = metadata.get("changed_files")
+        if changed_files is not None:
+            details.append(f"{changed_files} files changed")
+        return "; " + "; ".join(details) if details else ""

@@ -159,7 +159,16 @@ class TestGitHubActivityClient:
     def test_get_repo_pull_requests_stops_before_since(self, mock_get):
         old = _pull_payload(3, "Old")
         old["updated_at"] = "2026-03-01T12:00:00Z"
-        mock_get.return_value = _mock_response(json_data=[_pull_payload(2), old])
+        detail = _pull_payload(2)
+        detail["changed_files"] = 4
+        detail["merged"] = True
+        detail["additions"] = 20
+        detail["deletions"] = 5
+        detail["commits"] = 2
+        mock_get.side_effect = [
+            _mock_response(json_data=[_pull_payload(2), old]),
+            _mock_response(json_data=detail),
+        ]
 
         client = GitHubActivityClient("tok", "taka")
         pulls = list(client.get_repo_pull_requests("taka", "repo", since=TIMESTAMP))
@@ -167,6 +176,33 @@ class TestGitHubActivityClient:
         assert len(pulls) == 1
         assert pulls[0].activity_type == "pull_request"
         assert pulls[0].merged_at.isoformat() == "2026-04-01T12:20:00+00:00"
+        assert pulls[0].metadata["merged"] is True
+        assert pulls[0].metadata["changed_files"] == 4
+        assert pulls[0].metadata["additions"] == 20
+        assert mock_get.call_args_list[1].args[0].endswith("/repos/taka/repo/pulls/2")
+
+    def test_pull_request_parser_redacts_title_and_body_excerpt(self):
+        payload = _pull_payload(
+            5,
+            "Remove ticket-1234 from logs",
+        )
+        payload["body"] = "Body mentions ticket-1234 " + ("word " * 300)
+        payload["changed_files"] = 1
+        client = GitHubActivityClient(
+            "tok",
+            "taka",
+            redaction_patterns=[
+                {"name": "ticket", "pattern": r"ticket-\d+", "placeholder": "[REDACTED_TICKET]"}
+            ],
+        )
+
+        activity = client._pull_request_to_activity(payload, "repo")
+
+        assert "ticket-1234" not in activity.title
+        assert "[REDACTED_TICKET]" in activity.title
+        assert "ticket-1234" not in activity.body
+        assert "[REDACTED_TICKET]" in activity.body
+        assert len(activity.body) <= 1000
 
     @patch("requests.get", create=True)
     def test_get_repo_releases_normalizes_metadata(self, mock_get):
@@ -281,10 +317,32 @@ class TestGitHubActivityClient:
         mock_discussions.return_value = iter([])
 
         client = GitHubActivityClient("tok", "taka")
-        results = list(client.get_all_recent_activity(include_discussions=True))
+        results = list(
+            client.get_all_recent_activity(
+                include_discussions=True,
+                include_pull_requests=True,
+            )
+        )
 
         assert results == [activity]
         assert mock_discussions.call_count == 1
+        assert mock_pulls.call_count == 1
+
+    @patch.object(GitHubActivityClient, "get_repo_pull_requests")
+    @patch.object(GitHubActivityClient, "get_repo_releases")
+    @patch.object(GitHubActivityClient, "get_repo_issues")
+    @patch.object(GitHubActivityClient, "get_configured_repos")
+    def test_get_all_recent_activity_skips_pull_requests_by_default(
+        self, mock_repos, mock_issues, mock_releases, mock_pulls
+    ):
+        mock_repos.return_value = [{"owner": "taka", "name": "repo", "repo_name": "repo"}]
+        mock_issues.return_value = iter([])
+        mock_releases.return_value = iter([])
+
+        client = GitHubActivityClient("tok", "taka")
+
+        assert list(client.get_all_recent_activity()) == []
+        mock_pulls.assert_not_called()
 
 
 class TestPollNewActivity:
@@ -316,12 +374,20 @@ class TestPollNewActivity:
         db = MagicMock()
         db.is_github_activity_processed.side_effect = [False, True]
 
-        result = poll_new_activity("tok", "taka", TIMESTAMP, db, include_discussions=True)
+        result = poll_new_activity(
+            "tok",
+            "taka",
+            TIMESTAMP,
+            db,
+            include_discussions=True,
+            include_pull_requests=True,
+        )
 
         assert result == [new]
         db.upsert_github_activity.assert_called_once()
         mock_activity.assert_called_once()
         assert mock_activity.call_args.kwargs["include_discussions"] is True
+        assert mock_activity.call_args.kwargs["include_pull_requests"] is True
 
     @patch.object(GitHubActivityClient, "get_all_recent_activity")
     def test_dry_run_does_not_persist(self, mock_activity):

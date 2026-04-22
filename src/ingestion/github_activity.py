@@ -16,6 +16,8 @@ from ingestion.github_commits import (
 )
 from ingestion.redaction import Redactor
 
+BODY_EXCERPT_MAX_CHARS = 1000
+
 
 @dataclass
 class GitHubActivity:
@@ -63,6 +65,15 @@ def _parse_github_datetime(value: str | None) -> Optional[datetime]:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _body_excerpt(value: str | None, max_len: int = BODY_EXCERPT_MAX_CHARS) -> str:
+    cleaned = " ".join(str(value or "").split())
+    if len(cleaned) <= max_len:
+        return cleaned
+    if max_len <= 3:
+        return cleaned[:max_len]
+    return cleaned[: max_len - 3].rstrip() + "..."
+
+
 class GitHubActivityClient:
     BASE_URL = "https://api.github.com"
     GRAPHQL_URL = "https://api.github.com/graphql"
@@ -107,6 +118,13 @@ class GitHubActivityClient:
                 raise GitHubNotFoundError(f"Resource not found: {e}") from e
             raise GitHubClientError(f"HTTP error: {e}") from e
         return response.json()
+
+    def _get_optional_dict(self, path: str, params: dict | None = None) -> dict:
+        try:
+            data = self._get(path, params or {})
+        except (GitHubClientError, GitHubNotFoundError, GitHubRateLimitError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def _post_graphql(self, query: str, variables: dict) -> dict:
         try:
@@ -250,6 +268,12 @@ class GitHubActivityClient:
                 updated_at = _parse_github_datetime(item.get("updated_at"))
                 if since and updated_at and updated_at < since:
                     return
+                if "changed_files" not in item:
+                    detail = self._get_optional_dict(
+                        f"/repos/{owner}/{repo}/pulls/{item.get('number')}"
+                    )
+                    if detail:
+                        item = {**item, **detail}
                 yield self._pull_request_to_activity(item, repo_name or repo)
                 yielded += 1
                 if yielded >= limit:
@@ -369,8 +393,9 @@ class GitHubActivityClient:
         include_forks: bool = False,
         limit_per_repo: int = 100,
         include_discussions: bool = False,
+        include_pull_requests: bool = False,
     ) -> Iterator[GitHubActivity]:
-        """Yield recent issues, pull requests, releases, and optionally discussions."""
+        """Yield recent issues, releases, and optionally pull requests/discussions."""
         for repo in self.get_configured_repos(repositories, include_forks=include_forks):
             try:
                 yield from self.get_repo_issues(
@@ -380,13 +405,14 @@ class GitHubActivityClient:
                     since=since,
                     limit=limit_per_repo,
                 )
-                yield from self.get_repo_pull_requests(
-                    repo["owner"],
-                    repo["name"],
-                    repo_name=repo["repo_name"],
-                    since=since,
-                    limit=limit_per_repo,
-                )
+                if include_pull_requests:
+                    yield from self.get_repo_pull_requests(
+                        repo["owner"],
+                        repo["name"],
+                        repo_name=repo["repo_name"],
+                        since=since,
+                        limit=limit_per_repo,
+                    )
                 yield from self.get_repo_releases(
                     repo["owner"],
                     repo["name"],
@@ -458,6 +484,17 @@ class GitHubActivityClient:
         )
 
     def _pull_request_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        merged_at = _parse_github_datetime(item.get("merged_at"))
+        metadata = {
+            "merged": bool(item.get("merged") or merged_at),
+            "changed_files": item.get("changed_files"),
+            "additions": item.get("additions"),
+            "deletions": item.get("deletions"),
+            "commits": item.get("commits"),
+            "draft": bool(item.get("draft", False)),
+            "base": ((item.get("base") or {}).get("ref")),
+            "head": ((item.get("head") or {}).get("ref")),
+        }
         return GitHubActivity(
             repo_name=repo_name,
             activity_type="pull_request",
@@ -468,10 +505,11 @@ class GitHubActivityClient:
             url=item.get("html_url", ""),
             updated_at=_parse_github_datetime(item.get("updated_at")),
             created_at=_parse_github_datetime(item.get("created_at")),
-            body=self.redactor.redact(item.get("body") or ""),
+            body=_body_excerpt(self.redactor.redact(item.get("body") or "")),
             closed_at=_parse_github_datetime(item.get("closed_at")),
-            merged_at=_parse_github_datetime(item.get("merged_at")),
+            merged_at=merged_at,
             labels=[label.get("name", "") for label in item.get("labels", [])],
+            metadata={key: value for key, value in metadata.items() if value is not None},
         )
 
     def _discussion_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
@@ -520,6 +558,7 @@ def poll_new_activity(
     db,
     repositories: Optional[list[str | dict]] = None,
     include_discussions: bool = False,
+    include_pull_requests: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: Optional[Iterable[str | dict]] = None,
@@ -537,6 +576,7 @@ def poll_new_activity(
         since=since,
         repositories=repositories,
         include_discussions=include_discussions,
+        include_pull_requests=include_pull_requests,
     ):
         if db.is_github_activity_processed(
             activity.repo_name,

@@ -44,6 +44,7 @@ def ingest_github_activity(
     since: datetime,
     repositories: list[str | dict] | None = None,
     include_discussions: bool = False,
+    include_pull_requests: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: list[str | dict] | None = None,
@@ -55,6 +56,7 @@ def ingest_github_activity(
         db=db,
         repositories=repositories,
         include_discussions=include_discussions,
+        include_pull_requests=include_pull_requests,
         dry_run=dry_run,
         timeout=timeout,
         redaction_patterns=redaction_patterns,
@@ -92,10 +94,13 @@ def main(argv: list[str] | None = None) -> int:
         current_poll_time = datetime.now(timezone.utc)
         repositories = getattr(config.github, "repositories", None) or None
         include_discussions = getattr(config.github, "include_discussions", False)
+        include_pull_requests = getattr(config.github, "include_pull_requests", False)
 
         logger.info("Polling GitHub issues/PRs/releases since %s", since.isoformat())
         if repositories:
             logger.info("Using %d configured repositories", len(repositories))
+        if include_pull_requests:
+            logger.info("Including GitHub pull requests")
         if include_discussions:
             logger.info("Including GitHub Discussions")
 
@@ -106,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             since=since,
             repositories=repositories,
             include_discussions=include_discussions,
+            include_pull_requests=include_pull_requests,
             dry_run=args.dry_run,
             timeout=config.timeouts.github_seconds,
             redaction_patterns=config.privacy.redaction_patterns,

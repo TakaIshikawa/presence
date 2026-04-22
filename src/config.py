@@ -15,6 +15,7 @@ class GitHubConfig:
     token: str
     repositories: list[str | dict] = field(default_factory=list)
     include_discussions: bool = False
+    include_pull_requests: bool = False
 
 
 @dataclass
@@ -603,6 +604,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             token=_resolve_env_var(_require(data, "github", "token", section="github")),
             repositories=data["github"].get("repositories", data["github"].get("repos", [])),
             include_discussions=data["github"].get("include_discussions", False),
+            include_pull_requests=data["github"].get("include_pull_requests", False),
         ),
         x=XConfig(
             api_key=_resolve_env_var(_require(data, "x", "api_key", section="x")),
