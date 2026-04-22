@@ -2,8 +2,9 @@
 
 import json
 import logging
+from collections import Counter
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -29,10 +30,52 @@ class ClaudeMessage:
 
 
 class ClaudeLogParser:
-    def __init__(self, claude_dir: str = "~/.claude"):
+    def __init__(
+        self,
+        claude_dir: str = "~/.claude",
+        allowed_project_paths: Iterable[str] | None = None,
+    ):
         self.claude_dir = Path(claude_dir).expanduser()
         self.history_file = self.claude_dir / "history.jsonl"
         self.projects_dir = self.claude_dir / "projects"
+        self.allowed_project_paths = self._normalize_allowed_projects(allowed_project_paths)
+        self.skipped_project_counts: Counter[str] = Counter()
+
+    def _normalize_allowed_projects(
+        self,
+        allowed_project_paths: Iterable[str] | None,
+    ) -> tuple[Path, ...] | None:
+        if allowed_project_paths is None:
+            return None
+        return tuple(
+            Path(project).expanduser().resolve(strict=False)
+            for project in allowed_project_paths
+        )
+
+    def _project_is_allowed(self, project_path: str) -> bool:
+        if self.allowed_project_paths is None:
+            return True
+        if not project_path:
+            return False
+
+        project = Path(project_path).expanduser().resolve(strict=False)
+        return any(
+            project == allowed or allowed in project.parents
+            for allowed in self.allowed_project_paths
+        )
+
+    def _record_skipped_project(self, project_path: str) -> None:
+        self.skipped_project_counts[project_path or "<empty>"] += 1
+
+    def log_skipped_project_counts(self, context: str = "Claude logs") -> None:
+        if not self.skipped_project_counts:
+            return
+
+        counts = ", ".join(
+            f"{project}: {count}"
+            for project, count in self.skipped_project_counts.most_common()
+        )
+        logger.info(f"{context}: skipped Claude messages from unconfigured projects ({counts})")
 
     def parse_global_history(self) -> Iterator[ClaudeMessage]:
         """Parse the global history.jsonl for quick access to all prompts."""
@@ -49,10 +92,15 @@ class ClaudeLogParser:
                         entry = json.loads(line)
                         # Global history has: display, timestamp, project, sessionId
                         if "display" in entry and entry.get("display"):
+                            project_path = entry.get("project", "")
+                            if not self._project_is_allowed(project_path):
+                                self._record_skipped_project(project_path)
+                                continue
+
                             yield ClaudeMessage(
                                 session_id=entry.get("sessionId", "unknown"),
                                 message_uuid=f"{entry.get('sessionId', 'unknown')}_{entry.get('timestamp', 0)}",
-                                project_path=entry.get("project", ""),
+                                project_path=project_path,
                                 timestamp=datetime.fromtimestamp(entry["timestamp"] / 1000, tz=timezone.utc),
                                 prompt_text=entry["display"]
                             )
@@ -80,10 +128,15 @@ class ClaudeLogParser:
                         if entry.get("type") == "user" and "message" in entry:
                             content = entry["message"].get("content", "")
                             if isinstance(content, str) and content:
+                                project_path = entry.get("cwd", "")
+                                if not self._project_is_allowed(project_path):
+                                    self._record_skipped_project(project_path)
+                                    continue
+
                                 yield ClaudeMessage(
                                     session_id=entry.get("sessionId", "unknown"),
                                     message_uuid=entry.get("uuid", "unknown"),
-                                    project_path=entry.get("cwd", ""),
+                                    project_path=project_path,
                                     timestamp=datetime.fromisoformat(
                                         entry["timestamp"].replace("Z", "+00:00")
                                     ),

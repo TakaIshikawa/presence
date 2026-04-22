@@ -123,6 +123,13 @@ class TestDataclassParsing:
         assert cfg.paths.claude_logs == "/tmp/logs"
         assert cfg.paths.static_site == "/tmp/site"
         assert cfg.paths.database == "/tmp/db.sqlite"
+        assert cfg.paths.allowed_projects is None
+
+    def test_paths_allowed_projects_config(self, tmp_path):
+        data = _minimal_config_dict()
+        data["paths"]["allowed_projects"] = ["/work/project-a", "/work/project-b"]
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.paths.allowed_projects == ["/work/project-a", "/work/project-b"]
 
     def test_synthesis_config(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

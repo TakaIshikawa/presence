@@ -50,7 +50,7 @@ def main() -> None:
         )
 
         # Gather prompts and commits for different time windows
-        log_parser = ClaudeLogParser(config.paths.claude_logs)
+        log_parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
         now = datetime.now(timezone.utc)
 
         # Time slices: 8h, 16h, 24h (or fewer if --runs < 3)
@@ -149,6 +149,8 @@ def main() -> None:
                 "filter_stats": result.filter_stats,
                 "rejected": comp.reject_reason is not None,
             })
+
+        log_parser.log_skipped_project_counts("eval_pipeline")
 
         # Summary table
         if results:

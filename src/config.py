@@ -38,6 +38,7 @@ class PathsConfig:
     claude_logs: str
     static_site: str
     database: str
+    allowed_projects: Optional[list[str]] = None
 
 
 @dataclass
@@ -404,7 +405,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         paths=PathsConfig(
             claude_logs=_require(data, "paths", "claude_logs", section="paths"),
             static_site=_require(data, "paths", "static_site", section="paths"),
-            database=_require(data, "paths", "database", section="paths")
+            database=_require(data, "paths", "database", section="paths"),
+            allowed_projects=data["paths"].get("allowed_projects"),
         ),
         synthesis=SynthesisConfig(
             model=_require(data, "synthesis", "model", section="synthesis"),

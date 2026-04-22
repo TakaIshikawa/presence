@@ -68,11 +68,12 @@ def main():
         logger.info(f"Found {len(commits)} commits")
 
         # Get this week's Claude prompts
-        parser = ClaudeLogParser(config.paths.claude_logs)
+        parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
         prompts = [
             msg for msg in parser.parse_global_history()
             if week_ago <= msg.timestamp < today
         ]
+        parser.log_skipped_project_counts("weekly_digest")
         prompt_texts = [p.prompt_text for p in prompts]
 
         logger.info(f"Found {len(prompts)} prompts")

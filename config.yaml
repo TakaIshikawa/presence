@@ -16,6 +16,8 @@ anthropic:
 
 paths:
   claude_logs: "~/.claude"
+  allowed_projects:
+    - "/Users/taka/Project/experiments/presence"
   static_site: "/Users/taka/Project/experiments/me"
   database: "./presence.db"
 

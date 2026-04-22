@@ -307,8 +307,9 @@ def main() -> None:
             return
 
         # Gather all Claude prompts since last post
-        parser = ClaudeLogParser(config.paths.claude_logs)
+        parser = ClaudeLogParser(config.paths.claude_logs, config.paths.allowed_projects)
         prompts_since = list(parser.get_messages_since(last_post_time))
+        parser.log_skipped_project_counts("poll_commits")
 
         # Compute accumulated tokens
         commit_texts = [c.get("commit_message", "") for c in commits_since]

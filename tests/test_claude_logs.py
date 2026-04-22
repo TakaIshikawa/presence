@@ -190,6 +190,91 @@ class TestParseGlobalHistory:
 
 
 # ---------------------------------------------------------------------------
+# allowed_project_paths filtering
+# ---------------------------------------------------------------------------
+
+class TestAllowedProjectPaths:
+    def test_absent_allowlist_preserves_current_behavior(self, tmp_path):
+        entries = [
+            _make_global_entry("allowed by default", project="/project-a"),
+            _make_global_entry("also allowed by default", project="/unrelated"),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path))
+        messages = list(parser.parse_global_history())
+
+        assert [m.prompt_text for m in messages] == [
+            "allowed by default",
+            "also allowed by default",
+        ]
+        assert parser.skipped_project_counts == {}
+
+    def test_matching_project_path_is_ingested(self, tmp_path):
+        project = tmp_path / "project-a"
+        entries = [
+            _make_global_entry("match", project=str(project)),
+            _make_global_entry("skip", project=str(tmp_path / "project-b")),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path), allowed_project_paths=[str(project)])
+        messages = list(parser.parse_global_history())
+
+        assert [m.prompt_text for m in messages] == ["match"]
+
+    def test_nested_project_path_is_ingested(self, tmp_path):
+        project = tmp_path / "project-a"
+        nested = project / "packages" / "api"
+        entries = [
+            _make_global_entry("nested match", project=str(nested)),
+            _make_global_entry("sibling skip", project=str(tmp_path / "project-a-other")),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path), allowed_project_paths=[str(project)])
+        messages = list(parser.parse_global_history())
+
+        assert [m.prompt_text for m in messages] == ["nested match"]
+
+    def test_skipped_unrelated_projects_are_counted_and_logged(self, tmp_path, caplog):
+        import logging
+        caplog.set_level(logging.INFO)
+
+        project = tmp_path / "project-a"
+        unrelated = tmp_path / "unrelated"
+        entries = [
+            _make_global_entry("match", project=str(project)),
+            _make_global_entry("skip one", project=str(unrelated)),
+            _make_global_entry("skip two", project=str(unrelated)),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path), allowed_project_paths=[str(project)])
+        messages = list(parser.parse_global_history())
+        parser.log_skipped_project_counts("test")
+
+        assert [m.prompt_text for m in messages] == ["match"]
+        assert parser.skipped_project_counts[str(unrelated)] == 2
+        assert "test: skipped Claude messages from unconfigured projects" in caplog.text
+        assert f"{unrelated}: 2" in caplog.text
+
+    def test_session_file_filtering_uses_cwd(self, tmp_path):
+        project = tmp_path / "project-a"
+        session_file = tmp_path / "session.jsonl"
+        entries = [
+            _make_session_entry("match", cwd=str(project)),
+            _make_session_entry("skip", cwd=str(tmp_path / "project-b")),
+        ]
+        _write_global_history(session_file, entries)
+
+        parser = ClaudeLogParser(str(tmp_path), allowed_project_paths=[str(project)])
+        messages = list(parser.parse_session_file(session_file))
+
+        assert [m.prompt_text for m in messages] == ["match"]
+
+
+# ---------------------------------------------------------------------------
 # parse_session_file
 # ---------------------------------------------------------------------------
 
