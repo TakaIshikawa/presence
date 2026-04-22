@@ -5001,6 +5001,68 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_knowledge_citation_report(
+        self, days: int = 30, only_missing: bool = False
+    ) -> list[dict]:
+        """List generated content and linked knowledge citation coverage.
+
+        External knowledge is any linked knowledge item whose source type is not
+        one of the local "own_*" source types. A link is missing a traceable
+        citation when external knowledge has no source_url.
+        """
+        cursor = self.conn.execute(
+            """SELECT gc.id AS content_id,
+                      gc.content_type,
+                      gc.content,
+                      gc.created_at AS generated_at,
+                      ckl.id AS link_id,
+                      ckl.knowledge_id,
+                      ckl.relevance_score,
+                      ckl.created_at AS linked_at,
+                      k.source_type,
+                      k.source_id,
+                      k.author,
+                      k.source_url,
+                      k.license,
+                      k.attribution_required,
+                      CASE
+                          WHEN k.source_type IN ('own_post', 'own_conversation') THEN 0
+                          ELSE 1
+                      END AS is_external,
+                      CASE
+                          WHEN k.source_type IN ('own_post', 'own_conversation') THEN 0
+                          WHEN COALESCE(TRIM(k.source_url), '') = '' THEN 1
+                          ELSE 0
+                      END AS missing_traceable_link
+               FROM generated_content gc
+               INNER JOIN content_knowledge_links ckl ON ckl.content_id = gc.id
+               INNER JOIN knowledge k ON k.id = ckl.knowledge_id
+               WHERE gc.created_at >= datetime('now', ?)
+               ORDER BY gc.created_at DESC, gc.id DESC, ckl.relevance_score DESC""",
+            (f'-{days} days',),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        if only_missing:
+            rows = [row for row in rows if row["missing_traceable_link"]]
+        return rows
+
+    def get_knowledge_citation_coverage(self, days: int = 30) -> dict:
+        """Summarize citation coverage for generated content using knowledge."""
+        rows = self.get_knowledge_citation_report(days=days)
+        content_ids = {row["content_id"] for row in rows}
+        external_rows = [row for row in rows if row["is_external"]]
+        missing_rows = [row for row in rows if row["missing_traceable_link"]]
+        missing_content_ids = {row["content_id"] for row in missing_rows}
+
+        return {
+            "days": days,
+            "content_count": len(content_ids),
+            "knowledge_link_count": len(rows),
+            "external_link_count": len(external_rows),
+            "missing_traceable_link_count": len(missing_rows),
+            "content_with_missing_traceable_links": len(missing_content_ids),
+        }
+
     def get_unused_knowledge(self, days: int = 30) -> list[dict]:
         """Get knowledge items ingested but never used in generation.
 

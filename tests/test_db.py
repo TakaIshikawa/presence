@@ -1398,6 +1398,105 @@ class TestGeneratedContent:
         assert db.get_content_provenance(9999) is None
 
 
+class TestKnowledgeCitationCoverage:
+    def _insert_knowledge(
+        self,
+        db,
+        source_type="curated_article",
+        source_id="source-1",
+        source_url=None,
+        author="Ada",
+        license="attribution_required",
+        attribution_required=1,
+    ):
+        return db.conn.execute(
+            """INSERT INTO knowledge
+               (source_type, source_id, source_url, author, content, license, attribution_required, approved)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+            (
+                source_type,
+                source_id,
+                source_url,
+                author,
+                f"Knowledge from {source_id}",
+                license,
+                attribution_required,
+            ),
+        ).lastrowid
+
+    def test_knowledge_citation_report_flags_external_sources_without_urls(self, db):
+        content_id = db.insert_generated_content(
+            "x_post",
+            ["sha"],
+            ["uuid"],
+            "Generated from mixed knowledge.",
+            8.0,
+            "ok",
+        )
+        missing_id = self._insert_knowledge(db, source_id="missing", source_url=None)
+        traced_id = self._insert_knowledge(
+            db,
+            source_id="traced",
+            source_url="https://example.test/source",
+            license="open",
+            attribution_required=0,
+        )
+        own_id = self._insert_knowledge(
+            db,
+            source_type="own_post",
+            source_id="own",
+            source_url=None,
+            author="taka",
+            license="open",
+            attribution_required=0,
+        )
+        db.insert_content_knowledge_links(
+            content_id,
+            [(missing_id, 0.9), (traced_id, 0.8), (own_id, 0.7)],
+        )
+
+        rows = db.get_knowledge_citation_report(days=30)
+
+        by_knowledge_id = {row["knowledge_id"]: row for row in rows}
+        assert by_knowledge_id[missing_id]["is_external"] == 1
+        assert by_knowledge_id[missing_id]["missing_traceable_link"] == 1
+        assert by_knowledge_id[missing_id]["license"] == "attribution_required"
+        assert by_knowledge_id[missing_id]["attribution_required"] == 1
+        assert by_knowledge_id[traced_id]["missing_traceable_link"] == 0
+        assert by_knowledge_id[own_id]["is_external"] == 0
+        assert by_knowledge_id[own_id]["missing_traceable_link"] == 0
+
+    def test_knowledge_citation_report_only_missing_and_coverage(self, db):
+        content_id = db.insert_generated_content(
+            "x_post",
+            ["sha"],
+            ["uuid"],
+            "Generated from external knowledge.",
+            8.0,
+            "ok",
+        )
+        missing_id = self._insert_knowledge(db, source_id="missing", source_url="")
+        traced_id = self._insert_knowledge(
+            db,
+            source_id="traced",
+            source_url="https://example.test/source",
+        )
+        db.insert_content_knowledge_links(content_id, [(missing_id, 0.9), (traced_id, 0.8)])
+
+        rows = db.get_knowledge_citation_report(days=30, only_missing=True)
+        coverage = db.get_knowledge_citation_coverage(days=30)
+
+        assert [row["knowledge_id"] for row in rows] == [missing_id]
+        assert coverage == {
+            "days": 30,
+            "content_count": 1,
+            "knowledge_link_count": 2,
+            "external_link_count": 2,
+            "missing_traceable_link_count": 1,
+            "content_with_missing_traceable_links": 1,
+        }
+
+
 # --- Poll state ---
 
 
