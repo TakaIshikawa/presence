@@ -116,6 +116,10 @@ class TestVisualPipelineRun:
         assert result.pipeline_result.final_content == "Check out this insight"
         assert os.path.exists(result.image.path)
         assert result.image.style == "annotated"
+        assert result.image_alt_text == (
+            'Text graphic headed "Key Insight" with body text: Testing is faster than debugging.'
+        )
+        assert result.image.alt_text == result.image_alt_text
 
     def test_comparison_image_type(self):
         mock_pipeline = MagicMock()

@@ -175,6 +175,8 @@ def main() -> None:
             content = item['content']
             content_type = item['content_type']
             scheduled_at = item['scheduled_at']
+            image_path = item.get("image_path")
+            image_alt_text = item.get("image_alt_text") or ""
 
             logger.info(f"Publishing content {content_id} (queued for {scheduled_at})")
 
@@ -205,6 +207,12 @@ def main() -> None:
                 if 'x' in pending_platforms:
                     if content_type == 'x_thread':
                         result = x_client.post_thread(tweets)
+                    elif image_path:
+                        result = x_client.post_with_media(
+                            text=content,
+                            media_path=image_path,
+                            alt_text=image_alt_text,
+                        )
                     else:
                         result = x_client.post(content)
 
@@ -231,6 +239,12 @@ def main() -> None:
 
                         if content_type == 'x_thread':
                             bsky_result = bluesky_client.post_thread(bsky_tweets)
+                        elif image_path and hasattr(bluesky_client, "post_with_media"):
+                            bsky_result = bluesky_client.post_with_media(
+                                text=bsky_tweets[0],
+                                media_path=image_path,
+                                alt_text=image_alt_text,
+                            )
                         else:
                             bsky_result = bluesky_client.post(bsky_tweets[0])
 

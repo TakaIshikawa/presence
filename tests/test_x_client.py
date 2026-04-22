@@ -799,3 +799,21 @@ class TestParseThreadContent:
         content = "TWEET 10:\nTenth tweet\nTWEET 11:\nEleventh tweet"
         result = parse_thread_content(content)
         assert result == ["Tenth tweet", "Eleventh tweet"]
+
+
+class TestMediaAltText:
+    def test_media_metadata_failure_does_not_block_upload(self):
+        import tweepy
+
+        client, _ = make_x_client()
+        mock_api = MagicMock()
+        mock_media = MagicMock()
+        mock_media.media_id = 12345
+        mock_api.media_upload.return_value = mock_media
+        mock_api.create_media_metadata.side_effect = tweepy.TweepyException("metadata unsupported")
+        client._v1_api_instance = mock_api
+
+        result = client.upload_media("/path/to/image.png", alt_text="A concise description")
+
+        assert result == "12345"
+        mock_api.create_media_metadata.assert_called_once()

@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS generated_content (
     content_format TEXT,    -- format used for generation: 'micro_story', 'question', 'contrarian', 'tip', 'observation', 'mid_action', 'bold_claim', 'question_hook', 'surprising_result', 'contrarian_thread'
     image_path TEXT,        -- local path to generated image (for x_visual posts)
     image_prompt TEXT,      -- prompt/description used to generate the image
+    image_alt_text TEXT,    -- human-readable alt text for generated image
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

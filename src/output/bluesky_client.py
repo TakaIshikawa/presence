@@ -1,6 +1,7 @@
 """Bluesky (AT Protocol) API client for posting content."""
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -10,6 +11,13 @@ from atproto.exceptions import AtProtocolError
 from .publish_errors import classify_publish_error, PublishErrorCategory
 
 logger = logging.getLogger(__name__)
+
+
+def _limit_alt_text(alt_text: str, max_chars: int = 1000) -> str:
+    alt_text = re.sub(r"\s+", " ", (alt_text or "").strip())
+    if len(alt_text) <= max_chars:
+        return alt_text
+    return alt_text[: max_chars - 3].rstrip(" ,;:.") + "..."
 
 
 @dataclass
@@ -49,6 +57,17 @@ class BlueskyClient:
             error_category=classify_publish_error(error_text, platform="bluesky"),
         )
 
+    def _success_result(self, response) -> BlueskyPostResult:
+        uri = response.uri
+        rkey = uri.split('/')[-1]
+        url = f"https://bsky.app/profile/{self.handle}/post/{rkey}"
+        return BlueskyPostResult(
+            success=True,
+            uri=uri,
+            cid=response.cid,
+            url=url
+        )
+
     def post(self, text: str) -> BlueskyPostResult:
         """Create a single Bluesky post (max 300 graphemes).
 
@@ -61,17 +80,36 @@ class BlueskyClient:
         try:
             self._ensure_login()
             response = self.client.send_post(text=text)
-            # Extract rkey from URI: at://did:plc:.../app.bsky.feed.post/{rkey}
-            uri = response.uri
-            rkey = uri.split('/')[-1]
-            url = f"https://bsky.app/profile/{self.handle}/post/{rkey}"
-            return BlueskyPostResult(
-                success=True,
-                uri=uri,
-                cid=response.cid,
-                url=url
-            )
+            return self._success_result(response)
         except AtProtocolError as e:
+            return self._failure_result(e)
+
+    def post_with_media(
+        self,
+        text: str,
+        media_path: str,
+        alt_text: str = "",
+    ) -> BlueskyPostResult:
+        """Create a Bluesky post with one attached image when supported."""
+        send_image = getattr(self.client, "send_image", None)
+        if not callable(send_image):
+            logger.warning("Bluesky client does not support image upload; posting text only")
+            return self.post(text)
+
+        try:
+            self._ensure_login()
+            with open(media_path, "rb") as fh:
+                image = fh.read()
+            alt_text = _limit_alt_text(alt_text)
+
+            try:
+                response = send_image(text=text, image=image, image_alt=alt_text)
+            except TypeError as e:
+                logger.warning(f"Bluesky image alt text unsupported; retrying without it: {e}")
+                response = send_image(text=text, image=image)
+
+            return self._success_result(response)
+        except (OSError, AtProtocolError) as e:
             return self._failure_result(e)
 
     def post_thread(self, texts: list[str]) -> BlueskyPostResult:

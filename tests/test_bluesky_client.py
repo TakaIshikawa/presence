@@ -165,6 +165,45 @@ class TestPost:
         assert "UnauthorizedError" in result.error
         assert "Invalid credentials" in result.error
 
+    def test_post_with_media_sends_alt_text(self, tmp_path):
+        client, mock_client = make_bluesky_client()
+        image_path = tmp_path / "visual.png"
+        image_path.write_bytes(b"png")
+        response = mock_send_post(mock_client)
+        mock_client.send_image.return_value = response
+
+        result = client.post_with_media(
+            "Hello Bluesky!",
+            str(image_path),
+            alt_text="Text graphic about a launch",
+        )
+
+        assert result.success is True
+        mock_client.send_image.assert_called_once_with(
+            text="Hello Bluesky!",
+            image=b"png",
+            image_alt="Text graphic about a launch",
+        )
+
+    def test_post_with_media_retries_without_alt_when_unsupported(self, tmp_path):
+        client, mock_client = make_bluesky_client()
+        image_path = tmp_path / "visual.png"
+        image_path.write_bytes(b"png")
+        response = mock_send_post(mock_client)
+        mock_client.send_image.side_effect = [TypeError("unexpected image_alt"), response]
+
+        result = client.post_with_media(
+            "Hello Bluesky!",
+            str(image_path),
+            alt_text="Text graphic about a launch",
+        )
+
+        assert result.success is True
+        assert mock_client.send_image.call_args_list[-1].kwargs == {
+            "text": "Hello Bluesky!",
+            "image": b"png",
+        }
+
 
 # --- BlueskyClient.post_thread() ---
 

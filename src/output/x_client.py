@@ -11,6 +11,13 @@ from .publish_errors import classify_publish_error, PublishErrorCategory
 logger = logging.getLogger(__name__)
 
 
+def _limit_alt_text(alt_text: str, max_chars: int = 1000) -> str:
+    alt_text = re.sub(r"\s+", " ", (alt_text or "").strip())
+    if len(alt_text) <= max_chars:
+        return alt_text
+    return alt_text[: max_chars - 3].rstrip(" ,;:.") + "..."
+
+
 @dataclass
 class PostResult:
     success: bool
@@ -114,7 +121,13 @@ class XClient:
             media = self._v1_api.media_upload(filename=file_path)
             self._clear_error()
             if alt_text:
-                self._v1_api.create_media_metadata(media.media_id, alt_text=alt_text)
+                try:
+                    self._v1_api.create_media_metadata(
+                        media.media_id,
+                        alt_text=_limit_alt_text(alt_text),
+                    )
+                except (AttributeError, TypeError, tweepy.TweepyException) as e:
+                    logger.warning(f"Media alt text metadata failed; continuing without it: {e}")
             return str(media.media_id)
         except tweepy.TweepyException as e:
             self._record_error(e)

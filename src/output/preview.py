@@ -209,6 +209,7 @@ def build_publication_preview(
                 adapter,
             ),
             "image_path": content.get("image_path"),
+            "image_alt_text": content.get("image_alt_text"),
         }
 
     return {
@@ -217,6 +218,7 @@ def build_publication_preview(
             "content_type": content["content_type"],
             "image_path": content.get("image_path"),
             "image_prompt": content.get("image_prompt"),
+            "image_alt_text": content.get("image_alt_text"),
             "published": content.get("published"),
             "published_url": content.get("published_url"),
             "tweet_id": content.get("tweet_id"),
@@ -249,6 +251,8 @@ def format_preview(preview: dict) -> str:
 
     if content.get("image_path"):
         lines.append(f"Image: {content['image_path']}")
+    if content.get("image_alt_text"):
+        lines.append(f"Alt text: {content['image_alt_text']}")
 
     for platform, rendered in preview["platforms"].items():
         status = rendered["status"]

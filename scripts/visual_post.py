@@ -162,6 +162,7 @@ def main():
             content_format=pr.content_format,
             image_path=result.image.path,
             image_prompt=result.image_prompt,
+            image_alt_text=result.image_alt_text or result.image.alt_text,
         )
         if pr.planned_topic_id and content_id:
             db.mark_planned_topic_generated(pr.planned_topic_id, content_id)
@@ -201,13 +202,14 @@ def main():
             logger.info("Generated visual post:")
             logger.info(pr.final_content)
             logger.info(f"Generated image saved to: {result.image.path}")
+            logger.info(f"Generated alt text: {result.image_alt_text or result.image.alt_text}")
         else:
             # Post with media
             logger.info("Posting visual post to X...")
             post_result = x_client.post_with_media(
                 text=pr.final_content,
                 media_path=result.image.path,
-                alt_text=result.image.prompt_used,
+                alt_text=result.image_alt_text or result.image.alt_text,
             )
             if post_result.success:
                 db.mark_published(content_id, post_result.url, tweet_id=post_result.tweet_id)

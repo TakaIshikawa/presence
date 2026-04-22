@@ -5,15 +5,9 @@ Future providers (GPT Image, Ideogram) can be added by implementing the same int
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional, Protocol
-
-from synthesis.image_templates import (
-    render_annotated_text,
-    render_comparison,
-    render_metric_highlight,
-    render_meme_text,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +19,7 @@ class GeneratedImage:
     prompt_used: str    # the prompt/description that generated it
     provider: str       # 'pillow', 'gpt_image', etc.
     style: str          # 'annotated', 'comparison', 'metric'
+    alt_text: str = ""  # human-readable image description for publishing
 
 
 class ImageProvider(Protocol):
@@ -46,6 +41,75 @@ class ImageProvider(Protocol):
     ) -> str:
         """Generate an image and return the file path."""
         ...
+
+
+def _clean_alt_fragment(text: str) -> str:
+    """Normalize rendered text fragments for alt text."""
+    text = re.sub(r"\s+", " ", (text or "").strip().strip('"'))
+    text = re.sub(r"^(ANNOTATED|COMPARISON|METRIC|MEME)\s*\|\s*", "", text, flags=re.IGNORECASE)
+    return text.strip(" |")
+
+
+def _limit_alt_text(text: str, max_chars: int = 300) -> str:
+    """Keep alt text concise and below common platform limits."""
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip(" ,;:.") + "..."
+
+
+def build_alt_text(
+    style: str,
+    title: str = "",
+    body: str = "",
+    before: str = "",
+    after: str = "",
+    metric: str = "",
+    value: str = "",
+    context: str = "",
+    top_text: str = "",
+    bottom_text: str = "",
+) -> str:
+    """Build human-readable alt text from rendered template content."""
+    style = (style or "annotated").lower()
+    title = _clean_alt_fragment(title)
+    body = _clean_alt_fragment(body)
+    before = _clean_alt_fragment(before)
+    after = _clean_alt_fragment(after)
+    metric = _clean_alt_fragment(metric)
+    value = _clean_alt_fragment(value)
+    context = _clean_alt_fragment(context)
+    top_text = _clean_alt_fragment(top_text)
+    bottom_text = _clean_alt_fragment(bottom_text)
+
+    if style == "comparison":
+        parts = [f'Comparison graphic titled "{title}".' if title else "Comparison graphic."]
+        if before:
+            parts.append(f"Before: {before}.")
+        if after:
+            parts.append(f"After: {after}.")
+        return _limit_alt_text(" ".join(parts))
+    if style == "metric":
+        label = metric or "Metric"
+        text = f"Metric graphic showing {label}: {value}." if value else f"Metric graphic showing {label}."
+        if context:
+            text = f"{text} {context}."
+        return _limit_alt_text(text)
+    if style == "meme":
+        parts = ["Meme-style graphic."]
+        if top_text:
+            parts.append(f'Top text: "{top_text}".')
+        if bottom_text:
+            parts.append(f'Bottom text: "{bottom_text}".')
+        return _limit_alt_text(" ".join(parts))
+
+    if title and body:
+        return _limit_alt_text(f'Text graphic headed "{title}" with body text: {body}.')
+    if title:
+        return _limit_alt_text(f'Text graphic headed "{title}".')
+    if body:
+        return _limit_alt_text(f"Text graphic: {body}.")
+    return "Generated text graphic for the post."
 
 
 class PillowImageProvider:
@@ -82,6 +146,13 @@ class PillowImageProvider:
         Returns:
             Path to the generated PNG file.
         """
+        from synthesis.image_templates import (
+            render_annotated_text,
+            render_comparison,
+            render_metric_highlight,
+            render_meme_text,
+        )
+
         if style == "comparison":
             return render_comparison(
                 before=before,
@@ -168,9 +239,22 @@ class ImageGenerator:
             palette=palette,
             output_dir=output_dir or self._output_dir,
         )
+        alt_text = build_alt_text(
+            style=style,
+            title=title,
+            body=body,
+            before=before,
+            after=after,
+            metric=metric,
+            value=value,
+            context=context,
+            top_text=top_text,
+            bottom_text=bottom_text,
+        )
         return GeneratedImage(
             path=path,
             prompt_used=prompt,
             provider=self._provider_name,
             style=style,
+            alt_text=alt_text,
         )

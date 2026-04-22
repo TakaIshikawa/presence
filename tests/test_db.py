@@ -3232,3 +3232,21 @@ class TestNewsletterMethods:
             (pattern["content_type"], pattern["content_format"])
             for pattern in patterns
         } == {("x_post", "tip"), ("x_thread", "contrarian_thread")}
+
+
+def test_generated_content_stores_image_alt_text(db):
+    content_id = db.insert_generated_content(
+        content_type="x_visual",
+        source_commits=["sha"],
+        source_messages=["uuid"],
+        content="Visual post",
+        eval_score=8.0,
+        eval_feedback="Good",
+        image_path="/tmp/presence-images/visual.png",
+        image_prompt="ANNOTATED | Launch | Visual post",
+        image_alt_text='Text graphic headed "Launch" with body text: Visual post.',
+    )
+
+    content = db.get_generated_content(content_id)
+
+    assert content["image_alt_text"] == 'Text graphic headed "Launch" with body text: Visual post.'

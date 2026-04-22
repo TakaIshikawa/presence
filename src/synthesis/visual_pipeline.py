@@ -62,6 +62,7 @@ class VisualPipelineResult:
     pipeline_result: PipelineResult
     image: GeneratedImage
     image_prompt: str  # the prompt used to decide image content
+    image_alt_text: str = ""
 
 
 class VisualPipeline:
@@ -139,8 +140,9 @@ class VisualPipeline:
             logger.warning("No candidates generated for visual post")
             return VisualPipelineResult(
                 pipeline_result=pipeline_result,
-                image=GeneratedImage(path="", prompt_used="", provider="none", style="none"),
+                image=GeneratedImage(path="", prompt_used="", provider="none", style="none", alt_text=""),
                 image_prompt="",
+                image_alt_text="",
             )
 
         if pipeline_result.content_format == "meme_commentary":
@@ -180,6 +182,7 @@ class VisualPipeline:
             pipeline_result=pipeline_result,
             image=image,
             image_prompt=image_spec,
+            image_alt_text=image.alt_text,
         )
 
     def _generate_from_spec(self, spec: str) -> GeneratedImage:

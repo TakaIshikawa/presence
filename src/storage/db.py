@@ -120,6 +120,8 @@ class Database:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_path TEXT")
             if "image_prompt" not in cols:
                 self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_prompt TEXT")
+            if "image_alt_text" not in cols:
+                self.conn.execute("ALTER TABLE generated_content ADD COLUMN image_alt_text TEXT")
             # Migrate: create durable user feedback memory for generated content.
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS content_feedback (
@@ -902,14 +904,15 @@ class Database:
         content_format: Optional[str] = None,
         image_path: Optional[str] = None,
         image_prompt: Optional[str] = None,
+        image_alt_text: Optional[str] = None,
         source_activity_ids: Optional[list[str]] = None,
     ) -> int:
         cursor = self.conn.execute(
             """INSERT INTO generated_content
                (content_type, source_commits, source_messages, source_activity_ids,
                 content, eval_score, eval_feedback,
-                content_format, image_path, image_prompt)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                content_format, image_path, image_prompt, image_alt_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 content_type,
                 json.dumps(source_commits),
@@ -921,6 +924,7 @@ class Database:
                 content_format,
                 image_path,
                 image_prompt,
+                image_alt_text,
             )
         )
         self.conn.commit()
@@ -4139,7 +4143,8 @@ class Database:
         cursor = self.conn.execute(
             """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
                       gc.content, gc.content_type, gc.published,
-                      gc.published_url, gc.tweet_id, gc.bluesky_uri
+                      gc.published_url, gc.tweet_id, gc.bluesky_uri,
+                      gc.image_path, gc.image_alt_text
                FROM publish_queue pq
                INNER JOIN generated_content gc ON gc.id = pq.content_id
                WHERE pq.status IN ('queued', 'failed')
