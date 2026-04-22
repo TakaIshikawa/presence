@@ -126,6 +126,26 @@ class TestFetchCuratedFeeds:
         assert "separate planning" in entries[0].content
         assert entries[1].summary == "Context windows should shape the product interface."
 
+    def test_parse_atom_feed(self):
+        atom = """<?xml version="1.0" encoding="utf-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <title>Newsletter issue</title>
+            <link href="https://newsletter.example.com/issues/42" rel="alternate" />
+            <summary>Issue summary</summary>
+            <content type="html">&lt;p&gt;Issue content&lt;/p&gt;</content>
+          </entry>
+        </feed>
+        """
+
+        entries = parse_feed(atom, limit=1)
+
+        assert len(entries) == 1
+        assert entries[0].title == "Newsletter issue"
+        assert entries[0].link == "https://newsletter.example.com/issues/42"
+        assert entries[0].summary == "Issue summary"
+        assert entries[0].content == "Issue content"
+
     @patch("fetch_curated.ingest_curated_article")
     @patch("fetch_curated.fetch_feed")
     def test_ingests_new_feed_entries_and_skips_existing(self, mock_fetch, mock_ingest):
@@ -154,6 +174,34 @@ class TestFetchCuratedFeeds:
         assert mock_ingest.call_args.kwargs["title"] == "Building reliable agent loops"
         assert mock_ingest.call_args.kwargs["author"] == "Example Blog"
         assert mock_ingest.call_args.kwargs["license_type"] == "open"
+
+    @patch("fetch_curated.ingest_curated_newsletter")
+    @patch("fetch_curated.fetch_feed")
+    def test_newsletter_feed_entries_use_distinct_source_type(self, mock_fetch, mock_ingest):
+        from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedFetchResult
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=2))
+        store = MagicMock()
+        store.exists.side_effect = [False, True]
+        source = SimpleNamespace(
+            source_type="newsletter",
+            identifier="newsletter.example.com",
+            name="Example Newsletter",
+            license="restricted",
+            feed_url="https://newsletter.example.com/feed.xml",
+        )
+
+        count = fetch_curated_feed_source(store, MagicMock(), source, limit=2)
+
+        assert count == 1
+        store.exists.assert_any_call("curated_newsletter", "https://example.com/agent-loops")
+        store.exists.assert_any_call("curated_newsletter", "https://example.com/context-windows")
+        mock_ingest.assert_called_once()
+        assert mock_ingest.call_args.kwargs["url"] == "https://example.com/agent-loops"
+        assert mock_ingest.call_args.kwargs["author"] == "Example Newsletter"
+        assert mock_ingest.call_args.kwargs["license_type"] == "restricted"
 
     @patch("knowledge.rss.urlopen")
     def test_fetch_feed_persists_headers_from_first_fetch(self, mock_urlopen):
@@ -338,6 +386,52 @@ class TestFetchCuratedFeeds:
         mock_fetch.assert_not_called()
         assert "source health cooldown active" in caplog.text
         assert db.get_curated_source("blog", "example.com")["last_fetch_status"] == "quarantined"
+
+    @patch("fetch_curated.ingest_curated_newsletter")
+    @patch("fetch_curated.fetch_feed")
+    def test_newsletter_ingestion_failure_records_source_health(self, mock_fetch, mock_ingest, db):
+        from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedFetchResult
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        db.sync_config_sources(
+            [
+                {
+                    "identifier": "newsletter.example.com",
+                    "name": "Example Newsletter",
+                    "feed_url": "https://newsletter.example.com/feed.xml",
+                    "license": "restricted",
+                }
+            ],
+            "newsletter",
+        )
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=1))
+        mock_ingest.side_effect = RuntimeError("extractor failed")
+        store = MagicMock()
+        store.exists.return_value = False
+        source = SimpleNamespace(
+            source_type="newsletter",
+            identifier="newsletter.example.com",
+            name="Example Newsletter",
+            license="restricted",
+            feed_url="https://newsletter.example.com/feed.xml",
+        )
+
+        with pytest.raises(RuntimeError):
+            fetch_curated_feed_source(
+                store,
+                MagicMock(),
+                source,
+                db=db,
+                limit=1,
+                failure_threshold=2,
+                cooldown_hours=24,
+            )
+
+        row = db.get_curated_source("newsletter", "newsletter.example.com")
+        assert row["last_fetch_status"] == "failure"
+        assert row["consecutive_failures"] == 1
+        assert "RuntimeError: extractor failed" in row["last_error"]
 
     def test_x_account_not_found_records_failure(self, db):
         from fetch_curated import _fetch_account_with_health

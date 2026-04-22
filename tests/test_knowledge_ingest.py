@@ -14,6 +14,7 @@ from knowledge.ingest import (
     ingest_own_conversation,
     ingest_curated_post,
     ingest_curated_article,
+    ingest_curated_newsletter,
 )
 from knowledge.store import KnowledgeStore
 from knowledge.embeddings import EmbeddingProvider
@@ -427,3 +428,48 @@ class TestIngestCuratedArticle:
 
         item = store.get_by_source("curated_article", "https://example.com/open")
         assert item.attribution_required is False
+
+
+# ---------------------------------------------------------------------------
+# ingest_curated_newsletter
+# ---------------------------------------------------------------------------
+
+class TestIngestCuratedNewsletter:
+    def test_stores_with_newsletter_source_type_and_author(self, store, extractor_with_client):
+        ext, client = extractor_with_client
+        client.messages.create.return_value = _make_mock_response("newsletter insight")
+
+        ingest_curated_newsletter(
+            store=store,
+            extractor=ext,
+            url="https://newsletter.example.com/issues/1",
+            content="Newsletter issue about agent reliability",
+            title="Issue 1",
+            author="Example Newsletter",
+            license_type="restricted",
+        )
+
+        item = store.get_by_source("curated_newsletter", "https://newsletter.example.com/issues/1")
+        assert item is not None
+        assert item.source_type == "curated_newsletter"
+        assert item.source_id == "https://newsletter.example.com/issues/1"
+        assert item.source_url == "https://newsletter.example.com/issues/1"
+        assert item.author == "Example Newsletter"
+        assert item.license == "restricted"
+        assert item.attribution_required is True
+
+        prompt = client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "Context: Newsletter: Issue 1 by Example Newsletter" in prompt
+
+    def test_deduplication_by_url(self, store, extractor_with_client):
+        ext, client = extractor_with_client
+        client.messages.create.return_value = _make_mock_response("insight")
+
+        url = "https://newsletter.example.com/issues/dup"
+        ingest_curated_newsletter(store, ext, url, "content", "Title", "Newsletter")
+        client.messages.create.reset_mock()
+
+        result = ingest_curated_newsletter(store, ext, url, "content", "Title", "Newsletter")
+
+        assert result is None
+        client.messages.create.assert_not_called()

@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS poll_state (
 -- Knowledge items with embeddings for semantic search
 CREATE TABLE IF NOT EXISTS knowledge (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_type TEXT NOT NULL,  -- 'own_post', 'own_conversation', 'curated_x', 'curated_article'
+    source_type TEXT NOT NULL,  -- 'own_post', 'own_conversation', 'curated_x', 'curated_article', 'curated_newsletter'
     source_id TEXT,             -- original ID (tweet ID, message UUID, etc.)
     source_url TEXT,
     author TEXT,

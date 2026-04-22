@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class KnowledgeItem:
     id: Optional[int]
-    source_type: str  # 'own_post', 'own_conversation', 'curated_x', 'curated_article'
+    source_type: str  # 'own_post', 'own_conversation', 'curated_x', 'curated_article', 'curated_newsletter'
     source_id: str
     source_url: Optional[str]
     author: str

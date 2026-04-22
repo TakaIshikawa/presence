@@ -192,3 +192,38 @@ def ingest_curated_article(
         license=license_type,
     )
     return store.add_item(item)
+
+
+def ingest_curated_newsletter(
+    store: KnowledgeStore,
+    extractor: InsightExtractor,
+    url: str,
+    content: str,
+    title: str,
+    author: str,
+    license_type: str = "attribution_required"
+) -> Optional[int]:
+    """Ingest a curated newsletter issue into knowledge base."""
+    if store.exists("curated_newsletter", url):
+        return None
+
+    insight = extractor.extract_insight(
+        content[:2000],
+        context=f"Newsletter: {title} by {author}"
+    )
+
+    item = KnowledgeItem(
+        id=None,
+        source_type="curated_newsletter",
+        source_id=url,
+        source_url=url,
+        author=author,
+        content=content[:5000],
+        insight=insight,
+        embedding=None,
+        attribution_required=(license_type != "open"),
+        approved=True,
+        created_at=None,
+        license=license_type,
+    )
+    return store.add_item(item)

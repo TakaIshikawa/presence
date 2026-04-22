@@ -14,7 +14,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from runner import script_context
 from knowledge.embeddings import get_embedding_provider
 from knowledge.store import KnowledgeStore
-from knowledge.ingest import InsightExtractor, ingest_curated_post, ingest_curated_article
+from knowledge.ingest import (
+    InsightExtractor,
+    ingest_curated_article,
+    ingest_curated_newsletter,
+    ingest_curated_post,
+)
 from knowledge.curated_accounts import get_active_x_accounts
 from knowledge.rss import fetch_feed
 from output.x_client import XClient
@@ -255,26 +260,37 @@ def fetch_curated_feed_source(
     ingested = 0
     author = getattr(source, "name", None) or getattr(source, "identifier", "")
     license_type = getattr(source, "license", "attribution_required")
+    knowledge_source_type = (
+        "curated_newsletter" if source_type == "newsletter" else "curated_article"
+    )
+    ingest_entry = (
+        ingest_curated_newsletter if source_type == "newsletter" else ingest_curated_article
+    )
 
-    for entry in result.entries:
-        if store.exists("curated_article", entry.link):
-            logger.debug("Skipping %s (already exists)", entry.link)
-            continue
+    try:
+        for entry in result.entries:
+            if store.exists(knowledge_source_type, entry.link):
+                logger.debug("Skipping %s (already exists)", entry.link)
+                continue
 
-        content = entry.content or entry.summary
-        if not content:
-            continue
+            content = entry.content or entry.summary
+            if not content:
+                continue
 
-        ingest_curated_article(
-            store=store,
-            extractor=extractor,
-            url=entry.link,
-            content=content,
-            title=entry.title,
-            author=author,
-            license_type=license_type,
-        )
-        ingested += 1
+            ingest_entry(
+                store=store,
+                extractor=extractor,
+                url=entry.link,
+                content=content,
+                title=entry.title,
+                author=author,
+                license_type=license_type,
+            )
+            ingested += 1
+    except Exception as exc:
+        if db is not None and source_type and identifier:
+            _record_source_failure(db, source_type, identifier, _source_error(exc))
+        raise
 
     if db is not None and source_type and identifier:
         _record_source_success(db, source_type, identifier)
