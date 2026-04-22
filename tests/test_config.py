@@ -209,6 +209,8 @@ class TestDataclassParsing:
         assert isinstance(cfg.curated_sources, CuratedSourcesConfig)
         assert cfg.curated_sources.restricted_prompt_behavior == "strict"
         assert cfg.curated_sources.rss_entries_per_source == 3
+        assert cfg.curated_sources.source_failure_threshold == 3
+        assert cfg.curated_sources.source_cooldown_hours == 24
         assert cfg.curated_sources.knowledge_context.max_per_author is None
         assert cfg.curated_sources.knowledge_context.max_per_source_type is None
 
@@ -231,6 +233,19 @@ class TestDataclassParsing:
         assert newsletter.identifier == "newsletter.example.com"
         assert newsletter.name == "Example Newsletter"
         assert newsletter.feed_url == "https://newsletter.example.com/rss"
+
+    def test_curated_sources_health_config(self, tmp_path):
+        data = _minimal_config_dict(
+            curated_sources={
+                "source_failure_threshold": 2,
+                "source_cooldown_hours": 6,
+                "x_accounts": [],
+                "blogs": [],
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.curated_sources.source_failure_threshold == 2
+        assert cfg.curated_sources.source_cooldown_hours == 6
 
     def test_image_gen_config(self, tmp_path):
         data = _minimal_config_dict(

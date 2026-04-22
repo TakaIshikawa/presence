@@ -2121,6 +2121,42 @@ class TestInitSchema:
         for col in ("retry_count", "last_retry_at", "tweet_id", "published_at"):
             assert col in cols
 
+        curated_cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(curated_sources)")
+        }
+        for col in (
+            "last_fetch_status",
+            "consecutive_failures",
+            "last_success_at",
+            "last_failure_at",
+            "last_error",
+        ):
+            assert col in curated_cols
+
+    def test_curated_source_fetch_health_records_success_and_failures(self, db):
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example"}],
+            "blog",
+        )
+
+        db.record_curated_source_fetch_failure("blog", "example.com", "bad xml")
+        db.record_curated_source_fetch_failure("blog", "example.com", "still bad")
+        row = db.get_curated_source("blog", "example.com")
+        assert row["last_fetch_status"] == "failure"
+        assert row["consecutive_failures"] == 2
+        assert row["last_failure_at"]
+        assert row["last_error"] == "still bad"
+        assert len(db.get_quarantined_curated_sources(2, 24)) == 1
+
+        db.record_curated_source_fetch_success("blog", "example.com")
+        row = db.get_curated_source("blog", "example.com")
+        assert row["last_fetch_status"] == "success"
+        assert row["consecutive_failures"] == 0
+        assert row["last_success_at"]
+        assert row["last_error"] is None
+        assert db.get_quarantined_curated_sources(2, 24) == []
+
     def test_init_schema_is_idempotent(self, db, schema_path):
         db.init_schema(schema_path=schema_path)  # second call must not raise
 

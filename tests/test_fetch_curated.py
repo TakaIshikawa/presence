@@ -275,6 +275,96 @@ class TestFetchCuratedFeeds:
         assert row["feed_etag"] is None
         assert row["feed_last_modified"] is None
 
+    @patch("fetch_curated.fetch_feed")
+    def test_feed_failure_records_source_health(self, mock_fetch, db):
+        from fetch_curated import fetch_curated_feed_source
+
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example", "feed_url": "https://example.com/feed.xml"}],
+            "blog",
+        )
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+        )
+        mock_fetch.side_effect = ValueError("bad feed")
+
+        with pytest.raises(ValueError):
+            fetch_curated_feed_source(
+                MagicMock(),
+                MagicMock(),
+                source,
+                db=db,
+                failure_threshold=2,
+                cooldown_hours=24,
+            )
+
+        row = db.get_curated_source("blog", "example.com")
+        assert row["last_fetch_status"] == "failure"
+        assert row["consecutive_failures"] == 1
+        assert "ValueError: bad feed" in row["last_error"]
+
+    @patch("fetch_curated.fetch_feed")
+    def test_feed_source_in_cooldown_is_skipped(self, mock_fetch, db, caplog):
+        from fetch_curated import fetch_curated_feed_source
+
+        db.sync_config_sources(
+            [{"identifier": "example.com", "name": "Example", "feed_url": "https://example.com/feed.xml"}],
+            "blog",
+        )
+        db.record_curated_source_fetch_failure("blog", "example.com", "bad feed")
+        db.record_curated_source_fetch_failure("blog", "example.com", "bad feed")
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+        )
+
+        count = fetch_curated_feed_source(
+            MagicMock(),
+            MagicMock(),
+            source,
+            db=db,
+            failure_threshold=2,
+            cooldown_hours=24,
+        )
+
+        assert count == 0
+        mock_fetch.assert_not_called()
+        assert "source health cooldown active" in caplog.text
+        assert db.get_curated_source("blog", "example.com")["last_fetch_status"] == "quarantined"
+
+    def test_x_account_not_found_records_failure(self, db):
+        from fetch_curated import _fetch_account_with_health
+
+        db.sync_config_sources(
+            [{"identifier": "missing_user", "name": "Missing"}],
+            "x_account",
+        )
+        x_client = MagicMock()
+        x_client.last_error = None
+        x_client.get_user_id.return_value = None
+
+        tweets = _fetch_account_with_health(
+            x_client,
+            SimpleNamespace(identifier="missing_user"),
+            db,
+            limit=5,
+            failure_threshold=2,
+            cooldown_hours=24,
+        )
+
+        assert tweets == []
+        row = db.get_curated_source("x_account", "missing_user")
+        assert row["last_fetch_status"] == "failure"
+        assert row["consecutive_failures"] == 1
+        assert "not found" in row["last_error"]
+
 
 # --- TestMain filtering ---
 

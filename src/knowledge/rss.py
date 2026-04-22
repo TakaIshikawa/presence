@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from typing import Iterable
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -29,6 +29,10 @@ class FeedFetchResult:
     etag: str | None = None
     last_modified: str | None = None
     not_modified: bool = False
+
+
+class FeedFetchError(RuntimeError):
+    """Raised when a feed cannot be fetched or parsed."""
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -147,8 +151,12 @@ def fetch_feed(
         with urlopen(request, timeout=timeout) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             xml_text = response.read().decode(charset, errors="replace")
+            try:
+                entries = parse_feed(xml_text, limit=limit)
+            except ET.ParseError as exc:
+                raise FeedFetchError(f"Failed to parse feed XML from {feed_url}: {exc}") from exc
             return FeedFetchResult(
-                entries=parse_feed(xml_text, limit=limit),
+                entries=entries,
                 etag=response.headers.get("ETag"),
                 last_modified=response.headers.get("Last-Modified"),
             )
@@ -161,6 +169,8 @@ def fetch_feed(
             last_modified=exc.headers.get("Last-Modified") or last_modified,
             not_modified=True,
         )
+    except URLError as exc:
+        raise FeedFetchError(f"Failed to fetch feed {feed_url}: {exc.reason}") from exc
 
 
 def fetch_feed_entries(feed_url: str, limit: int = 5, timeout: float = 20.0) -> list[FeedEntry]:

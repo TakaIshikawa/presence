@@ -328,6 +328,43 @@ class TestMainFunction:
         assert "SOURCE QUALITY SCORING REPORT" in captured.out
         assert "Total sources scored: 1" in captured.out
 
+    def test_main_surfaces_quarantined_sources(self, empty_db, capsys, tmp_path):
+        """Report includes source health details needed to fix ingestion."""
+        empty_db.sync_config_sources(
+            [
+                {
+                    "identifier": "example.com",
+                    "name": "Example",
+                    "feed_url": "https://example.com/bad-feed.xml",
+                }
+            ],
+            "blog",
+        )
+        empty_db.record_curated_source_fetch_failure("blog", "example.com", "FeedFetchError: bad XML")
+        empty_db.record_curated_source_fetch_failure("blog", "example.com", "FeedFetchError: bad XML")
+        mock_config = MagicMock()
+        mock_config.paths.database = str(tmp_path / "test.db")
+        mock_config.curated_sources.source_failure_threshold = 2
+        mock_config.curated_sources.source_cooldown_hours = 24
+
+        with patch("source_quality_report.script_context") as mock_context, \
+             patch("source_quality_report.update_monitoring") as mock_monitoring, \
+             patch("sys.argv", ["source_quality_report.py"]):
+
+            mock_context.return_value.__enter__ = lambda self: (mock_config, empty_db)
+            mock_context.return_value.__exit__ = lambda self, *args: None
+
+            main()
+
+            mock_monitoring.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert "QUARANTINED SOURCES" in captured.out
+        assert "example.com" in captured.out
+        assert "https://example.com/bad-feed.xml" in captured.out
+        assert "FeedFetchError: bad XML" in captured.out
+        assert "Resolve quarantined source health issues" in captured.out
+
     def test_main_custom_days_argument(self, populated_db, capsys, tmp_path):
         """Test main function respects --days argument."""
         mock_config = MagicMock()

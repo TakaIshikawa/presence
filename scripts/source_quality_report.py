@@ -19,6 +19,55 @@ from knowledge.source_scorer import SourceScorer
 logger = logging.getLogger(__name__)
 
 
+def _int_config(value, default: int) -> int:
+    return value if isinstance(value, int) and value > 0 else default
+
+
+def _cooldown_config(value, default: int) -> int:
+    return value if isinstance(value, int) and value >= 0 else default
+
+
+def _source_health_config(config) -> tuple[int, int]:
+    curated_sources = getattr(config, "curated_sources", None)
+    return (
+        _int_config(getattr(curated_sources, "source_failure_threshold", 3), 3),
+        _cooldown_config(getattr(curated_sources, "source_cooldown_hours", 24), 24),
+    )
+
+
+def _print_quarantined_sources(db, failure_threshold: int, cooldown_hours: int) -> int:
+    getter = getattr(db, "get_quarantined_curated_sources", None)
+    if not callable(getter):
+        return 0
+
+    rows = getter(failure_threshold, cooldown_hours)
+    if not rows:
+        return 0
+
+    print("QUARANTINED SOURCES (Skipped by Ingestion Health):")
+    print(f"Threshold: {failure_threshold} consecutive failures; cooldown: {cooldown_hours} hours")
+    print(f"{'Source':<28} {'Type':<12} {'Failures':<8} {'Last Failure':<25} {'Feed URL / Account':<36} Last Error")
+    print("-" * 130)
+    for row in rows:
+        source_type = row.get("source_type", "")
+        identifier = row.get("identifier", "")
+        display = f"@{identifier}" if source_type == "x_account" else identifier
+        locator = row.get("feed_url") or ("X API credentials/account access" if source_type == "x_account" else "")
+        error = (row.get("last_error") or "").replace("\n", " ")
+        if len(error) > 80:
+            error = error[:77] + "..."
+        if len(locator) > 34:
+            locator = locator[:31] + "..."
+        print(
+            f"{display:<28} {source_type:<12} "
+            f"{row.get('consecutive_failures') or 0!s:<8} "
+            f"{row.get('last_failure_at') or 'unknown':<25} "
+            f"{locator:<36} {error}"
+        )
+    print()
+    return len(rows)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate source quality scoring report"
@@ -45,13 +94,17 @@ def main() -> None:
 
     with script_context() as (config, db):
         scorer = SourceScorer(db)
+        failure_threshold, cooldown_hours = _source_health_config(config)
 
         logger.info(f"Computing source quality scores (last {args.days} days, min {args.min_uses} uses)...")
         scores = scorer.compute_scores(days=args.days, min_uses=args.min_uses)
+        quarantined_count = _print_quarantined_sources(db, failure_threshold, cooldown_hours)
 
         if not scores:
             print("\nNo source quality data available yet.")
             print("Sources need to be used in published content with engagement metrics.")
+            if quarantined_count:
+                print("Resolve quarantined source health issues above before expecting new source data.")
             return
 
         print("\n" + "=" * 80)

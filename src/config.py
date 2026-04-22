@@ -106,6 +106,8 @@ class CuratedSourcesConfig:
     max_x_accounts_per_run: int = 25
     x_tweets_per_account: int = 5
     rss_entries_per_source: int = 5
+    source_failure_threshold: int = 3
+    source_cooldown_hours: int = 24
     freshness_half_life_days: Optional[float] = None
     knowledge_context: KnowledgeContextConfig = field(default_factory=KnowledgeContextConfig)
 
@@ -383,6 +385,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
             max_x_accounts_per_run=curated_sources_data.get("max_x_accounts_per_run", 25),
             x_tweets_per_account=curated_sources_data.get("x_tweets_per_account", 5),
             rss_entries_per_source=curated_sources_data.get("rss_entries_per_source", 5),
+            source_failure_threshold=curated_sources_data.get("source_failure_threshold", 3),
+            source_cooldown_hours=curated_sources_data.get("source_cooldown_hours", 24),
             freshness_half_life_days=curated_sources_data.get("freshness_half_life_days"),
             knowledge_context=KnowledgeContextConfig(
                 max_per_author=knowledge_context_data.get("max_per_author"),

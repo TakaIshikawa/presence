@@ -4,6 +4,7 @@
 import logging
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,10 +27,16 @@ from output.api_rate_guard import should_skip_optional_api_call
 DEFAULT_MAX_X_ACCOUNTS_PER_RUN = 25
 DEFAULT_X_TWEETS_PER_ACCOUNT = 5
 DEFAULT_RSS_ENTRIES_PER_SOURCE = 5
+DEFAULT_SOURCE_FAILURE_THRESHOLD = 3
+DEFAULT_SOURCE_COOLDOWN_HOURS = 24
 
 
 def _int_config(value, default: int) -> int:
     return value if isinstance(value, int) and value > 0 else default
+
+
+def _nonnegative_int_config(value, default: int) -> int:
+    return value if isinstance(value, int) and value >= 0 else default
 
 
 def _last_x_error(x_client) -> str | None:
@@ -60,6 +67,8 @@ def fetch_user_tweets(x_client, username: str, limit: int = 10, db=None) -> list
             else x_client.get_user_id(username)
         )
         if not user_id:
+            if _last_x_error(x_client) is None and hasattr(x_client, "last_error"):
+                x_client.last_error = f"User @{username} not found"
             logger.error(f"User @{username} not found")
             return []
 
@@ -94,6 +103,55 @@ def _curated_source_row(db, source_type: str, identifier: str) -> dict | None:
     return row if isinstance(row, dict) else None
 
 
+def _source_error(exc: Exception) -> str:
+    return f"{exc.__class__.__name__}: {exc}"
+
+
+def _parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _quarantine_remaining(row: dict | None, failure_threshold: int, cooldown_hours: int) -> timedelta | None:
+    if not row or failure_threshold <= 0 or cooldown_hours <= 0:
+        return None
+    failures = row.get("consecutive_failures") or 0
+    if failures < failure_threshold:
+        return None
+    last_failure = _parse_time(row.get("last_failure_at"))
+    if last_failure is None:
+        return timedelta(hours=cooldown_hours)
+    remaining = last_failure + timedelta(hours=cooldown_hours) - datetime.now(timezone.utc)
+    return remaining if remaining.total_seconds() > 0 else None
+
+
+def _is_quarantined(row: dict | None, failure_threshold: int, cooldown_hours: int) -> bool:
+    return _quarantine_remaining(row, failure_threshold, cooldown_hours) is not None
+
+
+def _record_source_success(db, source_type: str, identifier: str, status: str = "success") -> None:
+    recorder = getattr(db, "record_curated_source_fetch_success", None)
+    if callable(recorder):
+        recorder(source_type, identifier, status=status)
+
+
+def _record_source_failure(db, source_type: str, identifier: str, error: str) -> None:
+    recorder = getattr(db, "record_curated_source_fetch_failure", None)
+    if callable(recorder):
+        recorder(source_type, identifier, error)
+
+
+def _record_source_skipped(db, source_type: str, identifier: str, status: str = "quarantined") -> None:
+    recorder = getattr(db, "record_curated_source_fetch_skipped", None)
+    if callable(recorder):
+        recorder(source_type, identifier, status=status)
+
+
 def _active_feed_sources(config, db) -> list:
     """Return active blog/newsletter sources with optional feed URLs."""
     sources = []
@@ -113,6 +171,7 @@ def _active_feed_sources(config, db) -> list:
                 feed_url=getattr(source, "feed_url", None),
                 feed_etag=row.get("feed_etag") if row else None,
                 feed_last_modified=row.get("feed_last_modified") if row else None,
+                health=row,
             ))
             seen.add((source_type, identifier.lower()))
 
@@ -129,6 +188,7 @@ def _active_feed_sources(config, db) -> list:
                 feed_url=row.get("feed_url"),
                 feed_etag=row.get("feed_etag"),
                 feed_last_modified=row.get("feed_last_modified"),
+                health=row,
             ))
             seen.add(key)
 
@@ -141,6 +201,8 @@ def fetch_curated_feed_source(
     source,
     db=None,
     limit: int = DEFAULT_RSS_ENTRIES_PER_SOURCE,
+    failure_threshold: int = DEFAULT_SOURCE_FAILURE_THRESHOLD,
+    cooldown_hours: int = DEFAULT_SOURCE_COOLDOWN_HOURS,
 ) -> int:
     """Fetch a curated RSS/Atom source and ingest new article entries."""
     logger = logging.getLogger(__name__)
@@ -151,12 +213,31 @@ def fetch_curated_feed_source(
 
     source_type = getattr(source, "source_type", None)
     identifier = getattr(source, "identifier", "")
-    result = fetch_feed(
-        feed_url,
-        limit=limit,
-        etag=getattr(source, "feed_etag", None),
-        last_modified=getattr(source, "feed_last_modified", None),
-    )
+    row = getattr(source, "health", None)
+    if row is None and db is not None and source_type and identifier:
+        row = _curated_source_row(db, source_type, identifier)
+    remaining = _quarantine_remaining(row, failure_threshold, cooldown_hours)
+    if remaining is not None:
+        logger.warning(
+            "Skipping %s; source health cooldown active for %.1f more hours",
+            identifier or feed_url,
+            max(0.0, remaining.total_seconds() / 3600),
+        )
+        if db is not None and source_type and identifier:
+            _record_source_skipped(db, source_type, identifier)
+        return 0
+
+    try:
+        result = fetch_feed(
+            feed_url,
+            limit=limit,
+            etag=getattr(source, "feed_etag", None),
+            last_modified=getattr(source, "feed_last_modified", None),
+        )
+    except Exception as exc:
+        if db is not None and source_type and identifier:
+            _record_source_failure(db, source_type, identifier, _source_error(exc))
+        raise
     update_feed_cache = getattr(db, "update_curated_source_feed_cache", None)
     if db is not None and source_type and identifier and callable(update_feed_cache):
         update_feed_cache(
@@ -167,6 +248,8 @@ def fetch_curated_feed_source(
         )
     if result.not_modified:
         logger.debug("Skipping %s; feed not modified", identifier or feed_url)
+        if db is not None and source_type and identifier:
+            _record_source_success(db, source_type, identifier, status="not_modified")
         return 0
 
     ingested = 0
@@ -193,7 +276,44 @@ def fetch_curated_feed_source(
         )
         ingested += 1
 
+    if db is not None and source_type and identifier:
+        _record_source_success(db, source_type, identifier)
     return ingested
+
+
+def _fetch_account_with_health(
+    x_client,
+    account,
+    db,
+    limit: int,
+    failure_threshold: int,
+    cooldown_hours: int,
+) -> list[dict]:
+    logger = logging.getLogger(__name__)
+    identifier = account.identifier
+    row = _curated_source_row(db, "x_account", identifier)
+    remaining = _quarantine_remaining(row, failure_threshold, cooldown_hours)
+    if remaining is not None:
+        logger.warning(
+            "Skipping @%s; source health cooldown active for %.1f more hours",
+            identifier,
+            max(0.0, remaining.total_seconds() / 3600),
+        )
+        _record_source_skipped(db, "x_account", identifier)
+        return []
+
+    try:
+        tweets = fetch_user_tweets(x_client, identifier, limit=limit, db=db)
+    except Exception as exc:
+        _record_source_failure(db, "x_account", identifier, _source_error(exc))
+        raise
+
+    error = _last_x_error(x_client)
+    if error:
+        _record_source_failure(db, "x_account", identifier, error)
+    else:
+        _record_source_success(db, "x_account", identifier)
+    return tweets
 
 
 def main():
@@ -251,6 +371,14 @@ def main():
                 getattr(config.curated_sources, "x_tweets_per_account", DEFAULT_X_TWEETS_PER_ACCOUNT),
                 DEFAULT_X_TWEETS_PER_ACCOUNT,
             )
+            failure_threshold = _int_config(
+                getattr(config.curated_sources, "source_failure_threshold", DEFAULT_SOURCE_FAILURE_THRESHOLD),
+                DEFAULT_SOURCE_FAILURE_THRESHOLD,
+            )
+            cooldown_hours = _nonnegative_int_config(
+                getattr(config.curated_sources, "source_cooldown_hours", DEFAULT_SOURCE_COOLDOWN_HOURS),
+                DEFAULT_SOURCE_COOLDOWN_HOURS,
+            )
             accounts = get_active_x_accounts(
                 config,
                 db,
@@ -266,11 +394,13 @@ def main():
             )
             for account in accounts:
                 logger.info(f"Fetching @{account.identifier}...")
-                tweets = fetch_user_tweets(
+                tweets = _fetch_account_with_health(
                     x_client,
-                    account.identifier,
-                    limit=tweets_per_account,
-                    db=db,
+                    account,
+                    db,
+                    tweets_per_account,
+                    failure_threshold,
+                    cooldown_hours,
                 )
                 if mark_x_api_blocked_if_needed(db, _last_x_error(x_client)):
                     logger.warning("X API blocked while fetching curated accounts; stopping")
@@ -305,6 +435,14 @@ def main():
             getattr(config.curated_sources, "rss_entries_per_source", DEFAULT_RSS_ENTRIES_PER_SOURCE),
             DEFAULT_RSS_ENTRIES_PER_SOURCE,
         )
+        failure_threshold = _int_config(
+            getattr(config.curated_sources, "source_failure_threshold", DEFAULT_SOURCE_FAILURE_THRESHOLD),
+            DEFAULT_SOURCE_FAILURE_THRESHOLD,
+        )
+        cooldown_hours = _nonnegative_int_config(
+            getattr(config.curated_sources, "source_cooldown_hours", DEFAULT_SOURCE_COOLDOWN_HOURS),
+            DEFAULT_SOURCE_COOLDOWN_HOURS,
+        )
         feed_sources = _active_feed_sources(config, db)
         logger.info("=== Fetching from curated RSS/Atom sources ===")
         logger.info("Fetching %d feed sources (entries/source=%d)", len(feed_sources), rss_entries_per_source)
@@ -316,6 +454,8 @@ def main():
                     source,
                     db=db,
                     limit=rss_entries_per_source,
+                    failure_threshold=failure_threshold,
+                    cooldown_hours=cooldown_hours,
                 )
                 if count:
                     logger.info("Ingested %d entries from %s", count, source.identifier)

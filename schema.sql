@@ -221,6 +221,11 @@ CREATE TABLE IF NOT EXISTS curated_sources (
     feed_url TEXT,
     feed_etag TEXT,
     feed_last_modified TEXT,
+    last_fetch_status TEXT,
+    consecutive_failures INTEGER DEFAULT 0,
+    last_success_at TEXT,
+    last_failure_at TEXT,
+    last_error TEXT,
     notes TEXT,
     active INTEGER DEFAULT 1,
     status TEXT DEFAULT 'active',         -- 'candidate', 'active', 'rejected', 'paused'

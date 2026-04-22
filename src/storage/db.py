@@ -322,7 +322,21 @@ class Database:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_etag TEXT")
                 if "feed_last_modified" not in cs_cols:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_last_modified TEXT")
+                if "last_fetch_status" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN last_fetch_status TEXT")
+                if "consecutive_failures" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN consecutive_failures INTEGER DEFAULT 0")
+                if "last_success_at" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN last_success_at TEXT")
+                if "last_failure_at" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN last_failure_at TEXT")
+                if "last_error" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN last_error TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_curated_sources_status ON curated_sources(status)")
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_curated_sources_health "
+                "ON curated_sources(status, consecutive_failures, last_failure_at)"
+            )
             # Migrate: create bluesky_engagement table if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS bluesky_engagement (
@@ -1914,6 +1928,93 @@ class Database:
             (etag, last_modified, source_type, identifier),
         )
         self.conn.commit()
+
+    def record_curated_source_fetch_success(
+        self,
+        source_type: str,
+        identifier: str,
+        status: str = "success",
+    ) -> None:
+        """Record a successful curated source fetch and clear failure state."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE curated_sources
+               SET last_fetch_status = ?,
+                   consecutive_failures = 0,
+                   last_success_at = ?,
+                   last_error = NULL
+               WHERE source_type = ? AND identifier = ?""",
+            (status, now, source_type, identifier),
+        )
+        self.conn.commit()
+
+    def record_curated_source_fetch_failure(
+        self,
+        source_type: str,
+        identifier: str,
+        error: str,
+    ) -> None:
+        """Record a failed curated source fetch and increment failure count."""
+        now = datetime.now(timezone.utc).isoformat()
+        error_text = (error or "unknown error")[:1000]
+        self.conn.execute(
+            """UPDATE curated_sources
+               SET last_fetch_status = 'failure',
+                   consecutive_failures = COALESCE(consecutive_failures, 0) + 1,
+                   last_failure_at = ?,
+                   last_error = ?
+               WHERE source_type = ? AND identifier = ?""",
+            (now, error_text, source_type, identifier),
+        )
+        self.conn.commit()
+
+    def record_curated_source_fetch_skipped(
+        self,
+        source_type: str,
+        identifier: str,
+        status: str = "quarantined",
+    ) -> None:
+        """Record a skipped curated source fetch without changing failure state."""
+        self.conn.execute(
+            """UPDATE curated_sources
+               SET last_fetch_status = ?
+               WHERE source_type = ? AND identifier = ?""",
+            (status, source_type, identifier),
+        )
+        self.conn.commit()
+
+    def get_quarantined_curated_sources(
+        self,
+        failure_threshold: int,
+        cooldown_hours: int,
+    ) -> list[dict]:
+        """Return active curated sources currently in failure cooldown."""
+        if failure_threshold <= 0 or cooldown_hours <= 0:
+            return []
+
+        now = datetime.now(timezone.utc)
+        rows = self.conn.execute(
+            """SELECT * FROM curated_sources
+               WHERE status = 'active'
+                 AND COALESCE(consecutive_failures, 0) >= ?
+                 AND last_failure_at IS NOT NULL
+               ORDER BY last_failure_at DESC""",
+            (failure_threshold,),
+        ).fetchall()
+
+        quarantined = []
+        for row in rows:
+            item = dict(row)
+            try:
+                last_failure = datetime.fromisoformat(item["last_failure_at"])
+                if last_failure.tzinfo is None:
+                    last_failure = last_failure.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                quarantined.append(item)
+                continue
+            if now - last_failure < timedelta(hours=cooldown_hours):
+                quarantined.append(item)
+        return quarantined
 
     def insert_candidate_source(
         self,
