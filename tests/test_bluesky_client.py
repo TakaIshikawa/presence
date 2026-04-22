@@ -485,6 +485,49 @@ class TestGetNotifications:
         ]
 
 
+class TestGetUnreadMentions:
+    def test_filters_unread_reply_and_mention_notifications_with_refs(self):
+        client, mock_client = make_bluesky_client()
+        read_reply = make_notification(
+            uri="at://did:plc:reply/app.bsky.feed.post/read",
+        )
+        read_reply.is_read = True
+        like = make_notification(
+            uri="at://did:plc:reply/app.bsky.feed.post/like",
+            reason="like",
+        )
+        mock_client.app.bsky.notification.list_notifications.return_value = (
+            SimpleNamespace(
+                notifications=[
+                    make_notification(text="What about this?"),
+                    read_reply,
+                    like,
+                ],
+                cursor="next-cursor",
+            )
+        )
+
+        notifications, cursor = client.get_unread_mentions(
+            cursor="existing-cursor",
+            limit=25,
+        )
+
+        assert cursor == "next-cursor"
+        assert len(notifications) == 1
+        assert notifications[0]["root_uri"] == "at://did:plc:me/app.bsky.feed.post/root"
+        assert notifications[0]["root_cid"] == "root-cid"
+        assert notifications[0]["parent_uri"] == "at://did:plc:me/app.bsky.feed.post/root"
+        assert notifications[0]["parent_cid"] == "root-cid"
+        assert notifications[0]["reply_root"] == {
+            "uri": "at://did:plc:me/app.bsky.feed.post/root",
+            "cid": "root-cid",
+        }
+        assert notifications[0]["reply_parent"] == {
+            "uri": "at://did:plc:me/app.bsky.feed.post/root",
+            "cid": "root-cid",
+        }
+
+
 class TestGetConversationContext:
     def test_fetches_parent_quote_and_sibling_excerpts(self):
         client, mock_client = make_bluesky_client()

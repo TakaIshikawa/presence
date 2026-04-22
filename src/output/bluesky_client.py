@@ -287,6 +287,57 @@ class BlueskyClient:
         ]
         return notifications, getattr(response, "cursor", None)
 
+    def get_unread_mentions(
+        self,
+        cursor: Optional[str] = None,
+        limit: int = 50,
+    ) -> tuple[list[dict], Optional[str]]:
+        """Fetch unread Bluesky reply/mention notifications.
+
+        Returns normalized notifications with top-level reply reference metadata
+        used by the reply review queue for later publishing.
+        """
+        notifications, next_cursor = self.get_notifications(
+            cursor=cursor,
+            limit=limit,
+        )
+        unread_mentions = []
+        for notification in notifications:
+            if notification.get("reason") not in {"reply", "mention"}:
+                continue
+            if notification.get("is_read") is not False:
+                continue
+            unread_mentions.append(self._with_reply_reference_metadata(notification))
+        return unread_mentions, next_cursor
+
+    @staticmethod
+    def _with_reply_reference_metadata(notification: dict) -> dict:
+        record = notification.get("record") or {}
+        reply = record.get("reply") or {}
+        root = reply.get("root") or {}
+        parent = reply.get("parent") or {}
+
+        enriched = dict(notification)
+        if root.get("uri") or root.get("cid"):
+            enriched["reply_root"] = {
+                k: v for k, v in {
+                    "uri": root.get("uri"),
+                    "cid": root.get("cid"),
+                }.items() if v
+            }
+            enriched["root_uri"] = root.get("uri")
+            enriched["root_cid"] = root.get("cid")
+        if parent.get("uri") or parent.get("cid"):
+            enriched["reply_parent"] = {
+                k: v for k, v in {
+                    "uri": parent.get("uri"),
+                    "cid": parent.get("cid"),
+                }.items() if v
+            }
+            enriched["parent_uri"] = parent.get("uri")
+            enriched["parent_cid"] = parent.get("cid")
+        return enriched
+
     @staticmethod
     def _post_to_excerpt(post) -> dict:
         author = getattr(post, "author", None)
