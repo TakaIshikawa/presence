@@ -20,12 +20,15 @@ from evaluation.prediction_calibrator import (
 logger = logging.getLogger(__name__)
 
 
-def format_report(report: CalibrationReport, patterns: list[ErrorPattern]) -> str:
+def format_report(
+    report: CalibrationReport, patterns: list[ErrorPattern], platform: str = "all"
+) -> str:
     """Format calibration report as human-readable text."""
     lines = []
     lines.append("=" * 70)
     lines.append("ENGAGEMENT PREDICTION CALIBRATION REPORT")
     lines.append("=" * 70)
+    lines.append(f"Platform: {platform}")
     lines.append("")
 
     if report.sample_size == 0:
@@ -111,10 +114,13 @@ def format_report(report: CalibrationReport, patterns: list[ErrorPattern]) -> st
     return "\n".join(lines)
 
 
-def format_json(report: CalibrationReport, patterns: list[ErrorPattern]) -> str:
+def format_json(
+    report: CalibrationReport, patterns: list[ErrorPattern], platform: str = "all"
+) -> str:
     """Format calibration report as JSON."""
     return json.dumps(
         {
+            "platform": platform,
             "sample_size": report.sample_size,
             "overall_mae": report.overall_mae,
             "overall_correlation": report.overall_correlation,
@@ -152,6 +158,12 @@ def main() -> None:
         action="store_true",
         help="Output as JSON instead of human-readable format",
     )
+    parser.add_argument(
+        "--platform",
+        choices=["all", "x", "bluesky"],
+        default="all",
+        help="Limit calibration to one platform outcome (default: all)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -163,14 +175,21 @@ def main() -> None:
     with script_context() as (config, db):
         calibrator = PredictionCalibrator(db)
 
-        logger.info(f"Computing calibration report (last {args.days} days)...")
-        report = calibrator.compute_calibration_report(days=args.days)
-        patterns = calibrator.detect_error_patterns(days=args.days)
+        logger.info(
+            f"Computing calibration report (last {args.days} days, "
+            f"platform={args.platform})..."
+        )
+        report = calibrator.compute_calibration_report(
+            days=args.days, platform=args.platform
+        )
+        patterns = calibrator.detect_error_patterns(
+            days=args.days, platform=args.platform
+        )
 
         if args.json:
-            print(format_json(report, patterns))
+            print(format_json(report, patterns, platform=args.platform))
         else:
-            print(format_report(report, patterns))
+            print(format_report(report, patterns, platform=args.platform))
             print()
 
             # Print calibration context
@@ -183,11 +202,16 @@ def main() -> None:
 
         # Store report in meta table for dashboard access
         if report.sample_size > 0:
-            report_json = format_json(report, patterns)
+            report_json = format_json(report, patterns, platform=args.platform)
+            meta_key = (
+                "calibration_report"
+                if args.platform == "all"
+                else f"calibration_report_{args.platform}"
+            )
             db.conn.execute(
                 """INSERT OR REPLACE INTO meta (key, value)
-                   VALUES ('calibration_report', ?)""",
-                (report_json,)
+                   VALUES (?, ?)""",
+                (meta_key, report_json,)
             )
             db.conn.commit()
             logger.info("Stored calibration report in database")

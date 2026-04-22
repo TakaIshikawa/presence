@@ -52,16 +52,19 @@ class PredictionCalibrator:
         """
         self.db = db
 
-    def compute_calibration_report(self, days: int = 30) -> CalibrationReport:
+    def compute_calibration_report(
+        self, days: int = 30, platform: str = "all"
+    ) -> CalibrationReport:
         """Compute calibration metrics from recent predictions.
 
         Args:
             days: Number of days to look back for predictions
+            platform: Platform outcome to calibrate against ('all', 'x', 'bluesky')
 
         Returns:
             CalibrationReport with accuracy metrics and error analysis
         """
-        predictions = self.db.get_predictions_with_actuals(days)
+        predictions = self.db.get_predictions_with_actuals(days, platform=platform)
 
         if not predictions:
             return CalibrationReport(
@@ -211,16 +214,19 @@ class PredictionCalibrator:
 
         return "\n".join(lines)
 
-    def detect_error_patterns(self, days: int = 30) -> list[ErrorPattern]:
+    def detect_error_patterns(
+        self, days: int = 30, platform: str = "all"
+    ) -> list[ErrorPattern]:
         """Detect systematic error patterns in predictions.
 
         Args:
             days: Number of days to look back for predictions
+            platform: Platform outcome to analyze ('all', 'x', 'bluesky')
 
         Returns:
             List of ErrorPattern objects describing systematic errors
         """
-        predictions = self.db.get_predictions_with_actuals(days)
+        predictions = self.db.get_predictions_with_actuals(days, platform=platform)
 
         if len(predictions) < 5:
             return []

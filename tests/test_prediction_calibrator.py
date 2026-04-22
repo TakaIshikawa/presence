@@ -73,7 +73,7 @@ class MockDB:
         )
         self.conn.commit()
 
-    def get_predictions_with_actuals(self, days=30):
+    def get_predictions_with_actuals(self, days=30, platform="all"):
         """Get predictions with actuals (implements DB interface)."""
         cursor = self.conn.execute(
             """SELECT predicted_score, actual_engagement_score, prediction_error,
@@ -98,6 +98,7 @@ class MockDB:
                 "actionability": row[7],
                 "content_id": row[8],
                 "created_at": row[9],
+                "platform": None,
             }
             for row in rows
         ]
@@ -276,6 +277,103 @@ class TestCalibrationReport:
 
         assert report.sample_size == 1
         assert report.overall_mae == 1.0  # Only recent prediction
+
+
+class TestPlatformCalibrationQuery:
+    """Tests for platform-specific calibration using real storage queries."""
+
+    def test_mixed_platform_data_calibrates_separately(self, db):
+        """Platform filters should use separate X and Bluesky outcomes."""
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Cross-posted content",
+            eval_score=7.0,
+            eval_feedback="Test",
+        )
+        db.insert_prediction(
+            content_id=content_id,
+            predicted_score=6.0,
+            hook_strength=6.0,
+            specificity=6.0,
+            emotional_resonance=6.0,
+            novelty=6.0,
+            actionability=6.0,
+        )
+        db.insert_engagement(
+            content_id=content_id,
+            tweet_id="tweet-1",
+            like_count=0,
+            retweet_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=8.0,
+        )
+        db.insert_bluesky_engagement(
+            content_id=content_id,
+            bluesky_uri="at://did:plc:test/app.bsky.feed.post/1",
+            like_count=0,
+            repost_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=4.0,
+        )
+        calibrator = PredictionCalibrator(db)
+
+        x_report = calibrator.compute_calibration_report(platform="x")
+        bluesky_report = calibrator.compute_calibration_report(platform="bluesky")
+        all_report = calibrator.compute_calibration_report()
+
+        assert x_report.sample_size == 1
+        assert x_report.overall_mae == pytest.approx(2.0)
+        assert x_report.overestimation_bias == pytest.approx(-2.0)
+        assert bluesky_report.sample_size == 1
+        assert bluesky_report.overall_mae == pytest.approx(2.0)
+        assert bluesky_report.overestimation_bias == pytest.approx(2.0)
+        assert all_report.sample_size == 2
+
+    def test_platform_filter_excludes_missing_platform_data(self, db):
+        """Legacy actuals without platform outcomes should not be assigned to one platform."""
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Legacy content",
+            eval_score=7.0,
+            eval_feedback="Test",
+        )
+        db.insert_prediction(content_id=content_id, predicted_score=6.0)
+        db.backfill_prediction_actuals(content_id, 9.0)
+        calibrator = PredictionCalibrator(db)
+
+        assert calibrator.compute_calibration_report(platform="x").sample_size == 0
+        assert (
+            calibrator.compute_calibration_report(platform="bluesky").sample_size == 0
+        )
+        all_report = calibrator.compute_calibration_report()
+        assert all_report.sample_size == 1
+        assert all_report.overall_mae == pytest.approx(3.0)
+
+    def test_all_platform_calibration_remains_backward_compatible(self, db):
+        """All-platform reports still include older rows with only stored actuals."""
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Old-style prediction",
+            eval_score=5.0,
+            eval_feedback="Test",
+        )
+        db.insert_prediction(content_id=content_id, predicted_score=5.0)
+        db.backfill_prediction_actuals(content_id, 7.5)
+        calibrator = PredictionCalibrator(db)
+
+        report = calibrator.compute_calibration_report(platform="all")
+
+        assert report.sample_size == 1
+        assert report.overall_mae == pytest.approx(2.5)
+        assert report.overestimation_bias == pytest.approx(-2.5)
 
 
 class TestCalibrationContext:

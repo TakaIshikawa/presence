@@ -182,6 +182,15 @@ def populated_db(test_db):
                 timestamp,
             ),
         )
+        test_db.insert_engagement(
+            content_id=content_id,
+            tweet_id=f"tweet-{i}",
+            like_count=0,
+            retweet_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=pred_data["actual"],
+        )
 
     test_db.conn.commit()
     return test_db
@@ -410,6 +419,7 @@ class TestFormatJson:
         output = format_json(report, patterns)
         data = json.loads(output)
 
+        assert data["platform"] == "all"
         assert data["sample_size"] == 0
         assert data["overall_mae"] == 0.0
         assert data["overall_correlation"] is None
@@ -454,9 +464,10 @@ class TestFormatJson:
             ),
         ]
 
-        output = format_json(report, patterns)
+        output = format_json(report, patterns, platform="x")
         data = json.loads(output)
 
+        assert data["platform"] == "x"
         assert data["sample_size"] == 15
         assert data["overall_mae"] == 2.5
         assert data["overall_correlation"] == 0.75
@@ -557,12 +568,33 @@ class TestMainFunction:
         # Should be valid JSON
         data = json.loads(captured.out)
         assert "sample_size" in data
+        assert data["platform"] == "all"
         assert "overall_mae" in data
         assert "criterion_correlations" in data
         assert "error_patterns" in data
 
         # Should not contain human-readable formatting
         assert "ENGAGEMENT PREDICTION CALIBRATION REPORT" not in captured.out
+
+    def test_main_platform_argument_filters_report(self, populated_db, capsys, tmp_path):
+        """Test main function passes --platform through to calibration."""
+        mock_config = MagicMock()
+        mock_config.paths.database = str(tmp_path / "test.db")
+
+        with patch("calibration_report.script_context") as mock_context, \
+             patch("calibration_report.update_monitoring"), \
+             patch("sys.argv", ["calibration_report.py", "--platform", "x", "--json"]):
+
+            mock_context.return_value.__enter__ = lambda self: (mock_config, populated_db)
+            mock_context.return_value.__exit__ = lambda self, *args: None
+
+            main()
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+
+        assert data["platform"] == "x"
+        assert data["sample_size"] == 10
 
     def test_main_custom_days_argument(self, populated_db, capsys, tmp_path):
         """Test main function respects --days argument."""

@@ -2536,22 +2536,122 @@ class Database:
             "criteria_breakdown": criteria_breakdown,
         }
 
-    def get_predictions_with_actuals(self, days: int = 30) -> list[dict]:
+    def get_predictions_with_actuals(
+        self, days: int = 30, platform: str = "all"
+    ) -> list[dict]:
         """Get predictions with actual engagement scores for calibration.
 
         Args:
             days: Number of days to look back
+            platform: 'all', 'x', or 'bluesky'. Platform-specific requests only
+                      return predictions with known platform outcomes.
 
         Returns:
             List of prediction dicts with all fields
         """
+        normalized_platform = platform.lower() if platform else "all"
+        if normalized_platform not in {"all", "x", "bluesky"}:
+            raise ValueError("platform must be one of: all, x, bluesky")
+
+        selects = []
+        if normalized_platform in {"all", "x"}:
+            selects.append(
+                """SELECT predicted_score, actual_engagement_score, prediction_error,
+                          hook_strength, specificity, emotional_resonance,
+                          novelty, actionability, content_id, created_at, platform
+                   FROM x_predictions"""
+            )
+        if normalized_platform in {"all", "bluesky"}:
+            selects.append(
+                """SELECT predicted_score, actual_engagement_score, prediction_error,
+                          hook_strength, specificity, emotional_resonance,
+                          novelty, actionability, content_id, created_at, platform
+                   FROM bluesky_predictions"""
+            )
+        if normalized_platform == "all":
+            selects.append(
+                """SELECT predicted_score, actual_engagement_score, prediction_error,
+                          hook_strength, specificity, emotional_resonance,
+                          novelty, actionability, content_id, created_at, platform
+                   FROM legacy_predictions"""
+            )
+
+        union_sql = "\nUNION ALL\n".join(selects)
         cursor = self.conn.execute(
-            """SELECT predicted_score, actual_engagement_score, prediction_error,
-                      hook_strength, specificity, emotional_resonance,
-                      novelty, actionability, content_id, created_at
-               FROM engagement_predictions
-               WHERE actual_engagement_score IS NOT NULL
-                 AND created_at >= datetime('now', ?)
+            f"""WITH recent_predictions AS (
+                   SELECT predicted_score, actual_engagement_score, prediction_error,
+                          hook_strength, specificity, emotional_resonance,
+                          novelty, actionability, content_id, created_at
+                   FROM engagement_predictions
+                   WHERE created_at >= datetime('now', ?)
+               ),
+               latest_x AS (
+                   SELECT content_id, engagement_score
+                   FROM (
+                       SELECT content_id, engagement_score,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY content_id
+                                  ORDER BY fetched_at DESC, id DESC
+                              ) AS rn
+                       FROM post_engagement
+                       WHERE engagement_score IS NOT NULL
+                   )
+                   WHERE rn = 1
+               ),
+               latest_bluesky AS (
+                   SELECT content_id, engagement_score
+                   FROM (
+                       SELECT content_id, engagement_score,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY content_id
+                                  ORDER BY fetched_at DESC, id DESC
+                              ) AS rn
+                       FROM bluesky_engagement
+                       WHERE engagement_score IS NOT NULL
+                   )
+                   WHERE rn = 1
+               ),
+               x_predictions AS (
+                   SELECT rp.predicted_score,
+                          lx.engagement_score AS actual_engagement_score,
+                          lx.engagement_score - rp.predicted_score AS prediction_error,
+                          rp.hook_strength, rp.specificity, rp.emotional_resonance,
+                          rp.novelty, rp.actionability, rp.content_id, rp.created_at,
+                          'x' AS platform
+                   FROM recent_predictions rp
+                   INNER JOIN latest_x lx ON lx.content_id = rp.content_id
+               ),
+               bluesky_predictions AS (
+                   SELECT rp.predicted_score,
+                          lb.engagement_score AS actual_engagement_score,
+                          lb.engagement_score - rp.predicted_score AS prediction_error,
+                          rp.hook_strength, rp.specificity, rp.emotional_resonance,
+                          rp.novelty, rp.actionability, rp.content_id, rp.created_at,
+                          'bluesky' AS platform
+                   FROM recent_predictions rp
+                   INNER JOIN latest_bluesky lb ON lb.content_id = rp.content_id
+               ),
+               legacy_predictions AS (
+                   SELECT rp.predicted_score, rp.actual_engagement_score,
+                          rp.prediction_error,
+                          rp.hook_strength, rp.specificity, rp.emotional_resonance,
+                          rp.novelty, rp.actionability, rp.content_id, rp.created_at,
+                          NULL AS platform
+                   FROM recent_predictions rp
+                   WHERE rp.actual_engagement_score IS NOT NULL
+                     AND NOT EXISTS (
+                         SELECT 1 FROM latest_x lx
+                         WHERE lx.content_id = rp.content_id
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM latest_bluesky lb
+                         WHERE lb.content_id = rp.content_id
+                     )
+               )
+               SELECT *
+               FROM (
+                   {union_sql}
+               )
                ORDER BY created_at DESC""",
             (f'-{days} days',)
         )
@@ -2569,6 +2669,7 @@ class Database:
                 "actionability": row[7],
                 "content_id": row[8],
                 "created_at": row[9],
+                "platform": row[10],
             }
             for row in rows
         ]
