@@ -1,5 +1,6 @@
 """Tests for the manual content idea inbox."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -32,12 +33,24 @@ def test_add_and_list_content_ideas_orders_high_priority_first(db):
 
 
 def test_promote_and_dismiss_update_status(db):
-    promote_id = db.add_content_idea("Promote this", priority="high")
+    promote_id = db.add_content_idea("Promote this", topic="testing", priority="high")
     dismiss_id = db.add_content_idea("Dismiss this", priority="high")
 
-    db.promote_content_idea(promote_id)
+    planned_id = db.promote_content_idea(promote_id, target_date="2026-05-01")
     db.dismiss_content_idea(dismiss_id)
 
+    planned = db.conn.execute(
+        "SELECT topic, target_date, source_material FROM planned_topics WHERE id = ?",
+        (planned_id,),
+    ).fetchone()
+
+    assert planned["topic"] == "testing"
+    assert planned["target_date"] == "2026-05-01"
+    assert json.loads(planned["source_material"]) == {
+        "content_idea_id": promote_id,
+        "note": "Promote this",
+        "source": None,
+    }
     assert db.get_content_idea(promote_id)["status"] == "promoted"
     assert db.get_content_idea(dismiss_id)["status"] == "dismissed"
     assert db.get_content_ideas(status="open") == []
@@ -50,6 +63,39 @@ def test_content_idea_validation(db):
         db.add_content_idea("Valid note", priority="urgent")
     with pytest.raises(ValueError, match="does not exist"):
         db.dismiss_content_idea(999)
+    with pytest.raises(ValueError, match="topic is required"):
+        idea_id = db.add_content_idea("Valid note")
+        db.promote_content_idea(idea_id, target_date="2026-05-01")
+
+
+def test_promote_content_idea_rejects_closed_ideas_unless_forced(db):
+    dismissed_id = db.add_content_idea("Dismissed idea", topic="testing")
+    promoted_id = db.add_content_idea("Promoted idea", topic="testing")
+
+    db.dismiss_content_idea(dismissed_id)
+    db.promote_content_idea(promoted_id, target_date="2026-05-01")
+
+    with pytest.raises(ValueError, match="dismissed"):
+        db.promote_content_idea(dismissed_id, target_date="2026-05-02")
+    with pytest.raises(ValueError, match="promoted"):
+        db.promote_content_idea(promoted_id, target_date="2026-05-03")
+
+    forced_id = db.promote_content_idea(
+        dismissed_id,
+        target_date="2026-05-04",
+        topic="architecture",
+        angle="reopen the idea",
+        force=True,
+    )
+    forced = db.conn.execute(
+        "SELECT topic, angle, target_date FROM planned_topics WHERE id = ?",
+        (forced_id,),
+    ).fetchone()
+
+    assert forced["topic"] == "architecture"
+    assert forced["angle"] == "reopen the idea"
+    assert forced["target_date"] == "2026-05-04"
+    assert db.get_content_idea(dismissed_id)["status"] == "promoted"
 
 
 def test_content_ideas_cli_helpers_print_expected_output(db, capsys):
@@ -70,10 +116,24 @@ def test_content_ideas_cli_helpers_print_expected_output(db, capsys):
     assert "testing" in output
     assert "flaky tests" in output
 
-    cmd_promote(db, idea_id)
+    planned_id = cmd_promote(
+        db,
+        idea_id,
+        target_date="2026-05-01",
+        campaign_id=None,
+        topic=None,
+        angle="what flaky tests reveal",
+    )
     output = capsys.readouterr().out
-    assert f"Promoted content idea {idea_id}" in output
+    assert f"planned topic {planned_id}" in output
     assert db.get_content_idea(idea_id)["status"] == "promoted"
+    planned = db.conn.execute(
+        "SELECT topic, angle, source_material FROM planned_topics WHERE id = ?",
+        (planned_id,),
+    ).fetchone()
+    assert planned["topic"] == "testing"
+    assert planned["angle"] == "what flaky tests reveal"
+    assert json.loads(planned["source_material"])["source"] == "scratchpad"
 
     cmd_dismiss(db, idea_id)
     output = capsys.readouterr().out

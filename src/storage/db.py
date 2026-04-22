@@ -4188,9 +4188,81 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    def promote_content_idea(self, idea_id: int) -> None:
-        """Mark a content idea as promoted."""
-        self._set_content_idea_status(idea_id, "promoted")
+    def promote_content_idea(
+        self,
+        idea_id: int,
+        target_date: str,
+        campaign_id: int = None,
+        topic: str = None,
+        angle: str = None,
+        force: bool = False,
+    ) -> int:
+        """Create a planned topic from a content idea and mark it promoted."""
+        if not str(target_date or "").strip():
+            raise ValueError("target_date is required")
+
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            with self.conn:
+                idea_row = self.conn.execute(
+                    "SELECT * FROM content_ideas WHERE id = ?",
+                    (idea_id,),
+                ).fetchone()
+                if idea_row is None:
+                    raise ValueError(f"Content idea {idea_id} does not exist")
+
+                idea = dict(idea_row)
+                status = self._normalize_content_idea_status(idea.get("status"))
+                if status != "open" and not force:
+                    raise ValueError(
+                        f"Content idea {idea_id} is {status}; use --force to promote it"
+                    )
+
+                planned_topic = str(topic or idea.get("topic") or "").strip()
+                if not planned_topic:
+                    raise ValueError(
+                        "Content idea topic is required; pass --topic to promote it"
+                    )
+
+                if campaign_id is not None:
+                    campaign = self.conn.execute(
+                        "SELECT id FROM content_campaigns WHERE id = ?",
+                        (campaign_id,),
+                    ).fetchone()
+                    if campaign is None:
+                        raise ValueError(f"Campaign {campaign_id} does not exist")
+
+                source_material = json.dumps(
+                    {
+                        "content_idea_id": idea_id,
+                        "note": idea.get("note"),
+                        "source": idea.get("source"),
+                    },
+                    sort_keys=True,
+                )
+                cursor = self.conn.execute(
+                    """INSERT INTO planned_topics
+                       (topic, angle, target_date, source_material, campaign_id, status)
+                       VALUES (?, ?, ?, ?, ?, 'planned')""",
+                    (
+                        planned_topic,
+                        str(angle).strip() if angle is not None else None,
+                        str(target_date).strip(),
+                        source_material,
+                        campaign_id,
+                    ),
+                )
+                planned_topic_id = cursor.lastrowid
+                self.conn.execute(
+                    """UPDATE content_ideas
+                       SET status = 'promoted', updated_at = ?
+                       WHERE id = ?""",
+                    (now, idea_id),
+                )
+        except sqlite3.IntegrityError as e:
+            raise IntegrityError(f"Failed to promote content idea {idea_id}: {e}") from e
+
+        return planned_topic_id
 
     def dismiss_content_idea(self, idea_id: int) -> None:
         """Mark a content idea as dismissed."""
