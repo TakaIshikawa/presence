@@ -55,6 +55,7 @@ def ledger_rows_for_json(rows: list[dict]) -> list[dict]:
                     "scheduled_at": row["scheduled_at"],
                     "published_at": row["queue_published_at"],
                     "error": row["queue_error"],
+                    "hold_reason": row["queue_hold_reason"],
                 },
                 "content_publication": {
                     "id": row["publication_id"],
@@ -72,6 +73,7 @@ def ledger_rows_for_json(rows: list[dict]) -> list[dict]:
                 "bluesky_uri": _display_bluesky_uri(row),
                 "published_at": row["published_at"],
                 "error": row["error"],
+                "hold_reason": row["hold_reason"],
             }
         )
     return normalized
@@ -98,6 +100,7 @@ def format_table_ledger(rows: list[dict]) -> str:
         ("bsky", "BLUESKY_URI", 24),
         ("scheduled", "SCHEDULED", 19),
         ("published", "PUBLISHED", 19),
+        ("hold_reason", "HOLD_REASON", 24),
         ("error", "ERROR", 24),
         ("preview", "CONTENT", 32),
     ]
@@ -116,6 +119,7 @@ def format_table_ledger(rows: list[dict]) -> str:
                 "bsky": _display_bluesky_uri(row),
                 "scheduled": row["scheduled_at"],
                 "published": row["published_at"],
+                "hold_reason": row["hold_reason"],
                 "error": row["error"],
                 "preview": row["content"],
             }

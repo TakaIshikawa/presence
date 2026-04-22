@@ -91,6 +91,13 @@ class TestSchemaInit:
         }
         assert "error_category" in cols
 
+    def test_publish_queue_hold_reason_column_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(publish_queue)")
+        }
+        assert "hold_reason" in cols
+
     def test_content_variants_columns_exist(self, db):
         cols = {
             row[1]

@@ -61,6 +61,19 @@ def test_get_publish_queue_items_filters_and_limits(db):
     assert rows[0]["platform"] == "x"
 
 
+def test_get_publish_queue_items_includes_held_reason(db):
+    queue_id = _queue_item(db, status="queued", error="old", error_category="unknown")
+
+    held = db.hold_publish_queue_item(queue_id, reason="waiting for approval")
+    rows = db.get_publish_queue_items(status="held")
+
+    assert held["status"] == "held"
+    assert held["hold_reason"] == "waiting for approval"
+    assert held["error"] is None
+    assert rows[0]["id"] == queue_id
+    assert rows[0]["hold_reason"] == "waiting for approval"
+
+
 def test_get_publish_queue_items_rejects_invalid_inputs(db):
     with pytest.raises(ValueError, match="invalid publish queue status"):
         db.get_publish_queue_items(status="paused")
@@ -135,6 +148,32 @@ def test_restore_publish_queue_item_requires_cancelled_or_failed(db):
         db.restore_publish_queue_item(queue_id)
 
 
+def test_release_publish_queue_item_preserves_scheduled_time(db):
+    queue_id = _queue_item(db, status="queued")
+    original = db.get_publish_queue_item(queue_id)["scheduled_at"]
+    db.hold_publish_queue_item(queue_id, reason="manual review")
+
+    row = db.release_publish_queue_item(queue_id)
+
+    assert row["status"] == "queued"
+    assert row["scheduled_at"] == original
+    assert row["hold_reason"] is None
+
+
+def test_hold_publish_queue_item_rejects_published(db):
+    queue_id = _queue_item(db, status="published")
+
+    with pytest.raises(ValueError, match="published queue items cannot be held"):
+        db.hold_publish_queue_item(queue_id, reason="too late")
+
+
+def test_release_publish_queue_item_requires_held(db):
+    queue_id = _queue_item(db, status="queued")
+
+    with pytest.raises(ValueError, match="only held queue items can be released"):
+        db.release_publish_queue_item(queue_id)
+
+
 def test_parse_args_validates_iso_timestamp():
     args = parse_args(["reschedule", "1", "2026-04-24T09:30:00+00:00"])
     assert args.scheduled_at == "2026-04-24T09:30:00+00:00"
@@ -173,6 +212,45 @@ def test_main_cancel_reports_changed_row(db, capsys):
     assert "Cancelled publish queue item" in output
     assert row["status"] == "cancelled"
     assert row["error"] is None
+
+
+def test_main_hold_accepts_multiple_ids_and_reason(db, capsys):
+    first_id = _queue_item(db, status="queued")
+    second_id = _queue_item(db, status="failed", error="timeout")
+
+    with patch("manage_publish_queue.script_context", return_value=_script_context(db)):
+        result = main([
+            "hold",
+            str(first_id),
+            str(second_id),
+            "--reason",
+            "campaign paused",
+        ])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert output.count("Held publish queue item") == 2
+    for queue_id in (first_id, second_id):
+        row = db.get_publish_queue_item(queue_id)
+        assert row["status"] == "held"
+        assert row["hold_reason"] == "campaign paused"
+        assert row["error"] is None
+
+
+def test_main_release_accepts_multiple_ids(db, capsys):
+    first_id = _queue_item(db, status="queued")
+    second_id = _queue_item(db, status="queued")
+    db.hold_publish_queue_item(first_id, reason="pause")
+    db.hold_publish_queue_item(second_id, reason="pause")
+
+    with patch("manage_publish_queue.script_context", return_value=_script_context(db)):
+        result = main(["release", str(first_id), str(second_id)])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert output.count("Released publish queue item") == 2
+    assert db.get_publish_queue_item(first_id)["status"] == "queued"
+    assert db.get_publish_queue_item(second_id)["status"] == "queued"
 
 
 def test_main_returns_error_for_invalid_restore(db, capsys):

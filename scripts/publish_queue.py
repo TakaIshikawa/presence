@@ -57,7 +57,7 @@ def _defer_queue_item(db, queue_id: int, scheduled_at: str) -> None:
     db.conn.execute(
         """UPDATE publish_queue
            SET scheduled_at = ?, status = 'queued',
-               error = NULL, error_category = NULL
+               error = NULL, error_category = NULL, hold_reason = NULL
            WHERE id = ?""",
         (scheduled_at, queue_id),
     )

@@ -46,6 +46,7 @@ def format_queue_rows(rows: list[dict]) -> str:
         ("status", "STATUS", 10),
         ("platform", "PLATFORM", 8),
         ("scheduled_at", "SCHEDULED", 25),
+        ("hold_reason", "HOLD_REASON", 24),
         ("error", "ERROR", 24),
         ("content", "CONTENT", 44),
     ]
@@ -75,7 +76,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     list_parser = subparsers.add_parser("list", help="List publish queue items")
     list_parser.add_argument(
         "--status",
-        choices=["queued", "published", "failed", "cancelled"],
+        choices=["queued", "published", "failed", "cancelled", "held"],
         help="Filter by queue status",
     )
     list_parser.add_argument(
@@ -106,6 +107,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Cancel an unpublished queue item",
     )
     cancel_parser.add_argument("queue_id", type=int, help="Publish queue item ID")
+
+    hold_parser = subparsers.add_parser(
+        "hold",
+        help="Place one or more unpublished queue items on manual hold",
+    )
+    hold_parser.add_argument("queue_ids", nargs="+", type=int, help="Publish queue item IDs")
+    hold_parser.add_argument(
+        "--reason",
+        help="Optional reason for the manual hold",
+    )
+
+    release_parser = subparsers.add_parser(
+        "release",
+        help="Release one or more held queue items back to queued",
+    )
+    release_parser.add_argument(
+        "queue_ids",
+        nargs="+",
+        type=int,
+        help="Publish queue item IDs",
+    )
 
     restore_parser = subparsers.add_parser(
         "restore",
@@ -147,6 +169,14 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "cancel":
                 row = db.cancel_publish_queue_item(args.queue_id)
                 _print_changed("Cancelled", row)
+            elif args.command == "hold":
+                for queue_id in args.queue_ids:
+                    row = db.hold_publish_queue_item(queue_id, reason=args.reason)
+                    _print_changed("Held", row)
+            elif args.command == "release":
+                for queue_id in args.queue_ids:
+                    row = db.release_publish_queue_item(queue_id)
+                    _print_changed("Released", row)
             elif args.command == "restore":
                 row = db.restore_publish_queue_item(
                     args.queue_id,

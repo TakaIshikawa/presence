@@ -403,6 +403,8 @@ class Database:
             }
             if pq_cols and "error_category" not in pq_cols:
                 self.conn.execute("ALTER TABLE publish_queue ADD COLUMN error_category TEXT")
+            if pq_cols and "hold_reason" not in pq_cols:
+                self.conn.execute("ALTER TABLE publish_queue ADD COLUMN hold_reason TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publications(content_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_retry ON content_publications(status, next_retry_at)")
@@ -1360,7 +1362,7 @@ class Database:
         if status:
             filters.append(
                 """COALESCE(
-                    cp.status,
+                    CASE WHEN lq.queue_status = 'held' THEN 'held' ELSE cp.status END,
                     lq.queue_status,
                     CASE
                         WHEN gc.published = 1 THEN 'published'
@@ -1381,6 +1383,7 @@ class Database:
                        pq.platform AS queue_platform,
                        pq.status AS queue_status,
                        pq.error AS queue_error,
+                       pq.hold_reason AS queue_hold_reason,
                        pq.scheduled_at,
                        pq.published_at AS queue_published_at,
                        pq.created_at AS queue_created_at
@@ -1394,6 +1397,7 @@ class Database:
                        pq.platform AS queue_platform,
                        pq.status AS queue_status,
                        pq.error AS queue_error,
+                       pq.hold_reason AS queue_hold_reason,
                        pq.scheduled_at,
                        pq.published_at AS queue_published_at,
                        pq.created_at AS queue_created_at
@@ -1452,6 +1456,7 @@ class Database:
                    lq.queue_platform,
                    lq.queue_status,
                    lq.queue_error,
+                   lq.queue_hold_reason,
                    lq.scheduled_at,
                    lq.queue_published_at,
                    cp.id AS publication_id,
@@ -1465,7 +1470,7 @@ class Database:
                    cp.published_at AS platform_published_at,
                    cp.updated_at AS publication_updated_at,
                    COALESCE(
-                       cp.status,
+                       CASE WHEN lq.queue_status = 'held' THEN 'held' ELSE cp.status END,
                        lq.queue_status,
                        CASE
                            WHEN gc.published = 1 THEN 'published'
@@ -1474,6 +1479,7 @@ class Database:
                        END
                    ) AS status,
                    COALESCE(cp.error, lq.queue_error) AS error,
+                   lq.queue_hold_reason AS hold_reason,
                    COALESCE(cp.published_at, lq.queue_published_at, gc.published_at) AS published_at
                FROM targets
                INNER JOIN generated_content gc ON gc.id = targets.content_id
@@ -4452,7 +4458,7 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     # Publish queue for scheduled posting
-    PUBLISH_QUEUE_STATUSES = {"queued", "published", "failed", "cancelled"}
+    PUBLISH_QUEUE_STATUSES = {"queued", "published", "failed", "cancelled", "held"}
     PUBLISH_QUEUE_PLATFORMS = {"x", "bluesky", "all"}
 
     def queue_for_publishing(
@@ -4514,6 +4520,7 @@ class Database:
         cursor = self.conn.execute(
             f"""SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
                       pq.status, pq.published_at, pq.error, pq.error_category,
+                      pq.hold_reason,
                       pq.created_at, gc.content_type, gc.content
                FROM publish_queue pq
                INNER JOIN generated_content gc ON gc.id = pq.content_id
@@ -4588,6 +4595,7 @@ class Database:
         cursor = self.conn.execute(
             """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
                       pq.status, pq.published_at, pq.error, pq.error_category,
+                      pq.hold_reason,
                       pq.created_at, gc.content_type, gc.content
                FROM publish_queue pq
                INNER JOIN generated_content gc ON gc.id = pq.content_id
@@ -4624,7 +4632,7 @@ class Database:
         self.conn.execute(
             """UPDATE publish_queue
                SET status = 'published', published_at = ?, error = NULL,
-                   error_category = NULL
+                   error_category = NULL, hold_reason = NULL
                WHERE id = ?""",
             (now, queue_id)
         )
@@ -4640,7 +4648,44 @@ class Database:
 
         self.conn.execute(
             """UPDATE publish_queue
-               SET status = 'cancelled', error = NULL, error_category = NULL
+               SET status = 'cancelled', error = NULL, error_category = NULL,
+                   hold_reason = NULL
+               WHERE id = ?""",
+            (queue_id,),
+        )
+        self.conn.commit()
+        return self.get_publish_queue_item(queue_id)
+
+    def hold_publish_queue_item(self, queue_id: int, reason: str | None = None) -> dict:
+        """Place an unpublished publish queue item on manual hold."""
+        row = self.get_publish_queue_item(queue_id)
+        if row is None:
+            raise ValueError(f"publish queue item not found: {queue_id}")
+        if row["status"] == "published":
+            raise ValueError("published queue items cannot be held")
+
+        self.conn.execute(
+            """UPDATE publish_queue
+               SET status = 'held', hold_reason = ?,
+                   error = NULL, error_category = NULL
+               WHERE id = ?""",
+            (reason, queue_id),
+        )
+        self.conn.commit()
+        return self.get_publish_queue_item(queue_id)
+
+    def release_publish_queue_item(self, queue_id: int) -> dict:
+        """Release a manually held publish queue item back to queued."""
+        row = self.get_publish_queue_item(queue_id)
+        if row is None:
+            raise ValueError(f"publish queue item not found: {queue_id}")
+        if row["status"] != "held":
+            raise ValueError("only held queue items can be released")
+
+        self.conn.execute(
+            """UPDATE publish_queue
+               SET status = 'queued', hold_reason = NULL,
+                   error = NULL, error_category = NULL
                WHERE id = ?""",
             (queue_id,),
         )
@@ -4662,7 +4707,8 @@ class Database:
         if scheduled_at is None:
             self.conn.execute(
                 """UPDATE publish_queue
-                   SET status = 'queued', error = NULL, error_category = NULL
+                   SET status = 'queued', error = NULL, error_category = NULL,
+                       hold_reason = NULL
                    WHERE id = ?""",
                 (queue_id,),
             )
@@ -4670,7 +4716,7 @@ class Database:
             self.conn.execute(
                 """UPDATE publish_queue
                    SET status = 'queued', scheduled_at = ?,
-                       error = NULL, error_category = NULL
+                       error = NULL, error_category = NULL, hold_reason = NULL
                    WHERE id = ?""",
                 (scheduled_at, queue_id),
             )
@@ -4696,7 +4742,8 @@ class Database:
         )
         self.conn.execute(
             """UPDATE publish_queue
-               SET status = 'failed', error = ?, error_category = ?
+               SET status = 'failed', error = ?, error_category = ?,
+                   hold_reason = NULL
                WHERE id = ?""",
             (error, category, queue_id)
         )

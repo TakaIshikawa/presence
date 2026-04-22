@@ -510,10 +510,11 @@ CREATE TABLE IF NOT EXISTS publish_queue (
     content_id INTEGER NOT NULL REFERENCES generated_content(id),
     scheduled_at TEXT NOT NULL,     -- ISO timestamp for when to publish
     platform TEXT DEFAULT 'all',    -- 'x', 'bluesky', 'all'
-    status TEXT DEFAULT 'queued',   -- 'queued', 'published', 'failed', 'cancelled'
+    status TEXT DEFAULT 'queued',   -- 'queued', 'published', 'failed', 'cancelled', 'held'
     published_at TEXT,
     error TEXT,
     error_category TEXT,            -- auth, rate_limit, duplicate, media, network, unknown
+    hold_reason TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_publish_queue_status ON publish_queue(status);

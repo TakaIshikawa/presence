@@ -41,6 +41,7 @@ def seed_publication_ledger(db) -> dict[str, int]:
     queued_x = _insert_content(db, "Queued only for X")
     failed_bsky = _insert_content(db, "Bluesky publish failed")
     partial = _insert_content(db, "X published while Bluesky is still queued")
+    held_x = _insert_content(db, "Held for campaign review")
 
     db.queue_for_publishing(
         published_all,
@@ -121,6 +122,13 @@ def seed_publication_ledger(db) -> dict[str, int]:
             partial,
         ),
     )
+
+    held_queue_id = db.queue_for_publishing(
+        held_x,
+        (BASE_TIME - timedelta(minutes=10)).isoformat(),
+        platform="x",
+    )
+    db.hold_publish_queue_item(held_queue_id, reason="campaign paused")
     db.conn.commit()
 
     return {
@@ -128,6 +136,7 @@ def seed_publication_ledger(db) -> dict[str, int]:
         "queued_x": queued_x,
         "failed_bsky": failed_bsky,
         "partial": partial,
+        "held_x": held_x,
     }
 
 
@@ -147,6 +156,8 @@ def test_publication_ledger_table_output(db):
     assert "Queued only for X" in output
     assert "bluesky" in output
     assert "queued" in output
+    assert "held" in output
+    assert "campaign paused" in output
     assert "failed" in output
     assert "published" in output
 
@@ -168,6 +179,23 @@ def test_publication_ledger_json_output(db):
     published = by_content[ids["published_all"]]
     assert published["bluesky_uri"] == "at://did:plc:ok/app.bsky.feed.post/ok"
     assert published["content_publication"]["status"] == "published"
+
+
+def test_publication_ledger_json_output_includes_hold_reason(db):
+    ids = seed_publication_ledger(db)
+
+    rows = db.get_publication_ledger(
+        days=7,
+        status="held",
+        platform="x",
+        now=BASE_TIME,
+    )
+    data = json.loads(format_json_ledger(rows))
+
+    assert [row["content_id"] for row in data] == [ids["held_x"]]
+    assert data[0]["status"] == "held"
+    assert data[0]["hold_reason"] == "campaign paused"
+    assert data[0]["publish_queue"]["hold_reason"] == "campaign paused"
 
 
 def test_publication_ledger_filters_status_and_platform(db):

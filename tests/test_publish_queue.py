@@ -302,6 +302,26 @@ def test_published_items_not_returned(populated_db, base_time):
     assert content_ids[4] not in returned_ids
 
 
+def test_held_items_not_returned(test_db, base_time):
+    """Held queue items are ignored even when their scheduled time is due."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Held post", "x_post", 7.0, 0)
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(
+        content_id,
+        (base_time - timedelta(hours=1)).isoformat(),
+        platform="x",
+    )
+    test_db.hold_publish_queue_item(queue_id, reason="manual review")
+
+    due_items = test_db.get_due_queue_items(base_time.isoformat())
+
+    assert due_items == []
+
+
 def test_due_items_skip_platforms_still_inside_backoff(test_db, base_time):
     """A failed single-platform queue item is hidden until next_retry_at."""
     content_id = test_db.conn.execute(
