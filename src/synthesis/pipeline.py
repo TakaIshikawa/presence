@@ -18,6 +18,7 @@ from synthesis.few_shot import FewShotSelector
 from synthesis.presence_context import PresenceContextBuilder
 from synthesis.stale_patterns import STALE_PATTERNS
 from synthesis.claim_checker import ClaimChecker, ClaimCheckResult
+from synthesis.thread_validator import validate_thread
 
 logger = logging.getLogger(__name__)
 
@@ -610,6 +611,30 @@ class SynthesisPipeline:
             linked_knowledge=linked_knowledge,
         )
 
+    @staticmethod
+    def _append_reject_reason(
+        comparison: ComparisonResult, reason: str
+    ) -> ComparisonResult:
+        """Return a copy of comparison with an additional rejection reason."""
+        reject_reason = (
+            f"{comparison.reject_reason}; {reason}"
+            if comparison.reject_reason
+            else reason
+        )
+        return ComparisonResult(
+            ranking=comparison.ranking,
+            best_score=comparison.best_score,
+            groundedness=comparison.groundedness,
+            rawness=comparison.rawness,
+            narrative_specificity=comparison.narrative_specificity,
+            voice=comparison.voice,
+            engagement_potential=comparison.engagement_potential,
+            best_feedback=comparison.best_feedback,
+            improvement=comparison.improvement,
+            reject_reason=reject_reason,
+            raw_response=comparison.raw_response,
+        )
+
     def _select_format_directives(
         self,
         num: int,
@@ -1042,6 +1067,41 @@ class SynthesisPipeline:
             linked_knowledge=linked_knowledge,
         )
         filter_stats["claim_check_final_unsupported"] = final_claim_check.annotations
+
+        if content_type == "x_thread":
+            thread_validation = validate_thread(final_content)
+            filter_stats["thread_validation_valid"] = thread_validation.valid
+            filter_stats["thread_validation_failures"] = (
+                thread_validation.failure_reasons
+            )
+            if not thread_validation.valid:
+                validation_reason = (
+                    "Thread validation failed: "
+                    + "; ".join(thread_validation.failure_reasons)
+                )
+                logger.warning("  %s", validation_reason)
+                comparison = self._append_reject_reason(
+                    comparison, validation_reason
+                )
+                knowledge_ids = [(kid, 0.3) for kid in trend_knowledge_ids]
+                return PipelineResult(
+                    batch_id=batch_id,
+                    candidates=candidate_texts,
+                    comparison=comparison,
+                    refinement=refinement,
+                    final_content=final_content,
+                    final_score=0,
+                    source_prompts=prompts,
+                    source_commits=source_commit_messages,
+                    filter_stats=filter_stats,
+                    predicted_engagement=None,
+                    engagement_prediction_detail=None,
+                    knowledge_ids=knowledge_ids,
+                    content_format=best_format,
+                    predictor_override=predictor_override,
+                    predictor_override_detail=predictor_override_detail,
+                    planned_topic_id=planned_topic_id,
+                )
 
         # Stage 6: Engagement prediction logging.
         # Reuse the prediction computed in Stage 3.5 for the chosen candidate

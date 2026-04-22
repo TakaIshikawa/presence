@@ -255,6 +255,39 @@ class TestContentTypeRouting:
     @patch("synthesis.pipeline.CrossModelEvaluator")
     @patch("synthesis.pipeline.ContentGenerator")
     @patch("synthesis.pipeline.FewShotSelector")
+    def test_x_thread_final_validation_rejects_invalid_thread(
+        self, MockFS, MockGen, MockEval, MockRefiner
+    ):
+        db = MagicMock()
+        db.get_curated_posts.return_value = []
+        db.get_auto_classified_posts.return_value = []
+        db.get_recent_published_content.return_value = []
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+
+        invalid_thread = "TWEET 1:\nFirst point\nTWEET 3:\nSkipped numbering"
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            [invalid_thread, invalid_thread, invalid_thread]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5,
+            ranking=[0, 1, 2],
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS, content_type="x_thread")
+
+        assert result.final_score == 0
+        assert "Thread validation failed" in result.comparison.reject_reason
+        assert "numbering" in result.comparison.reject_reason
+        assert result.filter_stats["thread_validation_valid"] is False
+        assert result.filter_stats["thread_validation_failures"]
+
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
     def test_blog_post_no_char_limit(self, MockFS, MockGen, MockEval, MockRefiner):
         db = MagicMock()
         db.get_curated_posts.return_value = []
