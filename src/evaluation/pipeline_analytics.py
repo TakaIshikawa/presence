@@ -96,6 +96,20 @@ class CampaignPerformanceReport:
     gaps: list[dict]
 
 
+@dataclass
+class CampaignRetrospectiveReport:
+    """Retrospective campaign outcome summary."""
+
+    campaign: dict
+    planned_topics: int
+    generated_topics: int
+    published_items: int
+    avg_engagement_score: float
+    top_content: list[dict]
+    missed_planned_topics: list[dict]
+    platform_split: dict[str, dict]
+
+
 class PipelineAnalytics:
     """Analytics engine for pipeline health and performance metrics."""
 
@@ -774,6 +788,42 @@ class PipelineAnalytics:
             gaps=self._campaign_gaps(topics, content_items),
         )
 
+    def campaign_retrospectives(
+        self,
+        campaign_id: int | None = None,
+        active: bool = False,
+        statuses: tuple[str, ...] = ("active", "completed"),
+        top_limit: int = 3,
+    ) -> list[CampaignRetrospectiveReport]:
+        """Return retrospective performance totals for one or more campaigns.
+
+        By default, retrospectives cover active and completed campaigns so a
+        completed campaign remains reportable after it leaves the active window.
+        """
+        campaigns = self._resolve_retrospective_campaigns(
+            campaign_id=campaign_id,
+            active=active,
+            statuses=statuses,
+        )
+        return [
+            self._campaign_retrospective_from_rows(campaign, top_limit=top_limit)
+            for campaign in campaigns
+        ]
+
+    def campaign_retrospective_report(
+        self,
+        campaign_id: int | None = None,
+        active: bool = False,
+        top_limit: int = 3,
+    ) -> Optional[CampaignRetrospectiveReport]:
+        """Return one retrospective campaign report, or None if not found."""
+        reports = self.campaign_retrospectives(
+            campaign_id=campaign_id,
+            active=active,
+            top_limit=top_limit,
+        )
+        return reports[0] if reports else None
+
     def _resolve_campaign(
         self,
         campaign_id: int | None,
@@ -793,6 +843,226 @@ class PipelineAnalytics:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    def _resolve_retrospective_campaigns(
+        self,
+        campaign_id: int | None,
+        active: bool,
+        statuses: tuple[str, ...],
+    ) -> list[dict]:
+        """Resolve campaign selection for retrospective reporting."""
+        if campaign_id is not None:
+            campaign = self.db.get_campaign(campaign_id)
+            return [campaign] if campaign else []
+        if active:
+            campaign = self.db.get_active_campaign()
+            return [campaign] if campaign else []
+
+        placeholders = ",".join("?" for _ in statuses)
+        cursor = self.db.conn.execute(
+            f"""SELECT *
+                FROM content_campaigns
+                WHERE status IN ({placeholders})
+                ORDER BY start_date DESC NULLS LAST, created_at DESC, id DESC""",
+            statuses,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _campaign_retrospective_from_rows(
+        self,
+        campaign: dict,
+        top_limit: int,
+    ) -> CampaignRetrospectiveReport:
+        """Build a retrospective summary from campaign/topic/publication rows."""
+        rows = self._campaign_retrospective_rows(campaign["id"])
+        generated_topic_ids = {
+            row["planned_topic_id"]
+            for row in rows
+            if row["planned_topic_id"] is not None and row["content_id"] is not None
+        }
+        published_rows = [
+            row for row in rows
+            if row["publication_id"] is not None and row["publication_status"] == "published"
+        ]
+
+        content_items = self._campaign_retrospective_content_items(rows)
+        engagement_scores = [
+            item["combined_engagement_score"]
+            for item in content_items
+            if item["published_platforms"]
+        ]
+        top_content = sorted(
+            [item for item in content_items if item["published_platforms"]],
+            key=lambda item: (
+                item["combined_engagement_score"],
+                item["eval_score"] or 0.0,
+                item["latest_published_at"] or "",
+            ),
+            reverse=True,
+        )[:top_limit]
+
+        missed_planned_topics = [
+            {
+                "planned_topic_id": row["planned_topic_id"],
+                "topic": row["topic"],
+                "angle": row["angle"],
+                "target_date": row["target_date"],
+                "status": row["topic_status"],
+            }
+            for row in rows
+            if row["planned_topic_id"] is not None
+            and row["content_id"] is None
+            and row["topic_status"] != "skipped"
+        ]
+
+        return CampaignRetrospectiveReport(
+            campaign=campaign,
+            planned_topics=len({
+                row["planned_topic_id"]
+                for row in rows
+                if row["planned_topic_id"] is not None
+            }),
+            generated_topics=len(generated_topic_ids),
+            published_items=len(published_rows),
+            avg_engagement_score=round(
+                sum(engagement_scores) / len(engagement_scores), 2
+            ) if engagement_scores else 0.0,
+            top_content=top_content,
+            missed_planned_topics=missed_planned_topics,
+            platform_split=self._campaign_retrospective_platform_split(published_rows),
+        )
+
+    def _campaign_retrospective_rows(self, campaign_id: int) -> list[dict]:
+        """Join campaign topics, generated content, publications, and engagement."""
+        cursor = self.db.conn.execute(
+            """SELECT cc.id AS campaign_id,
+                      pt.id AS planned_topic_id,
+                      pt.topic,
+                      pt.angle,
+                      pt.target_date,
+                      pt.status AS topic_status,
+                      gc.id AS content_id,
+                      gc.content_type,
+                      gc.content,
+                      gc.eval_score,
+                      gc.created_at AS content_created_at,
+                      cp.id AS publication_id,
+                      cp.platform,
+                      cp.status AS publication_status,
+                      cp.platform_url,
+                      cp.published_at AS platform_published_at,
+                      CASE
+                          WHEN cp.platform = 'x' THEN pe.engagement_score
+                          WHEN cp.platform = 'bluesky' THEN be.engagement_score
+                          ELSE NULL
+                      END AS engagement_score
+               FROM content_campaigns cc
+               LEFT JOIN planned_topics pt ON pt.campaign_id = cc.id
+               LEFT JOIN generated_content gc ON gc.id = pt.content_id
+               LEFT JOIN content_publications cp
+                      ON cp.content_id = gc.id
+                     AND cp.status = 'published'
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM post_engagement
+                   WHERE engagement_score IS NOT NULL
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM bluesky_engagement
+                   WHERE engagement_score IS NOT NULL
+               ) be ON be.content_id = gc.id AND be.rn = 1
+               WHERE cc.id = ?
+               ORDER BY pt.target_date ASC NULLS LAST,
+                        pt.created_at ASC,
+                        gc.created_at ASC,
+                        cp.platform ASC""",
+            (campaign_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _campaign_retrospective_content_items(self, rows: list[dict]) -> list[dict]:
+        """Collapse publication rows into one scored item per generated content row."""
+        items: dict[int, dict] = {}
+        for row in rows:
+            content_id = row["content_id"]
+            if content_id is None:
+                continue
+            item = items.setdefault(
+                content_id,
+                {
+                    "planned_topic_id": row["planned_topic_id"],
+                    "content_id": content_id,
+                    "topic": row["topic"],
+                    "angle": row["angle"],
+                    "content_type": row["content_type"],
+                    "content": row["content"],
+                    "eval_score": row["eval_score"],
+                    "published_platforms": [],
+                    "platform_scores": {},
+                    "combined_engagement_score": 0.0,
+                    "latest_published_at": None,
+                },
+            )
+            if row["publication_status"] != "published" or not row["platform"]:
+                continue
+
+            platform = row["platform"]
+            if platform not in item["published_platforms"]:
+                item["published_platforms"].append(platform)
+            score = row["engagement_score"]
+            if score is not None:
+                score = float(score)
+                item["platform_scores"][platform] = score
+                item["combined_engagement_score"] += score
+            published_at = row["platform_published_at"]
+            if published_at and (
+                item["latest_published_at"] is None
+                or published_at > item["latest_published_at"]
+            ):
+                item["latest_published_at"] = published_at
+
+        for item in items.values():
+            item["combined_engagement_score"] = round(
+                item["combined_engagement_score"], 2
+            )
+            item["published_platforms"].sort()
+        return list(items.values())
+
+    def _campaign_retrospective_platform_split(
+        self,
+        published_rows: list[dict],
+    ) -> dict[str, dict]:
+        """Aggregate publication count and latest engagement by platform."""
+        platforms: dict[str, dict] = {}
+        for row in published_rows:
+            platform = row["platform"] or "unknown"
+            stats = platforms.setdefault(
+                platform,
+                {
+                    "published_items": 0,
+                    "engagement_count": 0,
+                    "avg_engagement_score": 0.0,
+                    "total_engagement_score": 0.0,
+                },
+            )
+            stats["published_items"] += 1
+            if row["engagement_score"] is not None:
+                stats["engagement_count"] += 1
+                stats["total_engagement_score"] += float(row["engagement_score"])
+
+        for stats in platforms.values():
+            total = stats["total_engagement_score"]
+            count = stats["engagement_count"]
+            stats["total_engagement_score"] = round(total, 2)
+            stats["avg_engagement_score"] = round(total / count, 2) if count else 0.0
+        return platforms
 
     def _campaign_topic_rows(self, campaign_id: int) -> list[dict]:
         """Return all planned topics for a campaign."""

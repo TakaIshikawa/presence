@@ -10,7 +10,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from evaluation.pipeline_analytics import CampaignPerformanceReport, PipelineAnalytics
+from evaluation.pipeline_analytics import (
+    CampaignPerformanceReport,
+    CampaignRetrospectiveReport,
+    PipelineAnalytics,
+)
 from runner import script_context
 
 
@@ -107,6 +111,72 @@ def format_json_report(report: CampaignPerformanceReport | None) -> str:
     return json.dumps(data, indent=2)
 
 
+def format_retrospective_table(reports: list[CampaignRetrospectiveReport]) -> str:
+    """Format retrospective campaign summaries as a concise table."""
+    if not reports:
+        return "No campaign data found."
+
+    rows = []
+    for report in reports:
+        campaign = report.campaign
+        split = ", ".join(
+            f"{platform}:{stats['published_items']}"
+            for platform, stats in sorted(report.platform_split.items())
+        ) or "-"
+        top = "-"
+        if report.top_content:
+            item = report.top_content[0]
+            top = (
+                f"#{item['content_id']} {item['topic']} "
+                f"({item['combined_engagement_score']:.2f})"
+            )
+        rows.append([
+            str(campaign["id"]),
+            campaign["name"],
+            campaign["status"],
+            str(report.planned_topics),
+            str(report.generated_topics),
+            str(report.published_items),
+            f"{report.avg_engagement_score:.2f}",
+            str(len(report.missed_planned_topics)),
+            split,
+            top,
+        ])
+
+    headers = [
+        "ID",
+        "Campaign",
+        "Status",
+        "Plan",
+        "Gen",
+        "Pub",
+        "AvgEng",
+        "Miss",
+        "Platforms",
+        "Top",
+    ]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+    lines = [
+        "  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)),
+        "  ".join("-" * width for width in widths),
+    ]
+    for row in rows:
+        lines.append(
+            "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+        )
+    return "\n".join(lines)
+
+
+def format_retrospective_json(reports: list[CampaignRetrospectiveReport]) -> str:
+    """Format retrospective campaign summaries as JSON."""
+    if not reports:
+        return json.dumps({"error": "No campaign data found"}, indent=2)
+    return json.dumps([asdict(report) for report in reports], indent=2)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Report campaign topic completion and content performance"
@@ -132,6 +202,11 @@ def main() -> None:
         action="store_true",
         help="Output machine-readable JSON",
     )
+    parser.add_argument(
+        "--retrospective",
+        action="store_true",
+        help="Show retrospective campaign scoring table",
+    )
     args = parser.parse_args()
 
     if args.campaign_id is not None and args.active:
@@ -145,6 +220,17 @@ def main() -> None:
 
     with script_context() as (config, db):
         analytics = PipelineAnalytics(db)
+        if args.retrospective:
+            reports = analytics.campaign_retrospectives(
+                campaign_id=args.campaign_id,
+                active=args.active,
+            )
+            if args.json:
+                print(format_retrospective_json(reports))
+            else:
+                print(format_retrospective_table(reports))
+            return
+
         report = analytics.campaign_performance_report(
             campaign_id=args.campaign_id,
             active=args.active or args.campaign_id is None,
