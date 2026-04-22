@@ -81,6 +81,21 @@ class ProfileGrowthReport:
     platforms: dict[str, PlatformGrowthStats]
 
 
+@dataclass
+class CampaignPerformanceReport:
+    """Campaign-level topic, content, and engagement summary."""
+
+    campaign: dict
+    period_days: int
+    period_start: datetime
+    period_end: datetime
+    topic_counts: dict[str, int]
+    avg_eval_score: float
+    per_platform_engagement: dict[str, dict]
+    top_content: list[dict]
+    gaps: list[dict]
+
+
 class PipelineAnalytics:
     """Analytics engine for pipeline health and performance metrics."""
 
@@ -640,3 +655,332 @@ class PipelineAnalytics:
             (platform, f'-{days} days'),
         )
         return [float(row[0]) for row in cursor.fetchall()]
+
+    def campaign_performance_report(
+        self,
+        campaign_id: int | None = None,
+        active: bool = False,
+        days: int = 30,
+        top_limit: int = 5,
+    ) -> Optional[CampaignPerformanceReport]:
+        """Summarize topic completion and performance for one content campaign.
+
+        Args:
+            campaign_id: Explicit campaign ID to report.
+            active: If true, report the currently active campaign.
+            days: Engagement/newsletter lookback window.
+            top_limit: Number of top content items to include.
+
+        Returns:
+            CampaignPerformanceReport or None if the campaign does not exist.
+        """
+        campaign = self._resolve_campaign(campaign_id=campaign_id, active=active)
+        if campaign is None:
+            return None
+
+        period_end = datetime.now(timezone.utc)
+        period_start = period_end - timedelta(days=days)
+        topics = self._campaign_topic_rows(campaign["id"])
+        topic_counts = self._campaign_topic_counts(topics)
+        content_rows = self._campaign_content_rows(campaign["id"], days)
+        newsletter_by_content = self._newsletter_sends_by_content(
+            [row["content_id"] for row in content_rows if row.get("content_id")],
+            days,
+        )
+
+        content_items = []
+        eval_scores = []
+        x_scores = []
+        bluesky_scores = []
+        newsletter_sends: dict[int, list[dict]] = {}
+
+        for row in content_rows:
+            content_id = row["content_id"]
+            x_score = row["x_engagement_score"]
+            bluesky_score = row["bluesky_engagement_score"]
+            sends = newsletter_by_content.get(content_id, [])
+            newsletter_sends[content_id] = sends
+
+            if row["eval_score"] is not None:
+                eval_scores.append(float(row["eval_score"]))
+            if x_score is not None:
+                x_scores.append(float(x_score))
+            if bluesky_score is not None:
+                bluesky_scores.append(float(bluesky_score))
+
+            content_items.append({
+                "planned_topic_id": row["planned_topic_id"],
+                "content_id": content_id,
+                "topic": row["topic"],
+                "angle": row["angle"],
+                "content_type": row["content_type"],
+                "content": row["content"],
+                "eval_score": row["eval_score"],
+                "published": row["published"],
+                "published_url": row["published_url"],
+                "published_at": row["published_at"],
+                "x_engagement_score": x_score,
+                "bluesky_engagement_score": bluesky_score,
+                "newsletter_sends": sends,
+                "combined_engagement_score": (
+                    float(x_score or 0.0) + float(bluesky_score or 0.0)
+                ),
+            })
+
+        top_content = sorted(
+            content_items,
+            key=lambda item: (
+                item["combined_engagement_score"],
+                item["eval_score"] or 0.0,
+                item["published_at"] or "",
+            ),
+            reverse=True,
+        )[:top_limit]
+
+        total_subscribers = sum(
+            send["subscriber_count"] or 0
+            for sends in newsletter_sends.values()
+            for send in sends
+        )
+        unique_newsletter_sends = {
+            send["send_id"]: send
+            for sends in newsletter_sends.values()
+            for send in sends
+        }
+
+        per_platform = {
+            "x": self._engagement_summary(x_scores),
+            "bluesky": self._engagement_summary(bluesky_scores),
+            "newsletter": {
+                "send_count": len(unique_newsletter_sends),
+                "content_count": sum(1 for sends in newsletter_sends.values() if sends),
+                "subscriber_count_total": total_subscribers,
+                "avg_subscribers_per_send": round(
+                    total_subscribers / len(unique_newsletter_sends), 2
+                ) if unique_newsletter_sends else 0.0,
+            },
+        }
+
+        return CampaignPerformanceReport(
+            campaign=campaign,
+            period_days=days,
+            period_start=period_start,
+            period_end=period_end,
+            topic_counts=topic_counts,
+            avg_eval_score=round(sum(eval_scores) / len(eval_scores), 2)
+            if eval_scores else 0.0,
+            per_platform_engagement=per_platform,
+            top_content=top_content,
+            gaps=self._campaign_gaps(topics, content_items),
+        )
+
+    def _resolve_campaign(
+        self,
+        campaign_id: int | None,
+        active: bool,
+    ) -> dict | None:
+        """Resolve campaign selection for campaign reporting."""
+        if campaign_id is not None:
+            return self.db.get_campaign(campaign_id)
+        if active:
+            return self.db.get_active_campaign()
+
+        cursor = self.db.conn.execute(
+            """SELECT *
+               FROM content_campaigns
+               ORDER BY start_date DESC NULLS LAST, created_at DESC
+               LIMIT 1"""
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def _campaign_topic_rows(self, campaign_id: int) -> list[dict]:
+        """Return all planned topics for a campaign."""
+        cursor = self.db.conn.execute(
+            """SELECT *
+               FROM planned_topics
+               WHERE campaign_id = ?
+               ORDER BY target_date ASC NULLS LAST, created_at ASC""",
+            (campaign_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _campaign_topic_counts(self, topics: list[dict]) -> dict[str, int]:
+        """Count planned topic statuses using stable output keys."""
+        counts = {
+            "total": len(topics),
+            "planned": 0,
+            "generated": 0,
+            "skipped": 0,
+        }
+        for topic in topics:
+            status = topic.get("status") or "planned"
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
+    def _campaign_content_rows(self, campaign_id: int, days: int) -> list[dict]:
+        """Return generated content linked to campaign topics with latest engagement."""
+        cursor = self.db.conn.execute(
+            """SELECT pt.id AS planned_topic_id,
+                      pt.topic,
+                      pt.angle,
+                      pt.status AS topic_status,
+                      gc.id AS content_id,
+                      gc.content_type,
+                      gc.content,
+                      gc.eval_score,
+                      gc.published,
+                      gc.published_url,
+                      gc.published_at,
+                      gc.created_at,
+                      pe.engagement_score AS x_engagement_score,
+                      be.engagement_score AS bluesky_engagement_score
+               FROM planned_topics pt
+               INNER JOIN generated_content gc ON gc.id = pt.content_id
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM post_engagement
+                   WHERE fetched_at >= datetime('now', ?)
+               ) pe ON pe.content_id = gc.id AND pe.rn = 1
+               LEFT JOIN (
+                   SELECT content_id, engagement_score,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY content_id ORDER BY fetched_at DESC
+                          ) AS rn
+                   FROM bluesky_engagement
+                   WHERE fetched_at >= datetime('now', ?)
+               ) be ON be.content_id = gc.id AND be.rn = 1
+               WHERE pt.campaign_id = ?
+               ORDER BY gc.published_at DESC NULLS LAST, gc.created_at DESC""",
+            (f"-{days} days", f"-{days} days", campaign_id),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _newsletter_sends_by_content(
+        self,
+        content_ids: list[int],
+        days: int,
+    ) -> dict[int, list[dict]]:
+        """Map generated content IDs to newsletter sends that included them."""
+        result = {content_id: [] for content_id in content_ids}
+        if not content_ids:
+            return result
+
+        content_id_set = set(content_ids)
+        cursor = self.db.conn.execute(
+            """SELECT id, issue_id, subject, source_content_ids,
+                      subscriber_count, status, sent_at
+               FROM newsletter_sends
+               WHERE sent_at >= datetime('now', ?)
+                 AND source_content_ids IS NOT NULL
+               ORDER BY sent_at DESC""",
+            (f"-{days} days",),
+        )
+
+        for row in cursor.fetchall():
+            try:
+                source_ids = json.loads(row["source_content_ids"] or "[]")
+            except (TypeError, json.JSONDecodeError) as e:
+                logger.debug(f"Skipping malformed newsletter source_content_ids: {e}")
+                continue
+
+            for source_id in source_ids:
+                try:
+                    content_id = int(source_id)
+                except (TypeError, ValueError):
+                    continue
+                if content_id not in content_id_set:
+                    continue
+
+                result[content_id].append({
+                    "send_id": row["id"],
+                    "issue_id": row["issue_id"],
+                    "subject": row["subject"],
+                    "subscriber_count": row["subscriber_count"],
+                    "status": row["status"],
+                    "sent_at": row["sent_at"],
+                })
+
+        return result
+
+    def _engagement_summary(self, scores: list[float]) -> dict:
+        """Return aggregate engagement metrics for a platform."""
+        return {
+            "content_count": len(scores),
+            "avg_engagement_score": round(sum(scores) / len(scores), 2)
+            if scores else 0.0,
+            "total_engagement_score": round(sum(scores), 2),
+            "min_engagement_score": round(min(scores), 2) if scores else 0.0,
+            "max_engagement_score": round(max(scores), 2) if scores else 0.0,
+        }
+
+    def _campaign_gaps(
+        self,
+        topics: list[dict],
+        content_items: list[dict],
+    ) -> list[dict]:
+        """Identify missing or under-instrumented campaign items."""
+        gaps = []
+        today = datetime.now(timezone.utc).date().isoformat()
+        content_by_topic = {
+            item["planned_topic_id"]: item for item in content_items
+        }
+
+        for topic in topics:
+            if topic.get("status") == "skipped":
+                gaps.append({
+                    "type": "skipped_topic",
+                    "planned_topic_id": topic["id"],
+                    "topic": topic["topic"],
+                    "angle": topic["angle"],
+                    "target_date": topic["target_date"],
+                })
+                continue
+
+            if topic.get("status") == "planned" and (
+                not topic.get("target_date") or topic["target_date"] < today
+            ):
+                gaps.append({
+                    "type": "unfilled_topic",
+                    "planned_topic_id": topic["id"],
+                    "topic": topic["topic"],
+                    "angle": topic["angle"],
+                    "target_date": topic["target_date"],
+                })
+
+        for item in content_items:
+            if item["eval_score"] is None:
+                gaps.append({
+                    "type": "missing_eval_score",
+                    "planned_topic_id": item["planned_topic_id"],
+                    "content_id": item["content_id"],
+                    "topic": item["topic"],
+                })
+            if item["published"] == 1 and (
+                item["x_engagement_score"] is None
+                and item["bluesky_engagement_score"] is None
+            ):
+                gaps.append({
+                    "type": "missing_engagement",
+                    "planned_topic_id": item["planned_topic_id"],
+                    "content_id": item["content_id"],
+                    "topic": item["topic"],
+                })
+
+        linked_topic_ids = {
+            topic["id"] for topic in topics if topic.get("content_id") is not None
+        }
+        missing_content = linked_topic_ids - set(content_by_topic)
+        for planned_topic_id in sorted(missing_content):
+            topic = next(t for t in topics if t["id"] == planned_topic_id)
+            gaps.append({
+                "type": "missing_content_link",
+                "planned_topic_id": topic["id"],
+                "topic": topic["topic"],
+                "content_id": topic["content_id"],
+            })
+
+        return gaps
