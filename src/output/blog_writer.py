@@ -52,10 +52,20 @@ def _json_frontmatter_value(value: Any) -> str:
 
 
 class BlogWriter:
-    def __init__(self, site_path: str, base_url: str = "https://takaishikawa.com") -> None:
+    def __init__(
+        self,
+        site_path: str,
+        base_url: str = "https://takaishikawa.com",
+        manifest_path: str | None = None,
+    ) -> None:
         self.site_path = Path(site_path).expanduser()
         self.blog_path = self.site_path / "blog"
         self.drafts_path = self.site_path / "drafts"
+        if manifest_path:
+            path = Path(manifest_path).expanduser()
+            self.manifest_path = path if path.is_absolute() else self.site_path / path
+        else:
+            self.manifest_path = self.drafts_path / "manifest.json"
         self.base_url = base_url
 
     def _slugify(self, title: str) -> str:
@@ -189,6 +199,54 @@ class BlogWriter:
         lines.extend(["---", ""])
         return "\n".join(lines)
 
+    def _site_relative_path(self, path: Path) -> str:
+        """Return a portable path relative to the static-site root when possible."""
+        try:
+            return path.relative_to(self.site_path).as_posix()
+        except ValueError:
+            return str(path)
+
+    def _json_safe(self, value: Any) -> Any:
+        """Normalize tuples and other simple objects into JSON-compatible data."""
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+    def _read_draft_manifest(self) -> dict[str, Any]:
+        """Read the draft manifest, tolerating a missing or legacy list-shaped file."""
+        if not self.manifest_path.exists():
+            return {"drafts": []}
+
+        data = json.loads(self.manifest_path.read_text())
+        if isinstance(data, list):
+            return {"drafts": data}
+        if isinstance(data, dict):
+            drafts = data.get("drafts")
+            if isinstance(drafts, list):
+                return data
+        return {"drafts": []}
+
+    def _update_draft_manifest(self, entry: dict[str, Any]) -> None:
+        """Insert or replace one draft entry in the static-site draft manifest."""
+        manifest = self._read_draft_manifest()
+        drafts = [
+            draft
+            for draft in manifest.get("drafts", [])
+            if not (
+                draft.get("slug") == entry["slug"]
+                or (
+                    entry.get("generated_content_id") is not None
+                    and draft.get("generated_content_id") == entry["generated_content_id"]
+                )
+            )
+        ]
+        drafts.append(entry)
+        drafts.sort(key=lambda draft: draft.get("created_at", ""), reverse=True)
+        manifest["drafts"] = drafts
+
+        self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        self.manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+        )
+
     def _update_index(self, slug: str, title: str, date_str: str) -> None:
         """Add new post to index.html."""
         index_path = self.site_path / "index.html"
@@ -264,6 +322,8 @@ class BlogWriter:
         content: str,
         source_content_id: int,
         generated_content_id: int,
+        tags: list[str] | None = None,
+        topics: list[Any] | None = None,
     ) -> BlogResult:
         """Write generated markdown as a reviewable static-site draft."""
         title, body = self._extract_title_and_body(content)
@@ -273,6 +333,7 @@ class BlogWriter:
         slug = self._slugify(title)
         file_path = self.drafts_path / f"{slug}.md"
         created_at = datetime.now(timezone.utc).isoformat()
+        draft_tags = self._derive_tags(body, tags=tags, topics=topics)
 
         frontmatter = "\n".join([
             "---",
@@ -287,6 +348,16 @@ class BlogWriter:
 
         self.drafts_path.mkdir(parents=True, exist_ok=True)
         file_path.write_text(frontmatter + body + "\n")
+        self._update_draft_manifest({
+            "slug": slug,
+            "title": title,
+            "source_content_id": source_content_id,
+            "generated_content_id": generated_content_id,
+            "created_at": created_at,
+            "tags": draft_tags,
+            "topics": self._json_safe(topics or []),
+            "draft_path": self._site_relative_path(file_path),
+        })
 
         return BlogResult(
             success=True,

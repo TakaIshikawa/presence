@@ -1,5 +1,6 @@
 """Tests for blog post generation (src/output/blog_writer.py)."""
 
+import json
 import subprocess
 from unittest.mock import patch, call
 
@@ -280,6 +281,63 @@ class TestWriteDraft:
         assert "TITLE:" not in draft
         assert "## Outline\n\nDraft body." in draft
 
+    def test_updates_default_draft_manifest(self, tmp_path):
+        writer = BlogWriter(str(tmp_path))
+
+        result = writer.write_draft(
+            "TITLE: Manifest Draft\n\nPytest fixtures made this draft easier to review.",
+            source_content_id=123,
+            generated_content_id=42,
+            topics=[("architecture", "module boundaries", 0.9)],
+        )
+
+        manifest_path = tmp_path / "drafts" / "manifest.json"
+        assert result.success is True
+        assert manifest_path.exists()
+
+        manifest = json.loads(manifest_path.read_text())
+        assert len(manifest["drafts"]) == 1
+        entry = manifest["drafts"][0]
+        assert entry["slug"] == "manifest-draft"
+        assert entry["title"] == "Manifest Draft"
+        assert entry["source_content_id"] == 123
+        assert entry["generated_content_id"] == 42
+        assert entry["created_at"]
+        assert entry["tags"] == ["architecture"]
+        assert entry["topics"] == [["architecture", "module boundaries", 0.9]]
+        assert entry["draft_path"] == "drafts/manifest-draft.md"
+
+    def test_custom_manifest_path_is_relative_to_site(self, tmp_path):
+        writer = BlogWriter(str(tmp_path), manifest_path="data/blog-drafts.json")
+
+        writer.write_draft(
+            "TITLE: Custom Manifest\n\nDraft body.",
+            source_content_id=11,
+            generated_content_id=22,
+            tags=["Writing Notes"],
+        )
+
+        manifest = json.loads((tmp_path / "data" / "blog-drafts.json").read_text())
+        assert manifest["drafts"][0]["slug"] == "custom-manifest"
+        assert manifest["drafts"][0]["tags"] == ["writing-notes"]
+
+    def test_manifest_entry_is_replaced_for_same_generated_content(self, tmp_path):
+        writer = BlogWriter(str(tmp_path))
+
+        writer.write_draft(
+            "TITLE: Old Title\n\nFirst draft.",
+            source_content_id=1,
+            generated_content_id=99,
+        )
+        writer.write_draft(
+            "TITLE: New Title\n\nUpdated draft.",
+            source_content_id=1,
+            generated_content_id=99,
+        )
+
+        manifest = json.loads((tmp_path / "drafts" / "manifest.json").read_text())
+        assert [entry["slug"] for entry in manifest["drafts"]] == ["new-title"]
+
     def test_missing_title_returns_error(self, tmp_path):
         writer = BlogWriter(str(tmp_path))
 
@@ -292,6 +350,7 @@ class TestWriteDraft:
         assert result.success is False
         assert "No title" in result.error
         assert not (tmp_path / "drafts").exists()
+        assert not (tmp_path / "drafts" / "manifest.json").exists()
 
 
 # ---------------------------------------------------------------------------

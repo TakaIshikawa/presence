@@ -19,6 +19,13 @@ from output.x_client import XClient, parse_thread_content
 logger = logging.getLogger(__name__)
 
 
+def _configured_blog_manifest_path(config) -> str | None:
+    """Return config.blog.manifest_path when it is explicitly configured."""
+    blog_config = getattr(config, "blog", None)
+    manifest_path = getattr(blog_config, "manifest_path", None)
+    return manifest_path if isinstance(manifest_path, str) and manifest_path else None
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Repurpose content or refresh platform-specific text variants.",
@@ -216,7 +223,10 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 logger.error(f"Post failed: {post_result.error}")
         else:
-            blog_writer = BlogWriter(config.paths.static_site)
+            blog_writer = BlogWriter(
+                config.paths.static_site,
+                manifest_path=_configured_blog_manifest_path(config),
+            )
             draft_result = blog_writer.write_draft(
                 result.content,
                 source_content_id=result.source_id,

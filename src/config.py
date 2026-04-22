@@ -121,6 +121,11 @@ class NewsletterConfig:
 
 
 @dataclass
+class BlogConfig:
+    manifest_path: Optional[str] = None
+
+
+@dataclass
 class HistoricalConfig:
     enabled: bool
     lookback_days: int
@@ -238,6 +243,7 @@ class Config:
     operations: OperationsConfig
     proactive: Optional[ProactiveConfig]
     image_gen: Optional[ImageGenConfig]
+    blog: BlogConfig
 
 
 def _resolve_env_var(value: str) -> str:
@@ -531,6 +537,13 @@ def load_config(config_path: Optional[str] = None) -> Config:
             output_dir=data["image_gen"].get("output_dir", "generated_images"),
         )
 
+    blog_data = data.get("blog", {})
+    blog_config = BlogConfig(
+        manifest_path=_resolve_env_var(blog_data.get("manifest_path"))
+        if blog_data.get("manifest_path") is not None
+        else None,
+    )
+
     return Config(
         github=GitHubConfig(
             username=_require(data, "github", "username", section="github"),
@@ -582,4 +595,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         operations=operations_config,
         proactive=proactive_config,
         image_gen=image_gen_config,
+        blog=blog_config,
     )

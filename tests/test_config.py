@@ -23,6 +23,7 @@ from config import (
     OperationsAlertsConfig,
     OperationsConfig,
     NewsletterConfig,
+    BlogConfig,
     CuratedSource,
     CuratedSourcesConfig,
     TimeoutsConfig,
@@ -291,6 +292,16 @@ class TestDataclassParsing:
         assert cfg.newsletter.utm_source == ""
         assert cfg.newsletter.utm_medium == ""
         assert cfg.newsletter.utm_campaign_template == ""
+
+    def test_blog_config(self, tmp_path):
+        data = _minimal_config_dict(
+            blog={
+                "manifest_path": "data/blog-drafts.json",
+            }
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert isinstance(cfg.blog, BlogConfig)
+        assert cfg.blog.manifest_path == "data/blog-drafts.json"
 
 
 # ---------------------------------------------------------------------------

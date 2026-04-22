@@ -47,6 +47,9 @@ newsletter:
   utm_medium: "email"
   utm_campaign_template: "weekly-{week_end_compact}"
 
+blog:
+  manifest_path: "drafts/manifest.json"
+
 # Historical theme injection
 historical:
   enabled: true

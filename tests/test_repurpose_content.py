@@ -1,5 +1,6 @@
 """Tests for scripts/repurpose_content.py script-level logic."""
 
+import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ def _make_config(daily_post_cap=3, static_site="/tmp/fake-site"):
     config = MagicMock()
     config.paths.database = ":memory:"
     config.paths.static_site = static_site
+    config.blog.manifest_path = None
     config.anthropic.api_key = "test-key"
     config.synthesis.model = "gen-model"
     config.synthesis.eval_model = "eval-model"
@@ -529,11 +531,55 @@ class TestMainBlogSeedStoredForReview:
         assert "generated_content_id: 42" in draft
         assert "status: draft" in draft
         assert "## Outline\n\nDraft opening." in draft
+        manifest = json.loads((tmp_path / "drafts" / "manifest.json").read_text())
+        assert manifest["drafts"][0]["slug"] == "reviewable-draft"
+        assert manifest["drafts"][0]["title"] == "Reviewable Draft"
+        assert manifest["drafts"][0]["source_content_id"] == 123
+        assert manifest["drafts"][0]["generated_content_id"] == 42
+        assert manifest["drafts"][0]["draft_path"] == "drafts/reviewable-draft.md"
 
         mock_parse_thread.assert_not_called()
         MockXClient.assert_not_called()
         db.mark_published.assert_not_called()
         mock_monitoring.assert_called_once_with("repurpose")
+
+    def test_blog_seed_uses_configured_manifest_path(self, tmp_path):
+        config = _make_config(static_site=str(tmp_path))
+        config.blog.manifest_path = "data/blog-drafts.json"
+        db = MagicMock()
+        db.count_posts_today.return_value = 0
+        db.get_top_performing_posts.return_value = [{"content": "ref1"}]
+        db.get_all_classified_posts.return_value = {"resonated": [], "low_resonance": []}
+        db.get_engagement_calibration_stats.return_value = {}
+        db.insert_repurposed_content.return_value = 77
+
+        candidate = _make_candidate(content_id=321, target_type="blog_seed")
+        result = RepurposeResult(
+            source_id=321,
+            target_type="blog_seed",
+            content="TITLE: Configured Manifest\n\nDraft body.",
+            generation_prompt="Test prompt",
+        )
+
+        import repurpose_content
+
+        with patch("repurpose_content.script_context") as mock_ctx, \
+             patch("repurpose_content.ContentRepurposer") as MockRepurposer, \
+             patch("repurpose_content.CrossModelEvaluator") as MockEvaluator, \
+             patch("repurpose_content.XClient"), \
+             patch("repurpose_content.parse_thread_content"), \
+             patch("repurpose_content.update_monitoring"):
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            MockRepurposer.return_value.find_candidates.return_value = [candidate]
+            MockRepurposer.return_value.expand_to_blog_seed.return_value = result
+            MockEvaluator.return_value.evaluate.return_value = _make_comparison(best_score=8.0)
+
+            repurpose_content.main()
+
+        manifest = json.loads((tmp_path / "data" / "blog-drafts.json").read_text())
+        assert manifest["drafts"][0]["slug"] == "configured-manifest"
+        assert manifest["drafts"][0]["source_content_id"] == 321
+        assert manifest["drafts"][0]["generated_content_id"] == 77
 
 
 class TestMainPostFailure:
