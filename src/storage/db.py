@@ -529,6 +529,24 @@ class Database:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_send ON newsletter_engagement(newsletter_send_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_engagement_issue ON newsletter_engagement(issue_id)")
             self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS newsletter_link_clicks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
+                    issue_id TEXT NOT NULL,
+                    link_url TEXT NOT NULL,
+                    raw_url TEXT,
+                    clicks INTEGER DEFAULT 0,
+                    unique_clicks INTEGER,
+                    raw_metrics JSON,
+                    fetched_at TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(newsletter_send_id, issue_id, link_url, fetched_at)
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_send ON newsletter_link_clicks(newsletter_send_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_issue ON newsletter_link_clicks(issue_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_url ON newsletter_link_clicks(link_url)")
+            self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS newsletter_subscriber_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     subscriber_count INTEGER NOT NULL DEFAULT 0,
@@ -3469,11 +3487,12 @@ class Database:
         opens: int,
         clicks: int,
         unsubscribes: int,
+        fetched_at: Optional[str] = None,
     ) -> int:
         """Insert a Buttondown newsletter metrics snapshot."""
         from evaluation.engagement_scorer import classify_newsletter_engagement
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = fetched_at or datetime.now(timezone.utc).isoformat()
         cursor = self.conn.execute(
             """INSERT INTO newsletter_engagement
                (newsletter_send_id, issue_id, opens, clicks, unsubscribes, fetched_at)
@@ -3493,6 +3512,92 @@ class Database:
             self.update_newsletter_send_status(newsletter_send_id, status, commit=False)
         self.conn.commit()
         return cursor.lastrowid
+
+    def insert_newsletter_link_clicks(
+        self,
+        newsletter_send_id: int,
+        issue_id: str,
+        link_clicks: list[dict],
+        fetched_at: Optional[str] = None,
+    ) -> list[int]:
+        """Insert Buttondown link-level metrics for one newsletter snapshot."""
+        if not link_clicks:
+            return []
+
+        now = fetched_at or datetime.now(timezone.utc).isoformat()
+        inserted_ids = []
+        for link in link_clicks:
+            if hasattr(link, "__dataclass_fields__"):
+                link_url = getattr(link, "url", "")
+                raw_url = getattr(link, "raw_url", None)
+                clicks = getattr(link, "clicks", 0)
+                unique_clicks = getattr(link, "unique_clicks", None)
+                raw_metrics = getattr(link, "raw_metrics", {}) or {}
+            else:
+                link_url = link.get("url") or link.get("link_url") or ""
+                raw_url = link.get("raw_url")
+                clicks = link.get("clicks", 0)
+                unique_clicks = link.get("unique_clicks")
+                raw_metrics = link.get("raw_metrics", {}) or {}
+            if not link_url:
+                continue
+            cursor = self.conn.execute(
+                """INSERT INTO newsletter_link_clicks
+                   (newsletter_send_id, issue_id, link_url, raw_url, clicks,
+                    unique_clicks, raw_metrics, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(newsletter_send_id, issue_id, link_url, fetched_at)
+                   DO UPDATE SET
+                       raw_url = excluded.raw_url,
+                       clicks = excluded.clicks,
+                       unique_clicks = excluded.unique_clicks,
+                       raw_metrics = excluded.raw_metrics""",
+                (
+                    newsletter_send_id,
+                    issue_id,
+                    link_url,
+                    raw_url,
+                    int(clicks or 0),
+                    None if unique_clicks is None else int(unique_clicks),
+                    json.dumps(raw_metrics),
+                    now,
+                ),
+            )
+            inserted_ids.append(cursor.lastrowid)
+
+        self.conn.commit()
+        return inserted_ids
+
+    def list_newsletter_link_clicks(
+        self,
+        newsletter_send_id: Optional[int] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """List persisted newsletter link-click snapshots newest-first."""
+        params: list = []
+        where = ""
+        if newsletter_send_id is not None:
+            where = "WHERE newsletter_send_id = ?"
+            params.append(newsletter_send_id)
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT id, newsletter_send_id, issue_id, link_url, raw_url,
+                       clicks, unique_clicks, raw_metrics, fetched_at, created_at
+                FROM newsletter_link_clicks
+                {where}
+                ORDER BY fetched_at DESC, id DESC
+                LIMIT ?""",
+            params,
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            try:
+                item["raw_metrics"] = json.loads(item.get("raw_metrics") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item["raw_metrics"] = {}
+            rows.append(item)
+        return rows
 
     def insert_newsletter_subscriber_metrics(
         self,

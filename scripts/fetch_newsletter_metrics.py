@@ -4,6 +4,7 @@
 import argparse
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add src to path
@@ -92,20 +93,29 @@ def main(argv: list[str] | None = None) -> None:
                 logger.warning("Failed to fetch metrics for issue %s", send["issue_id"])
                 continue
 
+            fetched_at = datetime.now(timezone.utc).isoformat()
             db.insert_newsletter_engagement(
                 newsletter_send_id=send["id"],
                 issue_id=metrics.issue_id,
                 opens=metrics.opens,
                 clicks=metrics.clicks,
                 unsubscribes=metrics.unsubscribes,
+                fetched_at=fetched_at,
+            )
+            db.insert_newsletter_link_clicks(
+                newsletter_send_id=send["id"],
+                issue_id=metrics.issue_id,
+                link_clicks=metrics.link_clicks,
+                fetched_at=fetched_at,
             )
             fetched += 1
             logger.info(
-                "  %s: %s opens, %s clicks, %s unsubscribes",
+                "  %s: %s opens, %s clicks, %s unsubscribes, %s links",
                 metrics.issue_id,
                 metrics.opens,
                 metrics.clicks,
                 metrics.unsubscribes,
+                len(metrics.link_clicks),
             )
 
     update_monitoring("fetch-newsletter-metrics")

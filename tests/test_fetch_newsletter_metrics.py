@@ -6,7 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from output.newsletter import NewsletterMetrics, NewsletterSubscriberMetrics
+from output.newsletter import (
+    NewsletterLinkClick,
+    NewsletterMetrics,
+    NewsletterSubscriberMetrics,
+)
 
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "fetch_newsletter_metrics.py"
@@ -70,6 +74,53 @@ def test_fetches_metrics_and_classifies_send(db):
     ).fetchone()
     assert row["status"] == "resonated"
     mock_client.get_email_analytics.assert_called_once_with("issue-1")
+
+
+def test_fetches_link_metrics_with_aggregate_snapshot(db):
+    send_id = db.insert_newsletter_send(
+        issue_id="issue-links",
+        subject="Weekly",
+        content_ids=[1],
+        subscriber_count=100,
+    )
+    mock_client = MagicMock()
+    mock_client.get_email_analytics.return_value = NewsletterMetrics(
+        issue_id="issue-links",
+        opens=45,
+        clicks=7,
+        unsubscribes=0,
+        link_clicks=[
+            NewsletterLinkClick(
+                url="https://example.com/post?id=1",
+                clicks=7,
+                unique_clicks=4,
+                raw_url="https://example.com/post?id=1&utm_source=newsletter",
+                raw_metrics={"source": "buttondown"},
+            )
+        ],
+    )
+
+    with patch.object(
+        fetch_newsletter_metrics,
+        "script_context",
+        return_value=_script_context(_config(), db),
+    ), patch.object(
+        fetch_newsletter_metrics,
+        "ButtondownClient",
+        return_value=mock_client,
+    ), patch.object(fetch_newsletter_metrics, "update_monitoring"):
+        fetch_newsletter_metrics.main()
+
+    engagement = db.conn.execute(
+        "SELECT fetched_at FROM newsletter_engagement WHERE newsletter_send_id = ?",
+        (send_id,),
+    ).fetchone()
+    link = db.list_newsletter_link_clicks(newsletter_send_id=send_id)[0]
+    assert link["link_url"] == "https://example.com/post?id=1"
+    assert link["clicks"] == 7
+    assert link["unique_clicks"] == 4
+    assert link["raw_metrics"] == {"source": "buttondown"}
+    assert link["fetched_at"] == engagement["fetched_at"]
 
 
 def test_fetches_subscriber_metrics(db):

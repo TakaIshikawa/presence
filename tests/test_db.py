@@ -40,6 +40,7 @@ class TestSchemaInit:
             "eval_batches",
             "eval_results",
             "model_usage",
+            "newsletter_link_clicks",
         }
         assert expected.issubset(tables)
 
@@ -146,6 +147,23 @@ class TestSchemaInit:
             "churn_rate",
             "new_subscribers",
             "net_subscriber_change",
+            "raw_metrics",
+            "fetched_at",
+        }
+        assert expected.issubset(cols)
+
+    def test_newsletter_link_clicks_table_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(newsletter_link_clicks)")
+        }
+        expected = {
+            "newsletter_send_id",
+            "issue_id",
+            "link_url",
+            "raw_url",
+            "clicks",
+            "unique_clicks",
             "raw_metrics",
             "fetched_at",
         }
@@ -3539,6 +3557,44 @@ class TestNewsletterMethods:
             (send_id,),
         ).fetchone()["status"]
         assert status == "resonated"
+
+    def test_insert_and_list_newsletter_link_clicks(self, db):
+        """Newsletter link-click snapshots are persisted with raw metrics."""
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-links",
+            subject="Link Metrics",
+            content_ids=[1],
+            subscriber_count=100,
+        )
+        fetched_at = "2026-04-23T10:00:00+00:00"
+
+        inserted_ids = db.insert_newsletter_link_clicks(
+            newsletter_send_id=send_id,
+            issue_id="issue-links",
+            link_clicks=[
+                {
+                    "url": "https://example.com/post?id=1",
+                    "raw_url": "https://example.com/post?id=1&utm_source=newsletter",
+                    "clicks": 7,
+                    "unique_clicks": 4,
+                    "raw_metrics": {"source": "buttondown"},
+                }
+            ],
+            fetched_at=fetched_at,
+        )
+
+        rows = db.list_newsletter_link_clicks(newsletter_send_id=send_id)
+        assert len(inserted_ids) == 1
+        assert rows[0]["newsletter_send_id"] == send_id
+        assert rows[0]["issue_id"] == "issue-links"
+        assert rows[0]["link_url"] == "https://example.com/post?id=1"
+        assert rows[0]["raw_url"] == (
+            "https://example.com/post?id=1&utm_source=newsletter"
+        )
+        assert rows[0]["clicks"] == 7
+        assert rows[0]["unique_clicks"] == 4
+        assert rows[0]["raw_metrics"] == {"source": "buttondown"}
+        assert rows[0]["fetched_at"] == fetched_at
 
     def test_insert_and_list_newsletter_subscriber_metrics(self, db):
         """Newsletter subscriber snapshots are persisted newest-first."""

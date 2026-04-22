@@ -13,10 +13,12 @@ import requests
 from output.newsletter import (
     NewsletterAssembler,
     NewsletterContent,
+    NewsletterLinkClick,
     NewsletterMetrics,
     NewsletterSubscriberMetrics,
     NewsletterResult,
     ButtondownClient,
+    normalize_newsletter_link_url,
 )
 
 
@@ -645,6 +647,86 @@ class TestButtondownClient:
         assert metrics.opens == 0
         assert metrics.clicks == 0
         assert metrics.unsubscribes == 0
+
+    @patch("output.newsletter.requests.Session")
+    def test_get_email_analytics_parses_link_clicks(self, MockSession):
+        """Buttondown per-link metrics are normalized and merged by destination."""
+        mock_session = MockSession.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "opens": 50,
+            "clicks": 12,
+            "unsubscriptions": 2,
+            "links": [
+                {
+                    "url": "https://example.com/post?utm_source=buttondown&id=1",
+                    "clicks": 3,
+                    "unique_clicks": 2,
+                },
+                {
+                    "url": "https://EXAMPLE.com/post?id=1&utm_campaign=weekly",
+                    "click_count": 4,
+                    "unique_click_count": 1,
+                },
+                {
+                    "url": "https://example.com/post?id=2",
+                    "clicks": 5,
+                },
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        client = ButtondownClient("test-api-key")
+        client.session = mock_session
+        metrics = client.get_email_analytics("issue-123")
+
+        assert metrics.link_clicks == [
+            NewsletterLinkClick(
+                url="https://example.com/post?id=1",
+                clicks=7,
+                unique_clicks=3,
+                raw_url="https://example.com/post?utm_source=buttondown&id=1",
+                raw_metrics={
+                    "sources": [
+                        {
+                            "url": "https://example.com/post?utm_source=buttondown&id=1",
+                            "clicks": 3,
+                            "unique_clicks": 2,
+                        },
+                        {
+                            "url": "https://EXAMPLE.com/post?id=1&utm_campaign=weekly",
+                            "click_count": 4,
+                            "unique_click_count": 1,
+                        },
+                    ]
+                },
+            ),
+            NewsletterLinkClick(
+                url="https://example.com/post?id=2",
+                clicks=5,
+                unique_clicks=None,
+                raw_url="https://example.com/post?id=2",
+                raw_metrics={
+                    "sources": [
+                        {
+                            "url": "https://example.com/post?id=2",
+                            "clicks": 5,
+                        }
+                    ]
+                },
+            ),
+        ]
+
+    def test_normalize_newsletter_link_url_strips_tracking_params(self):
+        url = (
+            "https://Example.com:443/path?utm_source=newsletter"
+            "&content_id=12&ref=archive&gclid=abc#section"
+        )
+
+        assert normalize_newsletter_link_url(url) == (
+            "https://example.com/path?ref=archive#section"
+        )
 
     @patch("output.newsletter.requests.Session")
     def test_get_email_analytics_http_error(self, MockSession):

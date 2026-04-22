@@ -55,6 +55,16 @@ class NewsletterMetrics:
     opens: int = 0
     clicks: int = 0
     unsubscribes: int = 0
+    link_clicks: list["NewsletterLinkClick"] = field(default_factory=list)
+
+
+@dataclass
+class NewsletterLinkClick:
+    url: str
+    clicks: int = 0
+    unique_clicks: Optional[int] = None
+    raw_url: Optional[str] = None
+    raw_metrics: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -66,6 +76,29 @@ class NewsletterSubscriberMetrics:
     new_subscribers: Optional[int] = None
     net_subscriber_change: Optional[int] = None
     raw_metrics: dict = field(default_factory=dict)
+
+
+TRACKING_QUERY_PARAMS = {
+    "bd_analytics",
+    "bd_tracking",
+    "ck_subscriber_id",
+    "content_id",
+    "dclid",
+    "fbclid",
+    "gclid",
+    "igshid",
+    "li_fat_id",
+    "mc_cid",
+    "mc_eid",
+    "mkt_tok",
+    "msclkid",
+    "oly_anon_id",
+    "oly_enc_id",
+    "vero_conv",
+    "vero_id",
+    "wickedid",
+    "yclid",
+}
 
 
 class NewsletterAssembler:
@@ -653,7 +686,7 @@ class ButtondownClient:
         return None
 
     def get_email_analytics(self, issue_id: str) -> Optional[NewsletterMetrics]:
-        """Fetch aggregate analytics for a Buttondown email issue."""
+        """Fetch aggregate and link-level analytics for a Buttondown email issue."""
         try:
             response = self.session.get(
                 f"{self.BASE_URL}/emails/{issue_id}/analytics",
@@ -666,7 +699,113 @@ class ButtondownClient:
                     opens=int(data.get("opens") or 0),
                     clicks=int(data.get("clicks") or 0),
                     unsubscribes=int(data.get("unsubscriptions") or 0),
+                    link_clicks=self._parse_link_clicks(data),
                 )
         except (ValueError, TypeError, requests.RequestException):
             pass
         return None
+
+    @classmethod
+    def _parse_link_clicks(cls, data: dict) -> list[NewsletterLinkClick]:
+        """Normalize Buttondown per-link analytics from known response shapes."""
+        candidates = []
+        for key in (
+            "links",
+            "link_clicks",
+            "clicks_by_link",
+            "clicks_by_url",
+            "url_clicks",
+        ):
+            value = data.get(key)
+            if isinstance(value, list):
+                candidates.extend(item for item in value if isinstance(item, dict))
+            elif isinstance(value, dict):
+                for url, clicks in value.items():
+                    if isinstance(clicks, dict):
+                        item = dict(clicks)
+                        item.setdefault("url", url)
+                        candidates.append(item)
+                    else:
+                        candidates.append({"url": url, "clicks": clicks})
+
+        merged: dict[str, NewsletterLinkClick] = {}
+        for item in candidates:
+            raw_url = cls._extract_link_url(item)
+            if not raw_url:
+                continue
+            normalized_url = normalize_newsletter_link_url(raw_url)
+            if not normalized_url:
+                continue
+            clicks = cls._extract_int(
+                item,
+                "clicks",
+                "click_count",
+                "total_clicks",
+                "count",
+            ) or 0
+            unique_clicks = cls._extract_int(
+                item,
+                "unique_clicks",
+                "unique_click_count",
+                "unique_count",
+            )
+            existing = merged.get(normalized_url)
+            if existing:
+                existing.clicks += clicks
+                if unique_clicks is not None:
+                    existing.unique_clicks = (existing.unique_clicks or 0) + unique_clicks
+                existing.raw_metrics.setdefault("sources", []).append(item)
+            else:
+                merged[normalized_url] = NewsletterLinkClick(
+                    url=normalized_url,
+                    clicks=clicks,
+                    unique_clicks=unique_clicks,
+                    raw_url=raw_url,
+                    raw_metrics={"sources": [item]},
+                )
+
+        return list(merged.values())
+
+    @staticmethod
+    def _extract_link_url(item: dict) -> str:
+        for key in ("url", "href", "target", "destination", "link"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                nested = ButtondownClient._extract_link_url(value)
+                if nested:
+                    return nested
+        return ""
+
+
+def normalize_newsletter_link_url(url: str) -> str:
+    """Strip common tracking params while preserving the destination URL."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+
+    parsed = urlparse(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not _is_tracking_query_param(key)
+    ]
+    netloc = parsed.netloc.lower()
+    if parsed.scheme == "http" and netloc.endswith(":80"):
+        netloc = netloc[:-3]
+    elif parsed.scheme == "https" and netloc.endswith(":443"):
+        netloc = netloc[:-4]
+
+    return urlunparse(
+        parsed._replace(
+            scheme=parsed.scheme.lower(),
+            netloc=netloc,
+            query=urlencode(query, doseq=True),
+        )
+    )
+
+
+def _is_tracking_query_param(key: str) -> bool:
+    normalized = (key or "").lower()
+    return normalized.startswith("utm_") or normalized in TRACKING_QUERY_PARAMS
