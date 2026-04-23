@@ -1,5 +1,6 @@
 """Tests for long and visual post dry-run script behavior."""
 
+import json
 import types
 import sys
 from contextlib import contextmanager
@@ -158,16 +159,19 @@ class TestVisualPostDryRun:
     @patch("visual_post.VisualPipeline")
     @patch("visual_post.ClaudeLogParser")
     @patch("visual_post.SynthesisPipeline")
+    @patch("visual_post.build_publication_preview")
     @patch("visual_post.script_context")
     def test_skips_publish_with_dry_run(
         self,
         mock_ctx,
+        mock_preview,
         MockPipelineFactory,
         MockParser,
         MockVisualPipeline,
         MockXClient,
         mock_monitoring,
         mock_dt,
+        tmp_path,
     ):
         config = _make_visual_post_config()
         db = MagicMock()
@@ -188,12 +192,36 @@ class TestVisualPostDryRun:
             ),
             image_prompt="ANNOTATED | Insight | Visual dry run post",
         )
+        mock_preview.return_value = {
+            "content": {
+                "id": 43,
+                "content_type": "x_visual",
+                "published_url": None,
+                "tweet_id": None,
+            },
+            "queue": None,
+            "claim_check": None,
+            "persona_guard": None,
+            "alt_text": {"status": "passed", "required": True, "issues": []},
+            "license_guard": {"status": "passed", "restricted_sources": []},
+            "attribution_guard": {"status": "passed", "missing_sources": []},
+            "hashtag_suggestions": None,
+            "platforms": {},
+        }
 
         import visual_post
 
         original_argv = sys.argv
         try:
-            sys.argv = ["visual_post.py", "--dry-run"]
+            artifact_dir = tmp_path / "artifacts"
+            sys.argv = [
+                "visual_post.py",
+                "--dry-run",
+                "--artifact-dir",
+                str(artifact_dir),
+                "--artifact-format",
+                "json",
+            ]
             visual_post.main()
         finally:
             sys.argv = original_argv
@@ -202,4 +230,12 @@ class TestVisualPostDryRun:
         db.mark_published.assert_not_called()
         db.insert_generated_content.assert_called_once()
         assert db.insert_pipeline_run.call_args.kwargs["outcome"] == "dry_run"
+        artifact_path = artifact_dir / "visual-post-43.json"
+        payload = json.loads(artifact_path.read_text())
+        assert payload["artifact_type"] == "visual_post_review"
+        assert payload["content"]["text"] == "Visual dry run post"
+        assert payload["content"]["image_path"] == "/tmp/presence-images/test.png"
+        assert payload["image"]["spec"] == "ANNOTATED | Insight | Visual dry run post"
+        assert payload["run"]["outcome"] == "dry_run"
+        assert payload["preview"]["content"]["id"] == 43
         mock_monitoring.assert_called_once_with("run-visual-post")

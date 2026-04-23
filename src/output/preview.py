@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from synthesis.alt_text_guard import validate_alt_text
@@ -412,6 +413,96 @@ def build_publication_preview(
 def preview_to_json(preview: dict) -> str:
     """Serialize a preview as stable, readable JSON."""
     return json.dumps(preview, indent=2, sort_keys=True)
+
+
+def visual_post_artifact_filename(content_id: int | None, *, artifact_format: str = "json") -> str:
+    """Return a stable filename for a visual post review artifact."""
+    if artifact_format not in {"json", "markdown"}:
+        raise ValueError("artifact_format must be 'json' or 'markdown'")
+    extension = "json" if artifact_format == "json" else "md"
+    prefix = f"visual-post-{content_id}" if content_id is not None else "visual-post-preview"
+    return f"{prefix}.{extension}"
+
+
+def visual_post_artifact_to_json(artifact: dict) -> str:
+    """Serialize a visual post artifact as stable, readable JSON."""
+    return json.dumps(artifact, indent=2, sort_keys=True)
+
+
+def format_visual_post_artifact(artifact: dict) -> str:
+    """Render a visual post artifact for manual review."""
+    run = artifact.get("run") or {}
+    content = artifact.get("content") or {}
+    image = artifact.get("image") or {}
+    preview = artifact.get("preview") or {}
+
+    lines = [
+        "# Visual Post Review",
+        "",
+        f"- Artifact type: {artifact.get('artifact_type', 'visual_post_review')}",
+        f"- Generated at: {artifact.get('generated_at', 'unknown')}",
+        f"- Outcome: {run.get('outcome', 'unknown')}",
+    ]
+    if content.get("id") is not None:
+        lines.append(f"- Content ID: {content['id']}")
+    if run.get("planned_topic_id") is not None:
+        lines.append(f"- Planned topic ID: {run['planned_topic_id']}")
+    if run.get("planned_topic") and run["planned_topic"].get("topic"):
+        topic = run["planned_topic"]["topic"]
+        angle = run["planned_topic"].get("angle")
+        lines.append(
+            f"- Planned topic: {topic}" + (f" ({angle})" if angle else "")
+        )
+    if run.get("rejection_reason"):
+        lines.append(f"- Rejection reason: {run['rejection_reason']}")
+    if run.get("published_url"):
+        lines.append(f"- Published URL: {run['published_url']}")
+    if run.get("tweet_id"):
+        lines.append(f"- Tweet ID: {run['tweet_id']}")
+
+    lines.extend(
+        [
+            "",
+            "## Final Text",
+            "",
+            content.get("text") or artifact.get("final_text") or "",
+            "",
+            "## Image",
+            "",
+            f"- Path: {image.get('path') or content.get('image_path') or 'n/a'}",
+            f"- Style: {image.get('style') or 'n/a'}",
+            f"- Provider: {image.get('provider') or 'n/a'}",
+            f"- Alt text: {image.get('alt_text') or content.get('image_alt_text') or 'n/a'}",
+            "",
+            "### Image Spec",
+            "",
+            image.get("spec") or content.get("image_prompt") or "",
+            "",
+            "## Publication Preview",
+            "",
+            format_preview(preview) if preview else "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_visual_post_artifact(
+    artifact: dict,
+    path: str | Path,
+    *,
+    artifact_format: str = "json",
+) -> Path:
+    """Write a visual post artifact as JSON or markdown."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if artifact_format == "json":
+        body = visual_post_artifact_to_json(artifact) + "\n"
+    elif artifact_format == "markdown":
+        body = format_visual_post_artifact(artifact)
+    else:
+        raise ValueError("artifact_format must be 'json' or 'markdown'")
+    target.write_text(body, encoding="utf-8")
+    return target
 
 
 def format_preview(preview: dict) -> str:
