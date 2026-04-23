@@ -200,6 +200,80 @@ class TestNewsletterAssembler:
         )
         assert all(candidate.score > 0 for candidate in content.subject_candidates)
 
+    def test_history_biases_candidate_order_without_overriding_heuristics(self, db):
+        """Historical winners can move a close subject ahead of the fallback."""
+        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        week_start = now - timedelta(days=7)
+        assembler = NewsletterAssembler(db)
+        subject_context = {
+            "blog_titles": [],
+            "thread_hooks": ["Launch notes"],
+            "post_hooks": [],
+            "content_types": [],
+        }
+        fallback_subject = "Building with AI — Week of Apr 16"
+
+        history_rows = [
+            {
+                "subject": "Launch notes that landed",
+                "open_rate": 0.58,
+                "click_rate": 0.13,
+                "unsubscribes": 0,
+                "subscriber_count": 100,
+                "sent_at": "2026-03-20T00:00:00+00:00",
+            },
+            {
+                "subject": "Launch notes for builders",
+                "open_rate": 0.53,
+                "click_rate": 0.1,
+                "unsubscribes": 0,
+                "subscriber_count": 100,
+                "sent_at": "2026-03-13T00:00:00+00:00",
+            },
+            {
+                "subject": "Launch notes people read",
+                "open_rate": 0.49,
+                "click_rate": 0.08,
+                "unsubscribes": 0,
+                "subscriber_count": 100,
+                "sent_at": "2026-03-06T00:00:00+00:00",
+            },
+            {
+                "subject": "Plain weekly digest",
+                "open_rate": 0.18,
+                "click_rate": 0.01,
+                "unsubscribes": 0,
+                "subscriber_count": 100,
+                "sent_at": "2026-02-27T00:00:00+00:00",
+            },
+        ]
+
+        with patch.object(
+            db,
+            "get_newsletter_subject_performance",
+            return_value=history_rows,
+        ):
+            ranked_with_history = assembler.generate_subject_candidates(
+                week_start,
+                now,
+                subject_context=subject_context,
+                fallback_subject=fallback_subject,
+            )
+
+        ranked_without_history = assembler.generate_subject_candidates(
+            week_start,
+            now,
+            subject_context=subject_context,
+            fallback_subject=fallback_subject,
+            subject_history=[],
+        )
+
+        assert ranked_without_history[0].subject == fallback_subject
+        assert ranked_with_history[0].subject == "This week: Launch notes"
+        assert ranked_with_history[0].score > ranked_without_history[0].score
+        assert ranked_with_history[0].metadata["history"]["matched_tokens"]
+        assert "history match" in ranked_with_history[0].rationale
+
     def test_includes_site_url_footer(self, db):
         """Newsletter footer includes site URL."""
         now = datetime.now(timezone.utc)

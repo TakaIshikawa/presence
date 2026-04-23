@@ -91,6 +91,40 @@ def _candidate_to_dict(candidate: NewsletterSubjectCandidate) -> dict:
     }
 
 
+def _selected_candidate(
+    candidates: list[NewsletterSubjectCandidate], selected_subject: str
+) -> NewsletterSubjectCandidate | None:
+    """Return the stored candidate that matches the selected subject."""
+    for candidate in candidates:
+        if candidate.subject == selected_subject:
+            return candidate
+    return None
+
+
+def _subject_selection_payload(
+    selected_subject: str,
+    candidates: list[NewsletterSubjectCandidate],
+    manual_subject: str,
+) -> dict:
+    """Build a structured explanation for the selected subject line."""
+    ranked_candidates = [_candidate_to_dict(candidate) for candidate in candidates]
+    selected_candidate = _selected_candidate(candidates, selected_subject)
+    payload = {
+        "selected_subject": selected_subject,
+        "manual_subject": manual_subject,
+        "selected_candidate": _candidate_to_dict(selected_candidate)
+        if selected_candidate
+        else {},
+        "ranked_candidates": ranked_candidates,
+        "alternatives": [
+            candidate for candidate in ranked_candidates if candidate["subject"] != selected_subject
+        ],
+    }
+    if selected_candidate and selected_candidate.metadata.get("history"):
+        payload["history"] = selected_candidate.metadata["history"]
+    return payload
+
+
 def _utm_metadata(config, content) -> dict:
     """Collect UTM configuration and generated campaign metadata for review."""
     newsletter = config.newsletter
@@ -108,15 +142,22 @@ def _preview_payload(
     content,
     selected_subject: str,
     candidates: list[NewsletterSubjectCandidate],
+    manual_subject: str,
     week_start: datetime,
     week_end: datetime,
 ) -> dict:
     """Build the structured newsletter preview payload."""
+    subject_selection = _subject_selection_payload(
+        selected_subject,
+        candidates,
+        manual_subject,
+    )
     return {
         "selected_subject": selected_subject,
         "body_markdown": content.body_markdown,
         "source_content_ids": content.source_content_ids,
         "subject_candidates": [_candidate_to_dict(candidate) for candidate in candidates],
+        "subject_selection": subject_selection,
         "week_range": {
             "start": week_start.isoformat(),
             "end": week_end.isoformat(),
@@ -133,6 +174,7 @@ def _format_preview_json(payload: dict) -> str:
 def _format_preview_markdown(payload: dict) -> str:
     """Format a newsletter preview as Markdown."""
     candidates = payload["subject_candidates"]
+    selection = payload.get("subject_selection") or {}
     candidate_lines = [
         (
             f"- {candidate['subject']} "
@@ -153,6 +195,10 @@ def _format_preview_markdown(payload: dict) -> str:
         f"- End: {payload['week_range']['end']}\n\n"
         f"## Selected Subject\n\n"
         f"{payload['selected_subject']}\n\n"
+        f"## Subject Selection\n\n"
+        f"- Manual subject: {selection.get('manual_subject') or 'None'}\n"
+        f"- Rationale: {selection.get('selected_candidate', {}).get('rationale') or 'None'}\n"
+        f"- History: {json.dumps(selection.get('history', {}), sort_keys=True)}\n\n"
         f"## Source Content IDs\n\n"
         f"{source_ids}\n\n"
         f"## UTM Metadata\n\n"
@@ -266,6 +312,7 @@ def main():
                 content,
                 selected_subject,
                 candidates_for_storage,
+                manual_subject,
                 week_start,
                 week_end,
             )
@@ -305,14 +352,20 @@ def main():
         result = client.send(selected_subject, content.body_markdown)
 
         if result.success:
+            subject_selection = _subject_selection_payload(
+                selected_subject,
+                candidates_for_storage,
+                manual_subject,
+            )
+            send_metadata = dict(getattr(content, "metadata", None) or {})
+            send_metadata["subject_selection"] = subject_selection
             send_kwargs = {
                 "issue_id": result.issue_id or "",
                 "subject": selected_subject,
                 "content_ids": content.source_content_ids,
                 "subscriber_count": subscriber_count,
+                "metadata": send_metadata,
             }
-            if content.metadata:
-                send_kwargs["metadata"] = content.metadata
             newsletter_send_id = db.insert_newsletter_send(**send_kwargs)
             updater = getattr(db, "update_newsletter_subject_candidates_send", None)
             if callable(updater) and candidate_ids:
