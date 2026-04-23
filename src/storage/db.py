@@ -591,7 +591,20 @@ class Database:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
+        if "content_publications" in tables:
+            cp_cols = {
+                row[1]
+                for row in self.conn.execute("PRAGMA table_info(content_publications)")
+            }
+            if "next_retry_at" not in cp_cols:
+                self.conn.execute("ALTER TABLE content_publications ADD COLUMN next_retry_at TEXT")
+            if "last_error_at" not in cp_cols:
+                self.conn.execute("ALTER TABLE content_publications ADD COLUMN last_error_at TEXT")
+            if "error_category" not in cp_cols:
+                self.conn.execute("ALTER TABLE content_publications ADD COLUMN error_category TEXT")
+
         if "planned_topics" not in tables:
+            self.conn.commit()
             return
 
         self.conn.execute("""

@@ -542,6 +542,41 @@ class TestInitSchemaMigrations:
             assert "idx_content_publications_platform_status" in indexes
             assert "idx_content_publications_retry" in indexes
 
+    def test_migration_adds_publication_retry_columns_before_schema_indexes(self, schema_path):
+        """Old content_publications tables should initialize before retry index creation."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE content_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_id INTEGER NOT NULL,
+                    platform TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    platform_post_id TEXT,
+                    platform_url TEXT,
+                    error TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    published_at TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(content_id, platform)
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {
+                row[1]
+                for row in db.conn.execute("PRAGMA table_info(content_publications)")
+            }
+            assert "next_retry_at" in cols
+            assert "last_error_at" in cols
+            assert "error_category" in cols
+            indexes = {
+                row[1]
+                for row in db.conn.execute("PRAGMA index_list(content_publications)")
+            }
+            assert "idx_content_publications_retry" in indexes
+
     def test_migration_creates_content_variants_for_existing_schema(self, schema_path):
         """Test that content_variants is added to an existing in-memory schema."""
         with Database(":memory:") as db:

@@ -195,18 +195,18 @@ operations:
   - monitoring
   runtimeType: check
 runs:
-- runId: run-1776744870158
+- runId: run-1776925173131
   operationId: run-daily
   sessionId: launchd-automated
-  startedAt: '2026-04-20 14:59:54'
-  completedAt: '2026-04-20 14:59:54'
+  startedAt: '2026-04-23 06:12:59'
+  completedAt: '2026-04-23 06:12:59'
   status: completed
   summary: Daily digest via launchd (state synced from database)
   costUsd: 0.0
   agent:
     agentType: launchd
     model: n/a
-- runId: run-1776744870158
+- runId: run-1776925173131
   operationId: run-weekly
   sessionId: launchd-automated
   startedAt: '2026-04-12 03:01:36'
@@ -217,14 +217,51 @@ runs:
   agent:
     agentType: launchd
     model: n/a
-- runId: run-1776824787943
+- runId: run-1776926657657
   operationId: run-poll
   sessionId: launchd-automated
-  startedAt: '2026-04-22T02:24:56.136245+00:00'
-  completedAt: '2026-04-22T02:24:56.136245+00:00'
+  startedAt: '2026-04-23T06:43:00.767575+00:00'
+  completedAt: '2026-04-23T06:43:00.767575+00:00'
   status: completed
   summary: Automated poll via launchd (state synced from database)
   costUsd: 0.0
   agent:
     agentType: launchd
     model: n/a
+alerts:
+  status: ok
+  generatedAt: '2026-04-23T06:44:17.657543+00:00'
+  thresholds:
+    max_consecutive_publish_failures: 3
+    max_ingestion_age_minutes: 60
+    max_queue_backlog_items: 10
+    evaluation_window_hours: 24
+    min_evaluation_runs: 3
+    min_evaluation_pass_rate: 0.5
+  checks:
+    consecutive_publish_failures:
+      status: ok
+      value: 0
+      threshold: 3
+      summary: Consecutive publish failures within threshold
+    stale_ingestion:
+      status: ok
+      latestAt: '2026-04-23T06:43:00.767575+00:00'
+      ageMinutes: 1.28
+      threshold: 60
+      summary: Ingestion freshness within threshold
+    queue_backlog:
+      status: ok
+      value: 0
+      threshold: 10
+      summary: Publish queue backlog within threshold
+    evaluation_pass_rate:
+      status: ok
+      passed: 0
+      total: 2
+      passRate: 0.0
+      threshold: 0.5
+      windowHours: 24
+      minimumRuns: 3
+      summary: Evaluation pass rate within threshold
+  triggered: []
