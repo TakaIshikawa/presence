@@ -47,6 +47,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="json",
         help="Artifact format to write when --artifact-dir is set.",
     )
+    target_group = parser.add_mutually_exclusive_group()
+    target_group.add_argument(
+        "--content-idea",
+        action="store_true",
+        help="Persist a matching content idea seed in addition to the blog artifact.",
+    )
+    target_group.add_argument(
+        "--planned-topic",
+        action="store_true",
+        help="Persist a matching planned topic seed in addition to the blog artifact.",
+    )
+    parser.add_argument(
+        "--priority",
+        choices=("high", "normal", "low"),
+        default="normal",
+        help="Priority for --content-idea seeds.",
+    )
+    parser.add_argument(
+        "--target-date",
+        help="Target date for --planned-topic seeds (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--topic",
+        help="Override the topic used for the downstream seed record.",
+    )
+    parser.add_argument(
+        "--angle",
+        help="Optional angle used when creating a planned topic seed.",
+    )
+    parser.add_argument(
+        "--campaign-id",
+        type=int,
+        help="Optional campaign ID for planned topic seeds.",
+    )
     return parser.parse_args(argv)
 
 
@@ -54,6 +88,8 @@ def run(args: argparse.Namespace) -> list[dict]:
     """Select resonated posts and either dry-run or write review artifacts."""
     if not args.dry_run and args.artifact_dir is None:
         raise PostMortemRepurposerError("Use --dry-run or provide --artifact-dir")
+    if args.planned_topic and not args.target_date:
+        raise PostMortemRepurposerError("--target-date is required with --planned-topic")
 
     outcomes: list[dict] = []
     with script_context() as (_config, db):
@@ -76,6 +112,8 @@ def run(args: argparse.Namespace) -> list[dict]:
                 "dry_run": bool(args.dry_run),
                 "artifact_path": None,
                 "variant_id": None,
+                "content_idea_id": None,
+                "planned_topic_id": None,
             }
 
             if args.dry_run:
@@ -94,11 +132,44 @@ def run(args: argparse.Namespace) -> list[dict]:
             write_artifact(artifact, artifact_path, artifact_format=args.format)
             variant_id = repurposer.record_seed_variant(artifact)
             logger.info("Wrote blog seed artifact: %s", artifact_path)
+
+            if args.content_idea:
+                idea_result = repurposer.record_content_idea(
+                    artifact,
+                    priority=args.priority,
+                    topic=args.topic,
+                )
+                outcome["content_idea_id"] = idea_result.record_id
+                outcome["content_idea_created"] = idea_result.created
+                logger.info(
+                    "Seeded content idea %s for #%s (%s)",
+                    idea_result.record_id,
+                    candidate.content_id,
+                    "created" if idea_result.created else "existing",
+                )
+            elif args.planned_topic:
+                planned_result = repurposer.record_planned_topic(
+                    artifact,
+                    target_date=args.target_date,
+                    topic=args.topic,
+                    angle=args.angle,
+                    campaign_id=args.campaign_id,
+                )
+                outcome["planned_topic_id"] = planned_result.record_id
+                outcome["planned_topic_created"] = planned_result.created
+                logger.info(
+                    "Seeded planned topic %s for #%s (%s)",
+                    planned_result.record_id,
+                    candidate.content_id,
+                    "created" if planned_result.created else "existing",
+                )
+
             outcomes.append(
                 {
                     **outcome,
                     "artifact_path": str(artifact_path),
                     "variant_id": variant_id,
+                    "artifact": artifact_to_dict(artifact),
                 }
             )
 
@@ -115,11 +186,14 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    if args.dry_run:
-        print(json.dumps(outcomes, indent=2, sort_keys=True))
-    else:
+    print(json.dumps(outcomes, indent=2, sort_keys=True))
+    if not args.dry_run:
         for outcome in outcomes:
-            print(f"Blog seed artifact: {outcome['artifact_path']}", file=sys.stderr)
+            print(
+                f"Blog seed artifact: {outcome['artifact_path']} "
+                f"(variant {outcome['variant_id']})",
+                file=sys.stderr,
+            )
     return 0
 
 

@@ -175,6 +175,63 @@ def test_duplicate_prevention_excludes_existing_repurposed_blog_seed(db):
     assert PostMortemRepurposer(db).find_eligible_posts() == []
 
 
+def test_seed_records_carry_source_metadata_and_skip_duplicates(db):
+    content_id = _published_post(db)
+    repurposer = PostMortemRepurposer(db)
+    artifact = repurposer.build_seed(repurposer.find_eligible_posts()[0])
+
+    idea_result = repurposer.record_content_idea(artifact, topic="testing")
+    idea = db.get_content_idea(idea_result.record_id)
+    idea_metadata = json.loads(idea["source_metadata"])
+
+    assert idea_result.created is True
+    assert idea_metadata["source"] == "post_mortem_repurposer"
+    assert idea_metadata["source_content_id"] == content_id
+    assert idea_metadata["artifact_title"] == artifact.title
+    assert idea_metadata["artifact_type"] == artifact.artifact_type
+    duplicate_idea = repurposer.record_content_idea(artifact, topic="testing")
+    assert duplicate_idea.record_id == idea_result.record_id
+    assert not duplicate_idea.created
+    assert not repurposer.find_eligible_posts()
+
+
+def test_planned_topic_seed_carries_artifact_metadata_and_skips_duplicates(db):
+    content_id = _published_post(db)
+    repurposer = PostMortemRepurposer(db)
+    artifact = repurposer.build_seed(repurposer.find_eligible_posts()[0])
+
+    planned_result = repurposer.record_planned_topic(
+        artifact,
+        target_date="2026-05-01",
+        topic="testing",
+        angle="turn the post into a lesson",
+    )
+    planned = db.conn.execute(
+        "SELECT topic, angle, target_date, source_material FROM planned_topics WHERE id = ?",
+        (planned_result.record_id,),
+    ).fetchone()
+    planned_metadata = json.loads(planned["source_material"])
+
+    assert planned_result.created is True
+    assert planned["topic"] == "testing"
+    assert planned["angle"] == "turn the post into a lesson"
+    assert planned["target_date"] == "2026-05-01"
+    assert planned_metadata["source"] == "post_mortem_repurposer"
+    assert planned_metadata["source_content_id"] == content_id
+    assert planned_metadata["artifact_title"] == artifact.title
+    assert planned_metadata["planned_topic"]["target_date"] == "2026-05-01"
+    assert (
+        repurposer.record_planned_topic(
+            artifact,
+            target_date="2026-05-01",
+            topic="testing",
+            angle="turn the post into a lesson",
+        ).record_id
+        == planned_result.record_id
+    )
+    assert not repurposer.find_eligible_posts()
+
+
 def test_repurpose_resonated_cli_writes_artifact_and_variant(db, tmp_path, capsys):
     content_id = _published_post(db)
     artifact_dir = tmp_path / "artifacts"
@@ -212,6 +269,92 @@ def test_repurpose_resonated_cli_writes_artifact_and_variant(db, tmp_path, capsy
         db.get_content_variant(content_id, BLOG_SEED_VARIANT_PLATFORM, BLOG_SEED_VARIANT_TYPE)
         is not None
     )
+
+
+def test_repurpose_resonated_cli_creates_content_idea(db, tmp_path, capsys):
+    content_id = _published_post(db)
+    artifact_dir = tmp_path / "artifacts"
+
+    import repurpose_resonated
+
+    class Context:
+        def __enter__(self):
+            return None, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with (
+        patch("repurpose_resonated.script_context", return_value=Context()),
+        patch("repurpose_resonated.update_monitoring"),
+    ):
+        exit_code = repurpose_resonated.main(
+            [
+                "--artifact-dir",
+                str(artifact_dir),
+                "--content-idea",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload[0]["content_idea_id"] is not None
+    assert payload[0]["content_idea_created"] is True
+    idea = db.get_content_idea(payload[0]["content_idea_id"])
+    assert idea["source"] == "post_mortem_repurposer"
+    metadata = json.loads(idea["source_metadata"])
+    assert metadata["source_content_id"] == content_id
+    assert metadata["artifact_type"] == "post_mortem_blog_seed"
+    assert Path(payload[0]["artifact_path"]).exists()
+
+
+def test_repurpose_resonated_cli_creates_planned_topic(db, tmp_path, capsys):
+    content_id = _published_post(db)
+    artifact_dir = tmp_path / "artifacts"
+
+    import repurpose_resonated
+
+    class Context:
+        def __enter__(self):
+            return None, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with (
+        patch("repurpose_resonated.script_context", return_value=Context()),
+        patch("repurpose_resonated.update_monitoring"),
+    ):
+        exit_code = repurpose_resonated.main(
+            [
+                "--artifact-dir",
+                str(artifact_dir),
+                "--planned-topic",
+                "--target-date",
+                "2026-05-01",
+                "--topic",
+                "testing",
+                "--angle",
+                "turn the post into a lesson",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload[0]["planned_topic_id"] is not None
+    assert payload[0]["planned_topic_created"] is True
+    planned = db.conn.execute(
+        "SELECT topic, angle, target_date, source_material FROM planned_topics WHERE id = ?",
+        (payload[0]["planned_topic_id"],),
+    ).fetchone()
+    assert planned["topic"] == "testing"
+    assert planned["angle"] == "turn the post into a lesson"
+    metadata = json.loads(planned["source_material"])
+    assert metadata["source_content_id"] == content_id
+    assert metadata["artifact_type"] == "post_mortem_blog_seed"
+    assert metadata["planned_topic"]["target_date"] == "2026-05-01"
 
 
 def test_repurpose_resonated_cli_dry_run_does_not_write_variant(db, capsys):
