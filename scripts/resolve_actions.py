@@ -31,6 +31,15 @@ WATCHDOG_TIMEOUT = 300  # 5 minutes
 
 _EXEC_TAG_RE = re.compile(r"^\[(\w+)\]")
 _VALID_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet", "follow"}
+_REPLY_SETTINGS_ALLOWED = {"everyone", None, ""}
+_PUBLIC_METRIC_KEYS = (
+    "like_count",
+    "retweet_count",
+    "reply_count",
+    "quote_count",
+    "bookmark_count",
+    "impression_count",
+)
 
 
 def parse_execution_type(description: str) -> str | None:
@@ -46,24 +55,121 @@ def is_already_resolved(payload: dict | None) -> bool:
     return bool(payload and payload.get("execution_type"))
 
 
+def _parse_tweet_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp into a timezone-aware datetime."""
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalise_reply_settings(value: str | None) -> str | None:
+    """Normalise reply settings for eligibility checks."""
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def _tweet_public_metrics(tweet: dict) -> dict:
+    """Return public metrics as a plain dict."""
+    metrics = tweet.get("public_metrics") or {}
+    return metrics if isinstance(metrics, dict) else {}
+
+
+def _tweet_public_metric_score(tweet: dict) -> int:
+    """Collapse public metrics into a deterministic comparison score."""
+    metrics = _tweet_public_metrics(tweet)
+    score = 0
+    for key in _PUBLIC_METRIC_KEYS:
+        value = metrics.get(key, 0)
+        if isinstance(value, (int, float)):
+            score += int(value)
+    return score
+
+
+def _tweet_selection_key(tweet: dict) -> tuple:
+    """Build a stable ordering key for tweet comparison."""
+    created_at = _parse_tweet_datetime(tweet.get("created_at"))
+    timestamp_rank = (
+        -created_at.timestamp() if created_at else float("inf")
+    )
+    metrics = _tweet_public_metrics(tweet)
+
+    return (
+        timestamp_rank,
+        -_tweet_public_metric_score(tweet),
+        -int(metrics.get("like_count", 0) or 0),
+        -int(metrics.get("retweet_count", 0) or 0),
+        -int(metrics.get("reply_count", 0) or 0),
+        -int(metrics.get("quote_count", 0) or 0),
+        -int(metrics.get("bookmark_count", 0) or 0),
+        -int(metrics.get("impression_count", 0) or 0),
+        str(tweet.get("id", "")),
+    )
+
+
+def _is_tweet_eligible(tweet: dict, execution_type: str) -> bool:
+    """Check whether a tweet may be used for an action."""
+    if execution_type not in ("reply", "quote_tweet"):
+        return True
+
+    reply_settings = _normalise_reply_settings(tweet.get("reply_settings"))
+    return reply_settings in _REPLY_SETTINGS_ALLOWED
+
+
 def select_tweet_for_action(
     tweets: list[dict], execution_type: str
-) -> dict | None:
-    """Select best tweet from fetched list based on execution_type.
+) -> tuple[dict | None, dict | None]:
+    """Select the best tweet and return selection metadata.
 
-    For reply: pick most recent tweet with reply_settings='everyone'.
-    For like/retweet/quote_tweet: pick the most recent tweet.
+    For reply and quote_tweet: only consider tweets with reply_settings that
+    permit public engagement.
     """
     if not tweets:
-        return None
+        return None, None
 
-    if execution_type == "reply":
-        for tweet in tweets:
-            if tweet.get("reply_settings", "everyone") == "everyone":
-                return tweet
-        return None
+    eligible_tweets = [
+        tweet for tweet in tweets if _is_tweet_eligible(tweet, execution_type)
+    ]
+    if not eligible_tweets:
+        return None, {
+            "candidate_count": len(tweets),
+            "eligible_count": 0,
+            "selection_rationale": (
+                f"No eligible tweets for {execution_type}; "
+                "reply settings blocked all candidates"
+            ),
+        }
 
-    return tweets[0]
+    chosen = sorted(eligible_tweets, key=_tweet_selection_key)[0]
+    chosen_created_at = _parse_tweet_datetime(chosen.get("created_at"))
+    chosen_metrics = _tweet_public_metrics(chosen)
+    selection_metrics = {
+        "candidate_count": len(tweets),
+        "eligible_count": len(eligible_tweets),
+        "public_metric_score": _tweet_public_metric_score(chosen),
+        "created_at": (
+            chosen_created_at.isoformat() if chosen_created_at else None
+        ),
+        "public_metrics": chosen_metrics,
+    }
+    selection_rationale = (
+        f"Selected tweet {chosen['id']} from {len(eligible_tweets)} "
+        f"eligible candidate(s) using recency-first scoring"
+    )
+    return chosen, {
+        "candidate_count": len(tweets),
+        "eligible_count": len(eligible_tweets),
+        "selection_rationale": selection_rationale,
+        "selection_metrics": selection_metrics,
+    }
 
 
 def build_resolved_payload(
@@ -71,6 +177,8 @@ def build_resolved_payload(
     tweet: dict | None = None,
     draft: str | None = None,
     x_user_id: str | None = None,
+    selection_rationale: str | None = None,
+    selection_metrics: dict | None = None,
 ) -> dict:
     """Construct the resolved payload dict."""
     payload = {
@@ -82,6 +190,8 @@ def build_resolved_payload(
     if tweet:
         payload["tweet_id"] = tweet["id"]
         payload["tweet_content"] = tweet["text"]
+        payload["tweet_created_at"] = tweet.get("created_at")
+        payload["tweet_public_metrics"] = _tweet_public_metrics(tweet)
         if execution_type == "quote_tweet":
             payload["quote_tweet_id"] = tweet["id"]
             payload["quoted_tweet_id"] = tweet["id"]
@@ -89,6 +199,10 @@ def build_resolved_payload(
             payload["reply_settings"] = tweet["reply_settings"]
     if draft:
         payload["draft"] = draft
+    if selection_rationale:
+        payload["selection_rationale"] = selection_rationale
+    if selection_metrics:
+        payload["selection_metrics"] = selection_metrics
     return payload
 
 
@@ -114,13 +228,17 @@ def _resolve_single_action(
             execution_type="follow", x_user_id=x_user_id
         )
 
-    tweet = select_tweet_for_action(tweets, exec_type)
+    tweet, selection = select_tweet_for_action(tweets, exec_type)
     if not tweet:
         return None
 
     if exec_type in ("like", "retweet"):
         return build_resolved_payload(
-            execution_type=exec_type, tweet=tweet, x_user_id=x_user_id
+            execution_type=exec_type,
+            tweet=tweet,
+            x_user_id=x_user_id,
+            selection_rationale=selection["selection_rationale"],
+            selection_metrics=selection["selection_metrics"],
         )
 
     if exec_type == "reply":
@@ -145,6 +263,8 @@ def _resolve_single_action(
         tweet=tweet,
         draft=draft,
         x_user_id=x_user_id,
+        selection_rationale=selection["selection_rationale"],
+        selection_metrics=selection["selection_metrics"],
     )
 
 
