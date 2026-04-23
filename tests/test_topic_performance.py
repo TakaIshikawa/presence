@@ -1,6 +1,12 @@
+import json
+
 import pytest
 
-from evaluation.topic_performance import TopicPerformanceAnalyzer
+from evaluation.topic_performance import (
+    TopicPerformanceAnalyzer,
+    format_topic_performance_json,
+    format_topic_performance_table,
+)
 
 
 def _published_topic_post(
@@ -95,3 +101,19 @@ def test_invalid_platform_is_rejected(db):
 
     with pytest.raises(ValueError):
         analyzer.get_topic_performance(platform="mastodon")
+
+
+def test_invalid_topics_return_an_explicit_empty_report(db):
+    analyzer = TopicPerformanceAnalyzer(db)
+
+    report = analyzer.build_topic_performance_report(topics=["not-a-topic"], days=30)
+
+    assert report.rows == []
+    assert report.valid_topics == []
+    assert report.invalid_topics == ["not-a-topic"]
+    assert "No topic performance rows matched" in format_topic_performance_table(report)
+
+    payload = json.loads(format_topic_performance_json(report))
+    assert payload["status"] == "empty"
+    assert payload["invalid_topics"] == ["not-a-topic"]
+    assert payload["rows"] == []

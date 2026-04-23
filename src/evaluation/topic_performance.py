@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from evaluation.topic_extractor import TOPIC_TAXONOMY
 
@@ -36,6 +37,20 @@ class TopicPerformance:
     resonated_count: int
     low_resonance_count: int
     latest_published_at: str | None = None
+
+
+@dataclass(frozen=True)
+class TopicPerformanceReport:
+    """Topic performance query result and applied filters."""
+
+    days: int
+    platform: str
+    content_type: str | None
+    requested_topics: list[str]
+    valid_topics: list[str]
+    invalid_topics: list[str]
+    min_samples: int
+    rows: list[TopicPerformance]
 
 
 class TopicPerformanceAnalyzer:
@@ -82,6 +97,52 @@ class TopicPerformanceAnalyzer:
         scored.sort(key=lambda item: (-item[1], item[0]))
         return [topic for topic, _score in scored[:max_topics]]
 
+    def build_topic_performance_report(
+        self,
+        topics: list[str] | None = None,
+        days: int = 90,
+        content_type: str | None = None,
+        platform: str = "all",
+        min_samples: int = 1,
+    ) -> TopicPerformanceReport:
+        """Return topic performance rows plus the filters applied."""
+        normalized_platform = platform.lower() if platform else "all"
+        if normalized_platform not in {"all", "x", "bluesky"}:
+            raise ValueError("platform must be one of: all, x, bluesky")
+
+        requested_topics = list(dict.fromkeys(topics or []))
+        valid_topics, invalid_topics = normalize_topic_filters(requested_topics)
+        rows = []
+        if requested_topics and not valid_topics:
+            return TopicPerformanceReport(
+                days=days,
+                platform=normalized_platform,
+                content_type=content_type,
+                requested_topics=requested_topics,
+                valid_topics=[],
+                invalid_topics=invalid_topics,
+                min_samples=min_samples,
+                rows=[],
+            )
+
+        rows = self._fetch_topic_performance(
+            topics=valid_topics if requested_topics else None,
+            days=days,
+            content_type=content_type,
+            platform=normalized_platform,
+            min_samples=min_samples,
+        )
+        return TopicPerformanceReport(
+            days=days,
+            platform=normalized_platform,
+            content_type=content_type,
+            requested_topics=requested_topics,
+            valid_topics=valid_topics,
+            invalid_topics=invalid_topics,
+            min_samples=min_samples,
+            rows=rows,
+        )
+
     def get_topic_performance(
         self,
         topics: list[str] | None = None,
@@ -91,6 +152,23 @@ class TopicPerformanceAnalyzer:
         min_samples: int = 1,
     ) -> list[TopicPerformance]:
         """Return recent engagement performance grouped by topic."""
+        return self.build_topic_performance_report(
+            topics=topics,
+            days=days,
+            content_type=content_type,
+            platform=platform,
+            min_samples=min_samples,
+        ).rows
+
+    def _fetch_topic_performance(
+        self,
+        topics: list[str] | None = None,
+        days: int = 90,
+        content_type: str | None = None,
+        platform: str = "all",
+        min_samples: int = 1,
+    ) -> list[TopicPerformance]:
+        """Query recent engagement performance grouped by topic."""
         normalized_platform = platform.lower() if platform else "all"
         if normalized_platform not in {"all", "x", "bluesky"}:
             raise ValueError("platform must be one of: all, x, bluesky")
@@ -107,9 +185,9 @@ class TopicPerformanceAnalyzer:
             clauses.append("content_type = ?")
             params.append(content_type)
 
-        valid_topics = [
-            topic for topic in (topics or []) if topic in TOPIC_TAXONOMY and topic != "other"
-        ]
+        valid_topics, _invalid_topics = normalize_topic_filters(topics)
+        if topics is not None and not valid_topics:
+            return []
         if valid_topics:
             placeholders = ", ".join("?" for _ in valid_topics)
             clauses.append(f"topic IN ({placeholders})")
@@ -262,3 +340,99 @@ class TopicPerformanceAnalyzer:
             f"resonated={item.resonated_count}, "
             f"low_resonance={item.low_resonance_count}"
         )
+
+
+def normalize_topic_filters(topics: list[str] | None) -> tuple[list[str], list[str]]:
+    """Split requested topics into valid taxonomy topics and ignored entries."""
+    valid: list[str] = []
+    invalid: list[str] = []
+    seen: set[str] = set()
+
+    for topic in topics or []:
+        if topic in seen:
+            continue
+        seen.add(topic)
+        if topic in TOPIC_TAXONOMY and topic != "other":
+            valid.append(topic)
+        else:
+            invalid.append(topic)
+
+    return valid, invalid
+
+
+def topic_performance_report_to_dict(report: TopicPerformanceReport) -> dict[str, object]:
+    """Serialize a topic performance report for JSON output."""
+    return {
+        "status": "ok" if report.rows else "empty",
+        "days": report.days,
+        "platform": report.platform,
+        "content_type": report.content_type,
+        "requested_topics": report.requested_topics,
+        "valid_topics": report.valid_topics,
+        "invalid_topics": report.invalid_topics,
+        "min_samples": report.min_samples,
+        "row_count": len(report.rows),
+        "rows": [asdict(row) for row in report.rows],
+    }
+
+
+def format_topic_performance_json(report: TopicPerformanceReport) -> str:
+    """Format a topic performance report as JSON."""
+    return json.dumps(topic_performance_report_to_dict(report), indent=2, sort_keys=True)
+
+
+def format_topic_performance_table(report: TopicPerformanceReport) -> str:
+    """Format a topic performance report as a stable text table."""
+    lines = [
+        "Topic Performance Report",
+        "=" * 70,
+        f"Lookback:    last {report.days} days",
+        f"Platform:    {report.platform}",
+        f"Min samples: {report.min_samples}",
+    ]
+    if report.content_type:
+        lines.append(f"Content type: {report.content_type}")
+    if report.requested_topics:
+        lines.append(f"Requested topics: {', '.join(report.requested_topics)}")
+    if report.valid_topics and report.valid_topics != report.requested_topics:
+        lines.append(f"Valid topics:     {', '.join(report.valid_topics)}")
+    if report.invalid_topics:
+        lines.append(f"Ignored topics:   {', '.join(report.invalid_topics)}")
+    lines.append("")
+
+    if not report.rows:
+        lines.append("No topic performance rows matched the requested filters.")
+        return "\n".join(lines)
+
+    headers = [
+        "Topic",
+        "Samples",
+        "Avg Eng",
+        "Resonated",
+        "Low Res",
+        "Latest Published",
+    ]
+    rendered_rows = [
+        [
+            row.topic,
+            str(row.sample_count),
+            f"{row.avg_engagement:.2f}",
+            str(row.resonated_count),
+            str(row.low_resonance_count),
+            row.latest_published_at or "n/a",
+        ]
+        for row in report.rows
+    ]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rendered_rows))
+        for index in range(len(headers))
+    ]
+    lines.append(
+        "  ".join(header.ljust(widths[index]) for index, header in enumerate(headers))
+    )
+    lines.append("  ".join("-" * width for width in widths))
+    for row in rendered_rows:
+        lines.append(
+            "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+        )
+    return "\n".join(lines)
