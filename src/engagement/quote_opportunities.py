@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
@@ -112,6 +111,9 @@ class QuoteOpportunityRecommender:
         limit: int = 10,
         campaign_id: int | None = None,
         min_score: float = 0.35,
+        authors: list[str] | None = None,
+        topics: list[str] | None = None,
+        source_types: list[str] | None = None,
         now: datetime | None = None,
     ) -> list[QuoteOpportunity]:
         if days <= 0:
@@ -121,6 +123,17 @@ class QuoteOpportunityRecommender:
 
         now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         cutoff = now - timedelta(days=days)
+        normalized_authors = {
+            author
+            for author in (_normalize_author(value) for value in (authors or []))
+            if author
+        }
+        normalized_topics = {str(topic).strip().lower() for topic in (topics or []) if str(topic).strip()}
+        normalized_source_types = {
+            str(source_type).strip()
+            for source_type in (source_types or [])
+            if str(source_type).strip()
+        }
         campaign_rows = self._campaign_rows(campaign_id, now)
         if campaign_id is not None and not campaign_rows:
             raise ValueError(f"Campaign {campaign_id} is not active or does not exist")
@@ -133,7 +146,12 @@ class QuoteOpportunityRecommender:
         used_source_keys = self._used_source_keys()
 
         opportunities: list[QuoteOpportunity] = []
-        for row in self._candidate_rows(cutoff):
+        for row in self._candidate_rows(
+            cutoff,
+            authors=normalized_authors or None,
+            topics=normalized_topics or None,
+            source_types=normalized_source_types or None,
+        ):
             if _source_key(row) in used_source_keys:
                 continue
             if self.db.proactive_action_exists(_target_tweet_id(row), "quote_tweet"):
@@ -269,7 +287,14 @@ class QuoteOpportunityRecommender:
             draft_text=self._draft_text(row, topics, campaign_name),
         )
 
-    def _candidate_rows(self, cutoff: datetime) -> list[dict[str, Any]]:
+    def _candidate_rows(
+        self,
+        cutoff: datetime,
+        *,
+        authors: set[str] | None = None,
+        topics: set[str] | None = None,
+        source_types: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         rows = self.db.conn.execute(
             f"""SELECT *
                 FROM knowledge
@@ -283,6 +308,16 @@ class QuoteOpportunityRecommender:
             item = dict(row)
             timestamp = parse_datetime(item.get("published_at") or item.get("ingested_at") or item.get("created_at"))
             if timestamp is None or timestamp >= cutoff:
+                author_key = _normalize_author(item.get("author"))
+                source_type = str(item.get("source_type") or "")
+                if authors and author_key not in authors:
+                    continue
+                if source_types and source_type not in source_types:
+                    continue
+                if topics:
+                    text = " ".join(str(item.get(key) or "") for key in ("content", "insight", "author"))
+                    if not (set(classify_source_topics(text)) & topics):
+                        continue
                 candidates.append(item)
         return candidates
 
