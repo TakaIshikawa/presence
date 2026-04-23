@@ -146,6 +146,7 @@ def test_archive_jsonl_has_one_object_per_content_item(db):
 
     x_record = payloads[0]
     assert "First line\\nA large generated content body." in lines[0]
+    assert x_record["provenance"]["content"]["id"] == ids["x"]
     assert x_record["content"]["source_commits"] == ["sha-archive"]
     assert x_record["content"]["content_embedding"]["encoding"] == "base64"
     assert x_record["knowledge_links"][0]["id"] > 0

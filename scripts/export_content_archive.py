@@ -14,6 +14,7 @@ from typing import Any, TextIO
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from content_provenance import load_content_provenance
 from runner import script_context
 
 
@@ -226,6 +227,7 @@ def build_archive_record(db: Any, content_id: int, platform: str = "all") -> dic
     if row is None:
         raise ValueError(f"Content ID {content_id} not found")
 
+    provenance = load_content_provenance(db, content_id)
     publications = db.get_latest_publication_states(content_id)
     snapshots = db.get_engagement_snapshots_for_content(content_id)
     variants = db.list_content_variants(content_id)
@@ -236,6 +238,7 @@ def build_archive_record(db: Any, content_id: int, platform: str = "all") -> dic
 
     return _json_safe(
         {
+            "provenance": provenance,
             "content": _row_to_dict(row),
             "publications": publications,
             "engagement_snapshots": snapshots,
