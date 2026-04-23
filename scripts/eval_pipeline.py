@@ -2,6 +2,7 @@
 """Dry-run pipeline evaluation — generates content without posting or writing to DB."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from dataclasses import dataclass
@@ -78,6 +79,155 @@ def _commit_dicts(commits: list[dict]) -> list[dict]:
 
 def _prompt_texts(prompts: list) -> list[str]:
     return [p.prompt_text for p in prompts]
+
+
+def _window_to_dict(window: SourceWindow) -> dict:
+    return {
+        "run": window.run,
+        "hours": window.hours,
+        "commit_count": len(window.commits),
+        "prompt_count": len(window.prompts),
+    }
+
+
+def _result_status(final_score: float | None, rejection_reason: str | None, threshold: float) -> str:
+    if rejection_reason:
+        return "REJECTED"
+    if final_score is None:
+        return "UNKNOWN"
+    return "PASS" if final_score >= threshold * 10 else "BELOW"
+
+
+def _result_to_dict(result, window: SourceWindow, threshold: float, config) -> dict:
+    return {
+        "run": window.run,
+        "hours": window.hours,
+        "commit_count": len(window.commits),
+        "prompt_count": len(window.prompts),
+        "candidate_count": len(result.candidates),
+        "final_score": result.final_score,
+        "status": _result_status(result.final_score, result.comparison.reject_reason, threshold),
+        "rejection_reason": result.comparison.reject_reason,
+        "filter_stats": result.filter_stats or {},
+        "final_content": _redact_final_content(result.final_content, config),
+    }
+
+
+def _single_run_aggregate(run_rows: list[dict], threshold: float, num_candidates: int) -> dict:
+    run_count = len(run_rows)
+    if not run_count:
+        return {
+            "run_count": 0,
+            "average_score": None,
+            "rejection_rate": 0.0,
+            "candidate_survival_rate": 0.0,
+            "threshold": threshold,
+        }
+
+    avg_score = sum(row["final_score"] for row in run_rows if row["final_score"] is not None) / run_count
+    rejection_rate = sum(1 for row in run_rows if row["status"] == "REJECTED") / run_count
+    candidate_survival_rate = (
+        sum(row["candidate_count"] for row in run_rows) / (run_count * num_candidates)
+        if num_candidates else 0.0
+    )
+    return {
+        "run_count": run_count,
+        "average_score": avg_score,
+        "rejection_rate": rejection_rate,
+        "candidate_survival_rate": candidate_survival_rate,
+        "threshold": threshold,
+    }
+
+
+def _matrix_variant_aggregate(run_rows: list[dict], num_candidates: int, threshold: float) -> dict:
+    run_count = len(run_rows)
+    if not run_count:
+        return {
+            "run_count": 0,
+            "average_score": None,
+            "rejection_rate": 0.0,
+            "candidate_survival_rate": 0.0,
+            "threshold": threshold,
+        }
+
+    avg_score = sum(row["final_score"] for row in run_rows if row["final_score"] is not None) / run_count
+    rejection_rate = sum(1 for row in run_rows if row["status"] == "REJECTED") / run_count
+    candidate_survival_rate = (
+        sum(row["candidate_count"] for row in run_rows) / (run_count * num_candidates)
+        if num_candidates else 0.0
+    )
+    return {
+        "run_count": run_count,
+        "average_score": avg_score,
+        "rejection_rate": rejection_rate,
+        "candidate_survival_rate": candidate_survival_rate,
+        "threshold": threshold,
+    }
+
+
+def _matrix_overview(variant_rows: list[dict]) -> dict:
+    if not variant_rows:
+        return {
+            "variant_count": 0,
+            "run_count": 0,
+            "average_score": None,
+            "rejection_rate": 0.0,
+            "candidate_survival_rate": 0.0,
+            "ranked_variants": [],
+        }
+
+    run_count = sum(row["aggregate"]["run_count"] for row in variant_rows)
+    average_score = (
+        sum(
+            row["aggregate"]["average_score"] * row["aggregate"]["run_count"]
+            for row in variant_rows
+            if row["aggregate"]["average_score"] is not None
+        ) / run_count
+        if run_count else None
+    )
+    rejection_rate = (
+        sum(row["aggregate"]["rejection_rate"] * row["aggregate"]["run_count"] for row in variant_rows)
+        / run_count
+        if run_count else 0.0
+    )
+    candidate_survival_rate = (
+        sum(
+            row["aggregate"]["candidate_survival_rate"] * row["aggregate"]["run_count"]
+            for row in variant_rows
+        ) / run_count
+        if run_count else 0.0
+    )
+    ranked_variants = [
+        {
+            "name": row["name"],
+            "batch_id": row["batch_id"],
+            "average_score": row["aggregate"]["average_score"],
+            "rejection_rate": row["aggregate"]["rejection_rate"],
+            "candidate_survival_rate": row["aggregate"]["candidate_survival_rate"],
+        }
+        for row in variant_rows
+    ]
+    ranked_variants.sort(
+        key=lambda row: (
+            -(row["average_score"] if row["average_score"] is not None else float("-inf")),
+            row["rejection_rate"],
+            -row["candidate_survival_rate"],
+            row["name"],
+        )
+    )
+    return {
+        "variant_count": len(variant_rows),
+        "run_count": run_count,
+        "average_score": average_score,
+        "rejection_rate": rejection_rate,
+        "candidate_survival_rate": candidate_survival_rate,
+        "ranked_variants": ranked_variants,
+    }
+
+
+def _write_json_artifact(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _select_source_windows(
@@ -291,7 +441,15 @@ def _record_eval_result(
     )
 
 
-def _run_single(args, config, db, embedder, semantic_threshold, knowledge_store, log_parser) -> None:
+def _run_single(
+    args,
+    config,
+    db,
+    embedder,
+    semantic_threshold,
+    knowledge_store,
+    log_parser,
+):
     pipeline = _build_pipeline(
         config=config,
         db=db,
@@ -324,6 +482,7 @@ def _run_single(args, config, db, embedder, semantic_threshold, knowledge_store,
     )
 
     results = []
+    artifact_rows = []
     for window in windows:
         print(f"\n{'='*60}")
         print(f"Run {window.run}/{args.runs} — last {window.hours}h")
@@ -361,38 +520,102 @@ def _run_single(args, config, db, embedder, semantic_threshold, knowledge_store,
             )
             print(f"\n  Recorded result in batch {batch_id}")
 
-        results.append({
-            "run": window.run,
-            "hours": window.hours,
-            "commits": len(window.commits),
-            "prompts": len(window.prompts),
-            "candidates": len(result.candidates),
-            "score": result.final_score,
-            "filter_stats": result.filter_stats,
-            "rejected": result.comparison.reject_reason is not None,
-        })
+        row = {
+            "window": window,
+            "result": result,
+        }
+        results.append(row)
+        artifact_rows.append(_result_to_dict(result, window, config.synthesis.eval_threshold, config))
 
     log_parser.log_skipped_project_counts("eval_pipeline")
 
     if results:
+        summary_rows = []
+        for row in results:
+            window = row["window"]
+            result = row["result"]
+            summary_rows.append({
+                "run": window.run,
+                "hours": window.hours,
+                "commits": len(window.commits),
+                "candidates": len(result.candidates),
+                "score": result.final_score,
+                "rejected": result.comparison.reject_reason is not None,
+            })
+
         print(f"\n{'='*60}")
         print(f"SUMMARY")
         print(f"{'='*60}")
         print(f"{'Run':>4} {'Window':>8} {'Commits':>8} {'Cands':>6} {'Score':>6} {'Status':>12}")
         print(f"{'—'*4:>4} {'—'*8:>8} {'—'*8:>8} {'—'*6:>6} {'—'*6:>6} {'—'*12:>12}")
-        for r in results:
+        for r in summary_rows:
             status = "REJECTED" if r["rejected"] else (
                 "PASS" if r["score"] >= config.synthesis.eval_threshold * 10 else "BELOW"
             )
-            print(f"{r['run']:>4} {r['hours']:>6}h {r['commits']:>8} "
-                  f"{r['candidates']:>6} {r['score']:>6.1f} {status:>12}")
+            print(
+                f"{r['run']:>4} {r['hours']:>6}h {r['commits']:>8} "
+                f"{r['candidates']:>6} {r['score']:>6.1f} {status:>12}"
+            )
 
-        avg_score = sum(r["score"] for r in results) / len(results)
+        avg_score = sum(r["score"] for r in summary_rows) / len(summary_rows)
         print(f"\n  Average score: {avg_score:.1f}/10")
         print(f"  Threshold: {config.synthesis.eval_threshold * 10}/10")
 
+        if args.out:
+            artifact = {
+                "schema_version": 1,
+                "mode": "single",
+                "label": args.label,
+                "content_type": args.type,
+                "recorded": bool(batch_id is not None),
+                "batch_id": batch_id,
+                "generator_model": config.synthesis.model,
+                "evaluator_model": config.synthesis.eval_model,
+                "source_windows": [_window_to_dict(window) for window in windows],
+                "runs": artifact_rows,
+                "aggregate": {
+                    **_single_run_aggregate(
+                        artifact_rows,
+                        config.synthesis.eval_threshold,
+                        config.synthesis.num_candidates,
+                    ),
+                    "batch_id": batch_id,
+                },
+            }
+            _write_json_artifact(args.out, artifact)
+    elif args.out:
+        artifact = {
+            "schema_version": 1,
+            "mode": "single",
+            "label": args.label,
+            "content_type": args.type,
+            "recorded": bool(batch_id is not None),
+            "batch_id": batch_id,
+            "generator_model": config.synthesis.model,
+            "evaluator_model": config.synthesis.eval_model,
+            "source_windows": [_window_to_dict(window) for window in windows],
+            "runs": artifact_rows,
+            "aggregate": {
+                **_single_run_aggregate(
+                    artifact_rows,
+                    config.synthesis.eval_threshold,
+                    config.synthesis.num_candidates,
+                ),
+                "batch_id": batch_id,
+            },
+        }
+        _write_json_artifact(args.out, artifact)
 
-def _run_matrix(args, config, db, embedder, semantic_threshold, knowledge_store, log_parser) -> None:
+
+def _run_matrix(
+    args,
+    config,
+    db,
+    embedder,
+    semantic_threshold,
+    knowledge_store,
+    log_parser,
+):
     variants = args.variant or []
     if not variants:
         raise SystemExit("--matrix requires at least one --variant")
@@ -468,38 +691,43 @@ def _run_matrix(args, config, db, embedder, semantic_threshold, knowledge_store,
                 result=result,
                 config=config,
             )
-            variant_results.append(result)
+            variant_results.append({
+                "window": window,
+                "result": result,
+            })
 
-        run_count = len(variant_results)
-        avg_score = (
-            sum(r.final_score for r in variant_results) / run_count
-            if run_count else 0.0
-        )
-        rejection_rate = (
-            sum(1 for r in variant_results if r.comparison.reject_reason) / run_count
-            if run_count else 0.0
-        )
-        candidate_survival_rate = (
-            sum(len(r.candidates) for r in variant_results)
-            / (run_count * config.synthesis.num_candidates)
-            if run_count and config.synthesis.num_candidates else 0.0
+        run_rows = [
+            _result_to_dict(
+                row["result"],
+                row["window"],
+                config.synthesis.eval_threshold,
+                config,
+            )
+            for row in variant_results
+        ]
+        aggregate = _matrix_variant_aggregate(
+            run_rows,
+            config.synthesis.num_candidates,
+            config.synthesis.eval_threshold,
         )
         summaries.append({
             "name": variant.name,
             "batch_id": batch_id,
-            "runs": run_count,
-            "avg_score": avg_score,
-            "rejection_rate": rejection_rate,
-            "candidate_survival_rate": candidate_survival_rate,
+            "prompt_file": str(variant.prompt_file),
+            "prompt_type": prompt_type,
+            "generator_model": variant.generator_model,
+            "evaluator_model": variant.evaluator_model,
+            "runs": run_rows,
+            "aggregate": aggregate,
         })
 
     log_parser.log_skipped_project_counts("eval_pipeline")
 
     summaries.sort(
         key=lambda row: (
-            -row["avg_score"],
-            row["rejection_rate"],
-            -row["candidate_survival_rate"],
+            -(row["aggregate"]["average_score"] if row["aggregate"]["average_score"] is not None else float("-inf")),
+            row["aggregate"]["rejection_rate"],
+            -row["aggregate"]["candidate_survival_rate"],
             row["name"],
         )
     )
@@ -510,16 +738,30 @@ def _run_matrix(args, config, db, embedder, semantic_threshold, knowledge_store,
     print(f"{'—'*4:>4} {'—'*24:<24} {'—'*6:>6} {'—'*4:>4} {'—'*6:>6} {'—'*8:>8} {'—'*8:>8}")
     for idx, row in enumerate(summaries, start=1):
         print(
-            f"{idx:>4} {row['name'][:24]:<24} {row['batch_id']:>6} {row['runs']:>4} "
-            f"{row['avg_score']:>6.1f} {row['rejection_rate']*100:>7.0f}% "
-            f"{row['candidate_survival_rate']*100:>7.0f}%"
+            f"{idx:>4} {row['name'][:24]:<24} {row['batch_id']:>6} {row['aggregate']['run_count']:>4} "
+            f"{row['aggregate']['average_score']:>6.1f} {row['aggregate']['rejection_rate']*100:>7.0f}% "
+            f"{row['aggregate']['candidate_survival_rate']*100:>7.0f}%"
         )
+
+    if args.out:
+        artifact = {
+            "schema_version": 1,
+            "mode": "matrix",
+            "label": parent_label,
+            "content_type": args.type,
+            "recorded": True,
+            "source_windows": [_window_to_dict(window) for window in windows],
+            "variants": summaries,
+            "aggregate": _matrix_overview(summaries),
+        }
+        _write_json_artifact(args.out, artifact)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate pipeline output (dry run)")
     parser.add_argument("--runs", type=int, default=3, help="Number of pipeline runs")
     parser.add_argument("--type", default="x_thread", help="Content type (x_thread, x_post)")
+    parser.add_argument("--out", type=Path, help="Write a JSON summary artifact to this path")
     parser.add_argument("--record", action="store_true", help="Record this evaluation batch")
     parser.add_argument("--label", help="Optional label for a recorded evaluation batch")
     parser.add_argument("--list", action="store_true", help="List recent recorded evaluation batches")
