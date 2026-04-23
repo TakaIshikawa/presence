@@ -167,6 +167,102 @@ class TestContentTypeRouting:
         assert "OUTCOME LEARNING" in pattern_context
         assert result.final_content is not None
 
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_enriched_learning_context_reaches_generation_prompt(
+        self, MockFS, MockGen, MockEval, MockRefiner, db
+    ):
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=["sha"],
+            source_messages=["uuid"],
+            content="Testing caught the retry edge case before publish.",
+            eval_score=8.0,
+            eval_feedback="ok",
+            content_format="micro_story",
+        )
+        db.mark_published(content_id, f"https://x.com/me/status/{content_id}", str(content_id))
+        db.insert_content_topics(content_id, [("testing", "", 0.9)])
+        db.insert_engagement(
+            content_id=content_id,
+            tweet_id=str(content_id),
+            like_count=4,
+            retweet_count=1,
+            reply_count=2,
+            quote_count=0,
+            engagement_score=11.0,
+        )
+
+        contrast_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=["sha2"],
+            source_messages=["uuid2"],
+            content="Agents are the future of developer productivity.",
+            eval_score=7.0,
+            eval_feedback="ok",
+            content_format="question",
+        )
+        db.mark_published(contrast_id, f"https://x.com/me/status/{contrast_id}", str(contrast_id))
+        db.insert_content_topics(contrast_id, [("ai-agents", "", 0.9)])
+        db.insert_engagement(
+            content_id=contrast_id,
+            tweet_id=str(contrast_id),
+            like_count=0,
+            retweet_count=0,
+            reply_count=0,
+            quote_count=0,
+            engagement_score=1.0,
+        )
+
+        prediction_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=["sha3"],
+            source_messages=["uuid3"],
+            content="A predicted post that slightly overestimated its impact.",
+            eval_score=7.5,
+            eval_feedback="ok",
+            content_format="tip",
+        )
+        db.insert_prediction(
+            content_id=prediction_id,
+            predicted_score=8.5,
+            hook_strength=8.0,
+            specificity=8.0,
+            emotional_resonance=8.0,
+            novelty=7.5,
+            actionability=7.0,
+        )
+        db.backfill_prediction_actuals(prediction_id, 6.5)
+
+        db.insert_profile_metrics(
+            platform="x",
+            follower_count=456,
+            following_count=100,
+            tweet_count=42,
+            listed_count=3,
+        )
+
+        pipeline = SynthesisPipeline("key", "gen-model", "eval-model", db)
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Post A", "Post B", "Post C"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(best_score=9.5)
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS, content_type="x_post")
+
+        pattern_context = pipeline.generator.generate_candidates.call_args.kwargs[
+            "pattern_context"
+        ]
+        assert "Topic signal:" in pattern_context
+        assert "testing" in pattern_context
+        assert "Format signal:" in pattern_context
+        assert "Prediction calibration:" in pattern_context
+        assert "456 followers" in pattern_context
+
     @pytest.mark.parametrize("content_type", ["x_post", "x_thread", "x_visual", "x_long_post"])
     @patch("synthesis.pipeline.ContentRefiner")
     @patch("synthesis.pipeline.CrossModelEvaluator")

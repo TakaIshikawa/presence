@@ -291,6 +291,10 @@ class SynthesisPipeline:
         self.max_estimated_cost_per_run = max_estimated_cost_per_run
         self.max_daily_estimated_cost = max_daily_estimated_cost
 
+    def _build_presence_context(self, content_type: str) -> str:
+        """Build the prompt-ready presence context for generation."""
+        return self.presence_context_builder.build_prompt_section(content_type)
+
     def _apply_budget_gate(
         self, result: PipelineResult, run_started_at: datetime
     ) -> PipelineResult:
@@ -927,9 +931,7 @@ class SynthesisPipeline:
         campaign_context, planned_topic_id = self._build_campaign_context()
         if campaign_context:
             pattern_context = (pattern_context + "\n" + campaign_context).strip() + "\n"
-        presence_context = self.presence_context_builder.build_prompt_section(
-            content_type
-        )
+        presence_context = self._build_presence_context(content_type)
         if presence_context:
             pattern_context = (pattern_context + "\n" + presence_context).strip() + "\n"
 

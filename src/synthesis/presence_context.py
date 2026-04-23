@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from evaluation.topic_performance import TopicPerformanceAnalyzer
+
 
 @dataclass
 class PresenceContext:
@@ -373,8 +375,9 @@ class PresenceContextBuilder:
 
     def build_outcome_learning(self, content_type: str) -> str:
         stats = self._dict("get_engagement_calibration_stats", content_type)
-        format_stats = self._rows("get_format_engagement_stats", days=90)
-        prediction = self._dict("get_prediction_accuracy", days=30)
+        topic_learning = self._build_topic_learning(content_type)
+        format_learning = self._build_format_learning()
+        prediction_learning = self._build_prediction_learning()
         profile = self._dict("get_latest_profile_metrics", platform="x")
 
         lines = ["OUTCOME LEARNING (use real results, not evaluator vibes):"]
@@ -393,26 +396,14 @@ class PresenceContextBuilder:
         else:
             lines.append("- Not enough classified post history yet; favor safe specificity over broad claims.")
 
-        best_formats = [
-            row for row in format_stats
-            if row.get("format") and (row.get("count") or 0) >= 1
-        ][:3]
-        if best_formats:
-            formatted = ", ".join(
-                f"{row['format']} ({float(row.get('avg_engagement') or 0):.1f})"
-                for row in best_formats
-            )
-            lines.append(f"- Formats with signal: {formatted}.")
+        if topic_learning:
+            lines.append(f"- Topic signal: {topic_learning}")
 
-        if prediction.get("count"):
-            mae = prediction.get("mae")
-            corr = prediction.get("correlation")
-            lines.append(
-                f"- Prediction feedback: {prediction['count']} posts with actuals"
-                + (f", MAE {mae}" if mae is not None else "")
-                + (f", correlation {corr}" if corr is not None else "")
-                + "."
-            )
+        if format_learning:
+            lines.append(f"- Format signal: {format_learning}")
+
+        if prediction_learning:
+            lines.append(f"- Prediction calibration: {prediction_learning}")
 
         if profile.get("follower_count") is not None:
             lines.append(
@@ -423,6 +414,117 @@ class PresenceContextBuilder:
             "- If current trends conflict with historical performance, bridge them through concrete work instead of chasing the trend directly."
         )
         return "\n".join(lines)
+
+    def _build_topic_learning(self, content_type: str) -> str:
+        try:
+            analyzer = TopicPerformanceAnalyzer(self.db)
+            topics = analyzer.get_topic_performance(
+                days=90,
+                content_type=content_type,
+                platform="x",
+                min_samples=1,
+            )
+        except Exception:
+            return ""
+
+        if not topics:
+            return ""
+
+        ranked = sorted(
+            topics,
+            key=lambda item: (item.avg_engagement, item.sample_count, item.topic),
+            reverse=True,
+        )
+        best = ranked[0]
+        weakest = sorted(
+            topics,
+            key=lambda item: (item.avg_engagement, -item.sample_count, item.topic),
+        )[0]
+
+        label = "early" if best.sample_count < 3 else "recent"
+        summary = (
+            f"{label} {best.topic} (n={best.sample_count}, avg {best.avg_engagement:.1f})"
+        )
+        if weakest.topic != best.topic:
+            summary += f"; avoid {weakest.topic} ({weakest.avg_engagement:.1f})"
+        return summary
+
+    def _build_format_learning(self) -> str:
+        rows = self._rows("get_format_engagement_stats", days=90)
+        if not rows:
+            return ""
+
+        ranked = sorted(
+            [
+                row for row in rows
+                if row.get("format") and row.get("count")
+            ],
+            key=lambda row: (
+                float(row.get("avg_engagement") or 0.0),
+                int(row.get("count") or 0),
+                str(row.get("format")),
+            ),
+            reverse=True,
+        )
+        if not ranked:
+            return ""
+
+        best = ranked[0]
+        weakest = sorted(
+            ranked,
+            key=lambda row: (
+                float(row.get("avg_engagement") or 0.0),
+                -int(row.get("count") or 0),
+                str(row.get("format")),
+            ),
+        )[0]
+
+        label = "early" if int(best.get("count") or 0) < 3 else "recent"
+        summary = (
+            f"{label} {best['format']} (n={int(best.get('count') or 0)}, "
+            f"avg {float(best.get('avg_engagement') or 0):.1f})"
+        )
+        if weakest["format"] != best["format"]:
+            summary += f"; avoid {weakest['format']} ({float(weakest.get('avg_engagement') or 0):.1f})"
+        return summary
+
+    def _build_prediction_learning(self) -> str:
+        prediction = self._dict("get_prediction_accuracy", days=30)
+        if not prediction.get("count"):
+            return ""
+
+        count = int(prediction.get("count") or 0)
+        mae = prediction.get("mae")
+        correlation = prediction.get("correlation")
+        parts = [
+            f"{count} predictions"
+        ]
+        if mae is not None:
+            parts.append(f"MAE {mae:.2f}")
+        if correlation is not None:
+            parts.append(f"r {correlation:.2f}")
+
+        bias = prediction.get("avg_predicted")
+        actual = prediction.get("avg_actual")
+        if bias is not None and actual is not None:
+            delta = float(bias) - float(actual)
+            if abs(delta) >= 0.3:
+                direction = "over" if delta > 0 else "under"
+                parts.append(f"{direction} by {abs(delta):.2f}")
+
+        criteria = prediction.get("criteria_breakdown") or {}
+        if criteria:
+            weakest_name, weakest_data = min(
+                criteria.items(),
+                key=lambda item: (item[1].get("avg", 0.0), item[0]),
+            )
+            weakest_avg = weakest_data.get("avg")
+            if weakest_avg is not None:
+                parts.append(
+                    f"weakest {weakest_name.replace('_', ' ')} {float(weakest_avg):.2f}"
+                )
+
+        return ", ".join(parts)
 
     def _rows(self, method_name: str, *args, **kwargs) -> list[dict]:
         value = self._safe_call(method_name, *args, **kwargs)

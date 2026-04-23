@@ -252,6 +252,132 @@ def test_outcome_learning_includes_real_metrics(db):
     assert "123 followers" in section
 
 
+def test_outcome_learning_includes_topic_format_and_prediction_signals(db):
+    testing_id = _published_content(
+        db,
+        "Testing caught the retry edge case before publish.",
+    )
+    agent_id = _published_content(
+        db,
+        "Agents are the future of developer productivity.",
+    )
+    db.insert_content_topics(testing_id, [("testing", "", 0.9)])
+    db.insert_content_topics(agent_id, [("ai-agents", "", 0.9)])
+    db.insert_engagement(
+        content_id=testing_id,
+        tweet_id=f"tw-{testing_id}",
+        like_count=4,
+        retweet_count=1,
+        reply_count=2,
+        quote_count=0,
+        engagement_score=11.0,
+    )
+    db.insert_engagement(
+        content_id=agent_id,
+        tweet_id=f"tw-{agent_id}",
+        like_count=0,
+        retweet_count=0,
+        reply_count=0,
+        quote_count=0,
+        engagement_score=0.0,
+    )
+
+    story_id = _published_content(
+        db,
+        "A short micro story about fixing retries.",
+        content_type="x_thread",
+    )
+    tip_id = _published_content(
+        db,
+        "A practical tip that saves a deploy rollback.",
+        content_type="x_thread",
+    )
+    db.conn.execute(
+        "UPDATE generated_content SET content_format = ? WHERE id = ?",
+        ("micro_story", story_id),
+    )
+    db.conn.execute(
+        "UPDATE generated_content SET content_format = ? WHERE id = ?",
+        ("tip", tip_id),
+    )
+    db.conn.execute(
+        """INSERT INTO post_engagement
+           (content_id, tweet_id, like_count, retweet_count, reply_count,
+            quote_count, engagement_score, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+        (story_id, f"tw-{story_id}", 5, 1, 0, 0, 9.0),
+    )
+    db.conn.execute(
+        """INSERT INTO post_engagement
+           (content_id, tweet_id, like_count, retweet_count, reply_count,
+            quote_count, engagement_score, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+        (tip_id, f"tw-{tip_id}", 8, 2, 1, 0, 13.0),
+    )
+
+    predicted_id = _published_content(
+        db,
+        "A predicted post that slightly overestimated its impact.",
+    )
+    db.insert_prediction(
+        content_id=predicted_id,
+        predicted_score=8.5,
+        hook_strength=8.0,
+        specificity=8.0,
+        emotional_resonance=8.0,
+        novelty=7.5,
+        actionability=7.0,
+    )
+    db.backfill_prediction_actuals(predicted_id, 6.5)
+    db.insert_profile_metrics(
+        platform="x",
+        follower_count=456,
+        following_count=100,
+        tweet_count=42,
+        listed_count=3,
+    )
+    db.conn.commit()
+
+    section = PresenceContextBuilder(db).build_outcome_learning("x_post")
+
+    assert "Topic signal:" in section
+    assert "testing" in section
+    assert "avoid ai-agents" in section
+    assert "Format signal:" in section
+    assert "tip" in section
+    assert "Prediction calibration:" in section
+    assert "1 predictions" in section
+    assert "over by 2.00" in section
+    assert "456 followers" in section
+
+
+def test_outcome_learning_degrades_with_partial_signals(db):
+    content_id = _published_content(
+        db,
+        "A concrete post with engagement but no other calibration history.",
+    )
+    db.insert_engagement(
+        content_id=content_id,
+        tweet_id=str(content_id),
+        like_count=1,
+        retweet_count=0,
+        reply_count=0,
+        quote_count=0,
+        engagement_score=3.0,
+    )
+    db.conn.execute(
+        "UPDATE generated_content SET auto_quality = 'resonated' WHERE id = ?",
+        (content_id,),
+    )
+    db.conn.commit()
+
+    section = PresenceContextBuilder(db).build_outcome_learning("x_post")
+
+    assert "1 resonated" in section
+    assert "Prediction calibration:" not in section
+    assert "Format signal:" in section
+
+
 def test_render_omits_empty_sections():
     class EmptyDB:
         pass
