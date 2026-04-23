@@ -217,11 +217,11 @@ runs:
   agent:
     agentType: launchd
     model: n/a
-- runId: run-1776926657657
+- runId: run-1776928527790
   operationId: run-poll
   sessionId: launchd-automated
-  startedAt: '2026-04-23T06:43:00.767575+00:00'
-  completedAt: '2026-04-23T06:43:00.767575+00:00'
+  startedAt: '2026-04-23T07:14:18.821395+00:00'
+  completedAt: '2026-04-23T07:14:18.821395+00:00'
   status: completed
   summary: Automated poll via launchd (state synced from database)
   costUsd: 0.0
@@ -229,8 +229,8 @@ runs:
     agentType: launchd
     model: n/a
 alerts:
-  status: ok
-  generatedAt: '2026-04-23T06:44:17.657543+00:00'
+  status: alert
+  generatedAt: '2026-04-23T07:15:27.790191+00:00'
   thresholds:
     max_consecutive_publish_failures: 3
     max_ingestion_age_minutes: 60
@@ -246,8 +246,8 @@ alerts:
       summary: Consecutive publish failures within threshold
     stale_ingestion:
       status: ok
-      latestAt: '2026-04-23T06:43:00.767575+00:00'
-      ageMinutes: 1.28
+      latestAt: '2026-04-23T07:14:18.821395+00:00'
+      ageMinutes: 1.15
       threshold: 60
       summary: Ingestion freshness within threshold
     queue_backlog:
@@ -256,12 +256,13 @@ alerts:
       threshold: 10
       summary: Publish queue backlog within threshold
     evaluation_pass_rate:
-      status: ok
+      status: alert
       passed: 0
-      total: 2
+      total: 3
       passRate: 0.0
       threshold: 0.5
       windowHours: 24
       minimumRuns: 3
-      summary: Evaluation pass rate within threshold
-  triggered: []
+      summary: 'Evaluation pass rate is low: 0.0% < 50.0%'
+  triggered:
+  - evaluation_pass_rate
