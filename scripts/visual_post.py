@@ -6,6 +6,7 @@ import sys
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -16,6 +17,11 @@ from synthesis.pipeline import SynthesisPipeline
 from synthesis.image_generator import ImageGenerator
 from synthesis.visual_pipeline import VisualPipeline
 from output.x_client import XClient
+from output.preview import (
+    build_publication_preview,
+    visual_post_artifact_filename,
+    write_visual_post_artifact,
+)
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 from knowledge.store import KnowledgeStore
 
@@ -29,7 +35,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Generate and store the visual post without publishing to X.",
     )
+    parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        help="Directory to write a dry-run review artifact.",
+    )
+    parser.add_argument(
+        "--artifact-format",
+        choices=("json", "markdown"),
+        default="json",
+        help="Artifact format to write under --artifact-dir.",
+    )
     return parser.parse_args()
+
+
+def _fetch_planned_topic(db: Any, planned_topic_id: int | None) -> dict | None:
+    if planned_topic_id is None:
+        return None
+    row = db.conn.execute(
+        "SELECT * FROM planned_topics WHERE id = ?",
+        (planned_topic_id,),
+    ).fetchone()
+    return dict(row) if row else {"id": planned_topic_id}
 
 
 def main():
@@ -237,6 +264,58 @@ def main():
                 logger.error(f"Post failed: {post_result.error}")
                 outcome = "below_threshold"
                 rejection_reason = f"Post failed: {post_result.error}"
+
+        if args.dry_run and args.artifact_dir:
+            preview = build_publication_preview(db, content_id=content_id)
+            planned_topic = _fetch_planned_topic(db, pr.planned_topic_id)
+            artifact = {
+                "artifact_type": "visual_post_review",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "run": {
+                    "outcome": outcome or "dry_run",
+                    "rejection_reason": rejection_reason,
+                    "batch_id": pr.batch_id,
+                    "content_format": pr.content_format,
+                    "planned_topic_id": pr.planned_topic_id,
+                    "planned_topic": planned_topic,
+                    "best_candidate_index": best_idx,
+                    "best_score_before_refine": pr.comparison.best_score,
+                    "best_score_after_refine": pr.refinement.final_score if pr.refinement else None,
+                    "refinement_picked": pr.refinement.picked if pr.refinement else None,
+                    "final_score": pr.final_score,
+                    "filter_stats": pr.filter_stats,
+                    "budget_rejection_reason": pr.budget_rejection_reason,
+                    "published_url": preview.get("content", {}).get("published_url"),
+                    "tweet_id": preview.get("content", {}).get("tweet_id"),
+                },
+                "content": {
+                    "id": content_id,
+                    "content_type": preview["content"]["content_type"],
+                    "text": pr.final_content,
+                    "image_path": result.image.path,
+                    "image_prompt": result.image_prompt,
+                    "image_alt_text": result.image_alt_text or result.image.alt_text,
+                },
+                "image": {
+                    "path": result.image.path,
+                    "provider": result.image.provider,
+                    "style": result.image.style,
+                    "prompt_used": result.image.prompt_used,
+                    "alt_text": result.image_alt_text or result.image.alt_text,
+                    "spec": result.image_spec,
+                },
+                "preview": preview,
+            }
+            artifact_path = args.artifact_dir / visual_post_artifact_filename(
+                content_id,
+                artifact_format=args.artifact_format,
+            )
+            write_visual_post_artifact(
+                artifact,
+                artifact_path,
+                artifact_format=args.artifact_format,
+            )
+            logger.info("Wrote visual artifact: %s", artifact_path)
 
         # Record pipeline run
         db.insert_pipeline_run(

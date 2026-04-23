@@ -2,7 +2,15 @@
 
 import json
 
-from output.preview import build_publication_preview, format_preview, preview_to_json
+from output.preview import (
+    build_publication_preview,
+    format_preview,
+    format_visual_post_artifact,
+    preview_to_json,
+    visual_post_artifact_filename,
+    visual_post_artifact_to_json,
+    write_visual_post_artifact,
+)
 
 
 def test_preview_surfaces_failed_alt_text_guard(db):
@@ -30,6 +38,73 @@ def test_preview_surfaces_failed_alt_text_guard(db):
     text = format_preview(preview)
     assert "Alt text guard: failed" in text
     assert "- missing_alt_text: Visual posts require alt text before publishing." in text
+
+
+def test_visual_post_artifact_helpers_write_json_and_markdown(db, tmp_path):
+    content_id = db.insert_generated_content(
+        content_type="x_visual",
+        source_commits=[],
+        source_messages=[],
+        content="Reviewable visual post",
+        eval_score=8.0,
+        eval_feedback="Good",
+        image_path="/tmp/presence-images/visual.png",
+        image_prompt="ANNOTATED | Launch | Reviewable visual post",
+        image_alt_text="Annotated graphic titled Launch with reviewable visual post.",
+    )
+    preview = build_publication_preview(db, content_id=content_id)
+    artifact = {
+        "artifact_type": "visual_post_review",
+        "generated_at": "2026-04-18T12:00:00+00:00",
+        "run": {
+            "outcome": "dry_run",
+            "planned_topic_id": None,
+        },
+        "content": {
+            "id": content_id,
+            "content_type": preview["content"]["content_type"],
+            "text": "Reviewable visual post",
+            "image_path": "/tmp/presence-images/visual.png",
+            "image_prompt": "ANNOTATED | Launch | Reviewable visual post",
+            "image_alt_text": "Annotated graphic titled Launch with reviewable visual post.",
+        },
+        "image": {
+            "path": "/tmp/presence-images/visual.png",
+            "provider": "pillow",
+            "style": "annotated",
+            "prompt_used": "annotated: Launch",
+            "alt_text": "Annotated graphic titled Launch with reviewable visual post.",
+            "spec": "ANNOTATED | Launch | Reviewable visual post",
+        },
+        "preview": preview,
+    }
+
+    assert visual_post_artifact_filename(content_id) == f"visual-post-{content_id}.json"
+
+    json_path = write_visual_post_artifact(
+        artifact,
+        tmp_path / visual_post_artifact_filename(content_id, artifact_format="json"),
+        artifact_format="json",
+    )
+    markdown_path = write_visual_post_artifact(
+        artifact,
+        tmp_path / visual_post_artifact_filename(content_id, artifact_format="markdown"),
+        artifact_format="markdown",
+    )
+
+    payload = json.loads(json_path.read_text())
+    assert payload["artifact_type"] == "visual_post_review"
+    assert payload["content"]["id"] == content_id
+    assert payload["run"]["outcome"] == "dry_run"
+    assert payload["preview"]["content"]["id"] == content_id
+
+    markdown = markdown_path.read_text()
+    assert markdown.startswith("# Visual Post Review")
+    assert "## Final Text" in markdown
+    assert "## Publication Preview" in markdown
+    assert "Reviewable visual post" in markdown
+    assert visual_post_artifact_to_json(artifact).startswith("{")
+    assert format_visual_post_artifact(artifact).startswith("# Visual Post Review")
 
 
 def test_preview_surfaces_passed_alt_text_guard(db):

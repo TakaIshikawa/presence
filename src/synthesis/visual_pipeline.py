@@ -64,6 +64,11 @@ class VisualPipelineResult:
     image_prompt: str  # the prompt used to decide image content
     image_alt_text: str = ""
 
+    @property
+    def image_spec(self) -> str:
+        """Alias for the Claude-selected image specification."""
+        return self.image_prompt
+
 
 class VisualPipeline:
     """Orchestrates text generation + image generation for visual posts."""
