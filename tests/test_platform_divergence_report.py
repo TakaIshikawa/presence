@@ -1,5 +1,6 @@
 """Tests for platform_divergence_report.py — CLI entry point for divergence analysis."""
 
+import json
 import sys
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -11,9 +12,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from platform_divergence_report import main, format_report
+from platform_divergence_report import main, format_report, format_json
 from storage.db import Database
-from evaluation.platform_divergence import DivergenceReport, DivergenceItem, PlatformComparison
+from evaluation.platform_divergence import (
+    DivergenceReport,
+    DivergenceItem,
+    PlatformComparison,
+    ContentTypeRecommendation,
+)
 
 
 # --- fixtures ---
@@ -161,6 +167,7 @@ class TestFormatReport:
             platform_winner="tie",
             high_divergence_items=[],
             content_type_breakdown={},
+            platform_takeaway="",
             format_insights=[]
         )
 
@@ -203,6 +210,31 @@ class TestFormatReport:
                     winner="bluesky"
                 )
             },
+            platform_takeaway="Bluesky is the stronger overall platform here, averaging 10.30 vs 9.20 on X. Strongest format signal: Favor Bluesky for thread content.",
+            recommendations=[
+                ContentTypeRecommendation(
+                    content_type="x_thread",
+                    content_type_label="Thread",
+                    count=1,
+                    avg_x_score=3.0,
+                    avg_bluesky_score=12.0,
+                    winner="bluesky",
+                    recommendation="Favor Bluesky for thread content. Keep the fuller framing, conversation hooks, and community-oriented tone.",
+                    rationale="Bluesky averaged 12.00 vs X at 3.00, a gap of 9.00 points.",
+                    score_gap=9.0,
+                ),
+                ContentTypeRecommendation(
+                    content_type="x_post",
+                    content_type_label="Post",
+                    count=4,
+                    avg_x_score=10.75,
+                    avg_bluesky_score=9.88,
+                    winner="x",
+                    recommendation="Favor X for post content. Tighten the hook, compress the copy, and lead with the strongest claim.",
+                    rationale="X averaged 10.75 vs Bluesky at 9.88, a gap of 0.87 points.",
+                    score_gap=0.87,
+                ),
+            ],
             format_insights=["Posts perform similarly across platforms"]
         )
 
@@ -213,6 +245,8 @@ class TestFormatReport:
         assert "Average X score: 9.20" in output
         assert "Average Bluesky score: 10.30" in output
         assert "Platform winner: BLUESKY" in output
+        assert "STRONGEST TAKEAWAY:" in output
+        assert "CONTENT TYPE RECOMMENDATIONS:" in output
 
         # Check format insights
         assert "FORMAT INSIGHTS:" in output
@@ -226,7 +260,7 @@ class TestFormatReport:
         assert "Count: 1" in output
 
         # Check high divergence items
-        assert "HIGH DIVERGENCE ITEMS" in output
+        assert "HIGH DIVERGENCE EXAMPLES" in output
         assert "BLUESKY wins 3.0x" in output
         assert "X: 5.0 | Bluesky: 15.0" in output
 
@@ -250,6 +284,7 @@ class TestFormatReport:
                 )
             ],
             content_type_breakdown={},
+            platform_takeaway="",
             format_insights=[]
         )
 
@@ -259,7 +294,7 @@ class TestFormatReport:
         assert "A" * 60 + "..." in output
 
     def test_format_report_limits_divergence_items(self):
-        """Test that only top 10 divergence items are shown."""
+        """Test that only a short list of divergence items is shown."""
         # Create 15 high-divergence items
         items = [
             DivergenceItem(
@@ -281,16 +316,17 @@ class TestFormatReport:
             platform_winner="bluesky",
             high_divergence_items=items,
             content_type_breakdown={},
+            platform_takeaway="",
             format_insights=[]
         )
 
         output = format_report(report)
 
-        # Should show top 10
+        # Should show top 3
         assert "1. " in output
-        assert "10. " in output
+        assert "3. " in output
         # Should indicate more items exist
-        assert "and 5 more" in output
+        assert "and 12 more" in output
 
 
 # --- TestMainFunction ---
@@ -325,8 +361,10 @@ class TestMainFunction:
         assert "PLATFORM DIVERGENCE ANALYSIS REPORT" in captured.out
         assert "Total cross-posted items: 5" in captured.out
         assert "Platform winner:" in captured.out
+        assert "STRONGEST TAKEAWAY:" in captured.out
+        assert "CONTENT TYPE RECOMMENDATIONS:" in captured.out
         assert "CONTENT TYPE BREAKDOWN:" in captured.out
-        assert "HIGH DIVERGENCE ITEMS" in captured.out
+        assert "HIGH DIVERGENCE EXAMPLES" in captured.out
 
         # Verify adaptation context is shown
         assert "ADAPTATION CONTEXT (for generation prompts):" in captured.out
@@ -374,6 +412,30 @@ class TestMainFunction:
         # Verify analyzer was called with correct days parameter
         # This is implicit in the log message
         assert "PLATFORM DIVERGENCE ANALYSIS REPORT" in captured.out
+
+    def test_main_json_output(self, populated_db, capsys, tmp_path):
+        """Test main function can output JSON."""
+        mock_config = MagicMock()
+        mock_config.paths.database = str(tmp_path / "test.db")
+
+        with patch("platform_divergence_report.script_context") as mock_context, \
+             patch("platform_divergence_report.update_monitoring"), \
+             patch("sys.argv", ["platform_divergence_report.py", "--json"]):
+
+            mock_context.return_value.__enter__ = lambda self: (mock_config, populated_db)
+            mock_context.return_value.__exit__ = lambda self, *args: None
+
+            main()
+
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+
+        assert payload["comparative_stats"]["total_cross_posted"] == 5
+        assert payload["comparative_stats"]["platform_winner"] in {"bluesky", "x", "tie"}
+        assert "recommendations" in payload
+        assert len(payload["recommendations"]) >= 1
+        assert "high_divergence_items" in payload
+        assert "adaptation_context" in payload
 
     def test_main_logging_output(self, populated_db, capsys, tmp_path):
         """Test that main function produces expected output and log messages."""
