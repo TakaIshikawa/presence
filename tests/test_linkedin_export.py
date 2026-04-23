@@ -1,11 +1,14 @@
 """Tests for manual LinkedIn publishing artifacts."""
 
+import json
+
 from output.linkedin_export import (
     LinkedInExportOptions,
     build_linkedin_export,
     build_linkedin_export_from_db,
     count_graphemes,
     format_linkedin_markdown,
+    linkedin_export_to_json,
 )
 
 
@@ -123,3 +126,37 @@ def test_markdown_artifact_contains_post_and_metadata():
     assert "- Content ID: 10" in markdown
     assert "- Queue ID: 3" in markdown
     assert "## Post\n\nShort post for manual publishing." in markdown
+
+
+def test_queue_export_preserves_queue_metadata_and_json(db):
+    content_id = _insert_content(
+        db,
+        "Queue export should keep metadata.",
+    )
+    queue_id = db.conn.execute(
+        """INSERT INTO publish_queue
+           (content_id, scheduled_at, platform, status, hold_reason)
+           VALUES (?, ?, ?, ?, ?)""",
+        (
+            content_id,
+            "2026-04-24T09:00:00+00:00",
+            "x",
+            "held",
+            "manual review",
+        ),
+    ).lastrowid
+
+    export = build_linkedin_export_from_db(db, queue_id=queue_id)
+    markdown = format_linkedin_markdown(export)
+    payload = json.loads(linkedin_export_to_json(export))
+
+    assert export.queue_id == queue_id
+    assert export.queue is not None
+    assert export.queue["scheduled_at"] == "2026-04-24T09:00:00+00:00"
+    assert export.queue["status"] == "held"
+    assert "- Scheduled at: 2026-04-24T09:00:00+00:00" in markdown
+    assert "- Queue status: held" in markdown
+    assert "- Hold reason: manual review" in markdown
+    assert payload["queue"]["scheduled_at"] == "2026-04-24T09:00:00+00:00"
+    assert payload["queue_id"] == queue_id
+    assert payload["graphemes"] == count_graphemes(export.text)
