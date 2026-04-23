@@ -185,8 +185,11 @@ def _make_tweets(count=3):
         {
             "id": f"tw-{i}",
             "text": f"Tweet number {i}",
-            "created_at": f"2026-04-09T0{i}:00:00",
-            "public_metrics": {"like_count": i * 10},
+            "created_at": f"2026-04-09T0{i}:00:00+00:00",
+            "public_metrics": {
+                "like_count": i * 10,
+                "retweet_count": i,
+            },
             "reply_settings": "everyone",
         }
         for i in range(count)
@@ -249,42 +252,72 @@ class TestIsAlreadyResolved:
 
 
 class TestSelectTweetForAction:
-    def test_returns_first_for_like(self):
+    def test_selects_most_recent_for_like(self):
         tweets = _make_tweets(3)
-        result = select_tweet_for_action(tweets, "like")
-        assert result["id"] == "tw-0"
+        result, meta = select_tweet_for_action(tweets, "like")
+        assert result["id"] == "tw-2"
+        assert meta["eligible_count"] == 3
 
-    def test_returns_first_for_retweet(self):
+    def test_selects_most_recent_for_retweet(self):
         tweets = _make_tweets(3)
-        result = select_tweet_for_action(tweets, "retweet")
-        assert result["id"] == "tw-0"
+        result, meta = select_tweet_for_action(tweets, "retweet")
+        assert result["id"] == "tw-2"
+        assert "recency-first scoring" in meta["selection_rationale"]
 
-    def test_returns_first_for_quote_tweet(self):
+    def test_selects_most_recent_for_quote_tweet(self):
         tweets = _make_tweets(3)
-        result = select_tweet_for_action(tweets, "quote_tweet")
-        assert result["id"] == "tw-0"
+        result, meta = select_tweet_for_action(tweets, "quote_tweet")
+        assert result["id"] == "tw-2"
+        assert meta["candidate_count"] == 3
 
     def test_reply_finds_open_replies(self):
         tweets = [
             {"id": "1", "text": "locked", "reply_settings": "mentionedUsers"},
             {"id": "2", "text": "open", "reply_settings": "everyone"},
         ]
-        result = select_tweet_for_action(tweets, "reply")
+        result, meta = select_tweet_for_action(tweets, "reply")
         assert result["id"] == "2"
+        assert meta["eligible_count"] == 1
 
     def test_reply_returns_none_if_all_locked(self):
         tweets = [
             {"id": "1", "text": "locked", "reply_settings": "followers"},
         ]
-        assert select_tweet_for_action(tweets, "reply") is None
+        result, meta = select_tweet_for_action(tweets, "reply")
+        assert result is None
+        assert meta["eligible_count"] == 0
 
     def test_reply_defaults_to_everyone(self):
         tweets = [{"id": "1", "text": "no setting"}]
-        result = select_tweet_for_action(tweets, "reply")
+        result, meta = select_tweet_for_action(tweets, "reply")
         assert result["id"] == "1"
+        assert meta["eligible_count"] == 1
+
+    def test_prefers_stronger_metrics_when_recency_ties(self):
+        tweets = [
+            {
+                "id": "1",
+                "text": "same time weaker",
+                "created_at": "2026-04-09T01:00:00+00:00",
+                "public_metrics": {"like_count": 2, "retweet_count": 0},
+                "reply_settings": "everyone",
+            },
+            {
+                "id": "2",
+                "text": "same time stronger",
+                "created_at": "2026-04-09T01:00:00+00:00",
+                "public_metrics": {"like_count": 5, "retweet_count": 1},
+                "reply_settings": "everyone",
+            },
+        ]
+        result, meta = select_tweet_for_action(tweets, "like")
+        assert result["id"] == "2"
+        assert meta["selection_metrics"]["public_metric_score"] == 6
 
     def test_empty_tweets(self):
-        assert select_tweet_for_action([], "like") is None
+        result, meta = select_tweet_for_action([], "like")
+        assert result is None
+        assert meta is None
 
 
 # --- build_resolved_payload ---
@@ -304,6 +337,8 @@ class TestBuildResolvedPayload:
         assert p["tweet_id"] == "tw-1"
         assert p["tweet_content"] == "hello"
         assert "draft" not in p
+        assert p["tweet_created_at"] is None
+        assert p["tweet_public_metrics"] == {}
 
     def test_reply_payload_with_draft(self):
         tweet = {"id": "tw-1", "text": "hello", "reply_settings": "everyone"}
@@ -314,7 +349,13 @@ class TestBuildResolvedPayload:
         assert "quote_tweet_id" not in p
 
     def test_quote_tweet_payload_marks_quote_target(self):
-        tweet = {"id": "tw-1", "text": "hello", "reply_settings": "everyone"}
+        tweet = {
+            "id": "tw-1",
+            "text": "hello",
+            "created_at": "2026-04-09T01:00:00+00:00",
+            "public_metrics": {"like_count": 7},
+            "reply_settings": "everyone",
+        }
         p = build_resolved_payload(
             "quote_tweet", tweet=tweet, draft="Worth reading."
         )
@@ -323,6 +364,8 @@ class TestBuildResolvedPayload:
         assert p["quote_tweet_id"] == "tw-1"
         assert p["quoted_tweet_id"] == "tw-1"
         assert p["draft"] == "Worth reading."
+        assert p["tweet_created_at"] == "2026-04-09T01:00:00+00:00"
+        assert p["tweet_public_metrics"] == {"like_count": 7}
 
     def test_no_tweet_no_tweet_fields(self):
         p = build_resolved_payload("follow")
@@ -370,7 +413,8 @@ class TestResolveSingleAction:
             drafter=MagicMock(), my_handle="me",
         )
         assert result["execution_type"] == "like"
-        assert result["tweet_id"] == "tw-0"
+        assert result["tweet_id"] == "tw-2"
+        assert result["selection_metrics"]["candidate_count"] == 3
 
     def test_reply_drafts_content(self):
         tweets = _make_tweets(1)
@@ -422,6 +466,28 @@ class TestResolveSingleAction:
         )
         result = _resolve_single_action(
             "reply", action, tweets=tweets, x_user_id="u1",
+            drafter=MagicMock(), my_handle="me",
+        )
+        assert result is None
+
+    def test_quote_tweet_requires_public_reply_settings(self):
+        tweets = [
+            {
+                "id": "1",
+                "text": "locked",
+                "reply_settings": "followers",
+                "created_at": "2026-04-09T01:00:00+00:00",
+                "public_metrics": {"like_count": 99},
+            }
+        ]
+        action = ProactiveAction(
+            action_id="a1", action_type="engage",
+            target_handle="alice", target_person_id="p1",
+            description="[quote_tweet] Quote @alice",
+            person_context=_make_person_context(),
+        )
+        result = _resolve_single_action(
+            "quote_tweet", action, tweets=tweets, x_user_id="u1",
             drafter=MagicMock(), my_handle="me",
         )
         assert result is None
