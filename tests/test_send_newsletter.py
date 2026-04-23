@@ -280,13 +280,22 @@ class TestPreviewOut:
             metadata={"utm_campaign": "weekly-20260423"},
             subject_candidates=[
                 NewsletterSubjectCandidate(
-                    subject="Candidate subject",
-                    score=9.1,
-                    rationale="specific",
-                    source="heuristic",
-                    metadata={"reason": "title"},
-                )
-            ],
+                subject="Candidate subject",
+                score=9.1,
+                rationale="specific",
+                source="heuristic",
+                metadata={
+                    "reason": "title",
+                    "history": {
+                        "bonus": 0.85,
+                        "matched_tokens": ["candidate", "subject"],
+                        "matched_subjects": [{"subject": "Candidate subject"}],
+                        "baseline_performance": 34.2,
+                        "profiled_subjects": 4,
+                    },
+                },
+            )
+        ],
         )
         MockAssembler.return_value.assemble.return_value = content
         preview_path = tmp_path / "newsletter-preview.json"
@@ -303,6 +312,11 @@ class TestPreviewOut:
         assert payload["body_markdown"] == "# Newsletter\nPreview body."
         assert payload["source_content_ids"] == [10, 20]
         assert payload["subject_candidates"][0]["score"] == 9.1
+        assert payload["subject_selection"]["selected_candidate"]["subject"] == "Candidate subject"
+        assert payload["subject_selection"]["history"]["matched_tokens"] == [
+            "candidate",
+            "subject",
+        ]
         assert payload["week_range"]["start"]
         assert payload["week_range"]["end"]
         assert payload["utm_metadata"] == {
@@ -343,6 +357,7 @@ class TestPreviewOut:
         rendered = preview_path.read_text()
         assert rendered.startswith("# Newsletter Preview")
         assert "## Selected Subject" in rendered
+        assert "## Subject Selection" in rendered
         assert "Markdown subject" in rendered
         assert "## Body" in rendered
         assert "Markdown body." in rendered
@@ -437,6 +452,15 @@ class TestSendSuccess:
             subject="Weekly Update",
             content_ids=[1, 2, 3],
             subscriber_count=25,
+            metadata={
+                "subject_selection": {
+                    "selected_subject": "Weekly Update",
+                    "manual_subject": "",
+                    "selected_candidate": {},
+                    "ranked_candidates": [],
+                    "alternatives": [],
+                }
+            },
         )
         out = caplog.text
         assert "Newsletter sent" in out
@@ -490,9 +514,14 @@ class TestSendSuccess:
         assert storage_kwargs["selected_subject"] == "Shipping Better AI Tools"
         assert storage_kwargs["content_ids"] == [1]
         db.insert_newsletter_send.assert_called_once()
-        assert db.insert_newsletter_send.call_args.kwargs["subject"] == (
+        send_kwargs = db.insert_newsletter_send.call_args.kwargs
+        assert send_kwargs["subject"] == "Shipping Better AI Tools"
+        assert send_kwargs["metadata"]["subject_selection"]["selected_subject"] == (
             "Shipping Better AI Tools"
         )
+        assert send_kwargs["metadata"]["subject_selection"]["alternatives"][0][
+            "subject"
+        ] == "Building with AI — Week of Apr 16"
 
     @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")
@@ -536,7 +565,10 @@ class TestSendSuccess:
         stored_candidates = db.insert_newsletter_subject_candidates.call_args.args[0]
         assert stored_candidates[0].subject == "Manual subject"
         assert stored_candidates[0].source == "manual"
-        assert db.insert_newsletter_send.call_args.kwargs["subject"] == "Manual subject"
+        send_kwargs = db.insert_newsletter_send.call_args.kwargs
+        assert send_kwargs["subject"] == "Manual subject"
+        assert send_kwargs["metadata"]["subject_selection"]["selected_subject"] == "Manual subject"
+        assert send_kwargs["metadata"]["subject_selection"]["selected_candidate"]["source"] == "manual"
 
     @patch("send_newsletter.update_monitoring")
     @patch("send_newsletter.ButtondownClient")

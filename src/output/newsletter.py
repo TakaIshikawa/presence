@@ -3,11 +3,14 @@
 import logging
 import re
 import requests
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from statistics import median
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from evaluation.newsletter_subject_performance import score_subject_performance
 from storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -231,6 +234,7 @@ class NewsletterAssembler:
         week_end: datetime,
         subject_context: Optional[dict] = None,
         fallback_subject: str = "",
+        subject_history: Optional[list[dict]] = None,
     ) -> list[NewsletterSubjectCandidate]:
         """Create scored subject candidates for the assembled issue."""
         fallback_subject = fallback_subject or (
@@ -241,6 +245,12 @@ class NewsletterAssembler:
         thread_hooks = subject_context.get("thread_hooks") or []
         post_hooks = subject_context.get("post_hooks") or []
         content_types = subject_context.get("content_types") or []
+        subject_history = (
+            subject_history
+            if subject_history is not None
+            else self._load_subject_performance_history()
+        )
+        history_profile = self._build_subject_history_profile(subject_history)
 
         candidates = [fallback_subject]
         if blog_titles:
@@ -272,6 +282,20 @@ class NewsletterAssembler:
                 fallback_subject=fallback_subject,
                 context_terms=blog_titles + thread_hooks + post_hooks,
             )
+            history_bonus, history_rationale, history_metadata = (
+                self._score_subject_history(
+                    normalized,
+                    history_profile,
+                )
+            )
+            if history_bonus:
+                score = round(score + history_bonus, 2)
+            if history_rationale:
+                rationale = (
+                    f"{rationale}, {history_rationale}"
+                    if rationale
+                    else history_rationale
+                )
             scored.append(
                 NewsletterSubjectCandidate(
                     subject=normalized,
@@ -280,11 +304,189 @@ class NewsletterAssembler:
                     metadata={
                         "week_start": week_start.strftime("%Y-%m-%d"),
                         "week_end": week_end.strftime("%Y-%m-%d"),
+                        **history_metadata,
                     },
                 )
             )
 
         return sorted(scored, key=lambda item: (-item.score, item.subject.lower()))
+
+    def _load_subject_performance_history(self, days: int = 180) -> list[dict]:
+        """Load prior subject performance rows when the database supports it."""
+        getter = getattr(self.db, "get_newsletter_subject_performance", None)
+        if not callable(getter):
+            return []
+        try:
+            return getter(days=days)
+        except Exception as e:
+            logger.debug("Newsletter subject history lookup failed: %s", e)
+            return []
+
+    @staticmethod
+    def _build_subject_history_profile(rows: list[dict]) -> dict:
+        """Convert historical subject rows into reusable token weights."""
+        if not rows:
+            return {}
+
+        scored_rows = []
+        for row in rows:
+            subject = (row.get("subject") or "").strip()
+            if not subject:
+                continue
+            open_rate = row.get("open_rate")
+            click_rate = row.get("click_rate")
+            unsubscribes = int(row.get("unsubscribes") or 0)
+            subscriber_count = int(row.get("subscriber_count") or 0)
+            scored_rows.append(
+                {
+                    "subject": subject,
+                    "performance_score": score_subject_performance(
+                        float(open_rate) if open_rate is not None else None,
+                        float(click_rate) if click_rate is not None else None,
+                        unsubscribes=unsubscribes,
+                        subscriber_count=subscriber_count,
+                    ),
+                    "sent_at": row.get("sent_at") or "",
+                    "open_rate": row.get("open_rate"),
+                    "click_rate": row.get("click_rate"),
+                }
+            )
+
+        if not scored_rows:
+            return {}
+
+        performance_scores = [row["performance_score"] for row in scored_rows]
+        baseline = median(performance_scores)
+        spread = max(max(performance_scores) - min(performance_scores), 1.0)
+
+        token_weights = defaultdict(float)
+        subject_signals = []
+        for row in scored_rows:
+            performance = row["performance_score"]
+            if performance <= baseline:
+                continue
+            normalized = min((performance - baseline) / spread, 1.0)
+            recency = NewsletterAssembler._history_recency_weight(row["sent_at"])
+            weight = round(max(normalized, 0.0) * recency, 4)
+            if weight <= 0:
+                continue
+            tokens = NewsletterAssembler._subject_tokens(row["subject"])
+            if not tokens:
+                continue
+            subject_signals.append(
+                {
+                    "subject": row["subject"],
+                    "performance_score": performance,
+                    "weight": weight,
+                    "tokens": tokens,
+                }
+            )
+            for token in tokens:
+                token_weights[token] += weight
+
+        return {
+            "baseline": baseline,
+            "spread": spread,
+            "token_weights": dict(token_weights),
+            "subjects": subject_signals,
+        }
+
+    @staticmethod
+    def _score_subject_history(subject: str, profile: dict) -> tuple[float, str, dict]:
+        """Return a small history bonus plus explanation metadata for a subject."""
+        if not profile:
+            return 0.0, "", {}
+
+        token_weights = profile.get("token_weights") or {}
+        if not token_weights:
+            return 0.0, "", {}
+
+        tokens = NewsletterAssembler._subject_tokens(subject)
+        if not tokens:
+            return 0.0, "", {}
+
+        matched_tokens = []
+        raw_bonus = 0.0
+        for token in tokens:
+            token_weight = float(token_weights.get(token, 0.0))
+            if token_weight <= 0:
+                continue
+            matched_tokens.append((token, round(token_weight, 4)))
+            raw_bonus += token_weight
+
+        if not matched_tokens:
+            return 0.0, "", {}
+
+        bonus = min(2.5, round(0.35 + raw_bonus * 1.5, 2))
+        matched_subjects = []
+        for signal in (profile.get("subjects") or [])[:5]:
+            signal_tokens = set(signal.get("tokens") or [])
+            if signal_tokens.intersection({token for token, _ in matched_tokens}):
+                matched_subjects.append(
+                    {
+                        "subject": signal.get("subject", ""),
+                        "performance_score": signal.get("performance_score", 0.0),
+                        "weight": signal.get("weight", 0.0),
+                    }
+                )
+        rationale = (
+            "history match: "
+            + ", ".join(token for token, _ in matched_tokens[:3])
+        )
+        metadata = {
+            "history": {
+                "bonus": bonus,
+                "matched_tokens": [token for token, _ in matched_tokens],
+                "matched_subjects": matched_subjects[:3],
+                "baseline_performance": profile.get("baseline"),
+                "profiled_subjects": len(profile.get("subjects") or []),
+            }
+        }
+        return bonus, rationale, metadata
+
+    @staticmethod
+    def _history_recency_weight(sent_at: str) -> float:
+        """Favor more recent performance signals without excluding older wins."""
+        if not sent_at:
+            return 0.7
+        try:
+            parsed = datetime.fromisoformat(sent_at)
+        except (TypeError, ValueError):
+            return 0.7
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        age_days = max((datetime.now(timezone.utc) - parsed).days, 0)
+        return max(0.35, 1.0 - (age_days / 365.0))
+
+    @staticmethod
+    def _subject_tokens(subject: str) -> list[str]:
+        """Extract reusable tokens from a subject line."""
+        stopwords = {
+            "ai",
+            "and",
+            "from",
+            "into",
+            "notes",
+            "note",
+            "post",
+            "this",
+            "the",
+            "week",
+            "weekly",
+            "with",
+            "your",
+            "digest",
+            "update",
+            "issue",
+            "building",
+        }
+        tokens = []
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9'-]{1,}", subject.lower()):
+            cleaned = token.strip("'-.")
+            if len(cleaned) < 2 or cleaned in stopwords:
+                continue
+            tokens.append(cleaned)
+        return tokens
 
     @staticmethod
     def _normalize_subject(subject: str, max_length: int = 90) -> str:
