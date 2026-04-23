@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -58,8 +60,9 @@ class LinkedInExport:
     content_type: str
     text: str
     sources: tuple[SourceAttribution, ...]
-    max_length: int
-    was_trimmed: bool
+    max_length: int = LINKEDIN_GRAPHEME_LIMIT
+    was_trimmed: bool = False
+    queue: dict[str, Any] | None = None
     queue_id: int | None = None
 
     @property
@@ -106,6 +109,7 @@ def build_linkedin_export(
         content_type=content_type,
         text=text,
         sources=tuple(attributions),
+        queue=dict(queue) if queue else None,
         max_length=options.max_length,
         was_trimmed=was_trimmed,
         queue_id=queue_id,
@@ -127,10 +131,15 @@ def build_linkedin_export_from_db(
     if queue_id is not None:
         row = db.conn.execute(
             """SELECT pq.id AS queue_id,
-                      pq.content_id,
+                      pq.content_id AS queue_content_id,
                       pq.scheduled_at,
                       pq.platform,
                       pq.status,
+                      pq.published_at,
+                      pq.error,
+                      pq.error_category,
+                      pq.hold_reason,
+                      pq.created_at,
                       gc.*
                FROM publish_queue pq
                INNER JOIN generated_content gc ON gc.id = pq.content_id
@@ -141,11 +150,16 @@ def build_linkedin_export_from_db(
             raise LinkedInExportError(f"publish_queue id {queue_id} not found")
         content = dict(row)
         queue = {
-            "queue_id": content.get("queue_id"),
-            "content_id": content.get("content_id"),
+            "id": content.get("queue_id"),
+            "content_id": content.get("queue_content_id"),
             "scheduled_at": content.get("scheduled_at"),
             "platform": content.get("platform"),
             "status": content.get("status"),
+            "published_at": content.get("published_at"),
+            "error": content.get("error"),
+            "error_category": content.get("error_category"),
+            "hold_reason": content.get("hold_reason"),
+            "created_at": content.get("created_at"),
         }
         content_id = int(content["id"])
     else:
@@ -184,6 +198,21 @@ def format_linkedin_markdown(export: LinkedInExport) -> str:
     ]
     if export.queue_id is not None:
         lines.append(f"- Queue ID: {export.queue_id}")
+    if export.queue:
+        if export.queue.get("scheduled_at"):
+            lines.append(f"- Scheduled at: {export.queue['scheduled_at']}")
+        if export.queue.get("platform"):
+            lines.append(f"- Platform: {export.queue['platform']}")
+        if export.queue.get("status"):
+            lines.append(f"- Queue status: {export.queue['status']}")
+        if export.queue.get("published_at"):
+            lines.append(f"- Published at: {export.queue['published_at']}")
+        if export.queue.get("error"):
+            lines.append(f"- Queue error: {export.queue['error']}")
+        if export.queue.get("error_category"):
+            lines.append(f"- Error category: {export.queue['error_category']}")
+        if export.queue.get("hold_reason"):
+            lines.append(f"- Hold reason: {export.queue['hold_reason']}")
     lines.extend(
         [
             f"- Length: {export.graphemes}/{export.max_length} graphemes",
@@ -194,7 +223,24 @@ def format_linkedin_markdown(export: LinkedInExport) -> str:
             export.text,
         ]
     )
+    if export.sources:
+        lines.extend(["", "## Sources", ""])
+        for source in export.sources:
+            label = source.label or "Source"
+            lines.append(f"- {label}: {source.url}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def linkedin_export_to_dict(export: LinkedInExport) -> dict[str, Any]:
+    """Return a JSON-safe dictionary for a LinkedIn export."""
+    data = asdict(export)
+    data["graphemes"] = export.graphemes
+    return data
+
+
+def linkedin_export_to_json(export: LinkedInExport) -> str:
+    """Serialize a LinkedIn export as stable JSON."""
+    return json.dumps(linkedin_export_to_dict(export), indent=2, sort_keys=True)
 
 
 def expand_terse_x_language(text: str) -> str:
