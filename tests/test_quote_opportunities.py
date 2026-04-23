@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from engagement.quote_opportunities import QuoteOpportunityRecommender
-from quote_opportunities import format_json_output, format_table_output, main
+from quote_opportunities import format_json_output, format_table_output, main, write_artifact
 
 
 NOW = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
@@ -204,6 +204,48 @@ def test_campaign_filter_changes_recommended_topic(db):
     assert "performance" in opportunities[0].topics
 
 
+def test_filters_narrow_candidates_without_reordering(db):
+    ids = seed_quote_data(db)
+    article_id = _add_knowledge(
+        db,
+        source_id="article-testing",
+        source_url="https://example.com/testing-article",
+        author="researcher",
+        content="Testing article with pytest fixtures and regression checks.",
+        source_type="curated_article",
+    )
+
+    opportunities = QuoteOpportunityRecommender(db).recommend(
+        days=60,
+        limit=10,
+        campaign_id=ids["campaign_id"],
+        authors=["high"],
+        topics=["ai-agents"],
+        source_types=["curated_x"],
+        min_score=0.0,
+        now=NOW,
+    )
+
+    assert [item.knowledge_id for item in opportunities] == [ids["fresh_id"], ids["stale_id"]]
+    assert all(item.author == "high" for item in opportunities)
+    assert all("ai-agents" in item.topics for item in opportunities)
+    assert all(item.source_type == "curated_x" for item in opportunities)
+
+    article_opportunities = QuoteOpportunityRecommender(db).recommend(
+        days=60,
+        limit=10,
+        campaign_id=ids["campaign_id"],
+        authors=["researcher"],
+        topics=["testing"],
+        source_types=["curated_article"],
+        min_score=0.0,
+        now=NOW,
+    )
+
+    assert [item.knowledge_id for item in article_opportunities] == [article_id]
+    assert article_opportunities[0].source_type == "curated_article"
+
+
 def test_deduplicates_already_used_source_urls(db):
     ids = seed_quote_data(db)
 
@@ -258,6 +300,85 @@ def test_cli_formatters_emit_json_and_table(db):
     table = format_table_output(opportunities, [123])
     assert "Score" in table
     assert "Enqueued proactive quote actions: 123" in table
+
+
+def test_write_artifact_writes_markdown_review_payload(db, tmp_path):
+    ids = seed_quote_data(db)
+    opportunities = QuoteOpportunityRecommender(db).recommend(
+        days=7,
+        limit=1,
+        campaign_id=ids["campaign_id"],
+        min_score=0.0,
+        now=NOW,
+    )
+
+    artifact_path = write_artifact(
+        tmp_path / "quote_opportunities.md",
+        opportunities,
+        format="markdown",
+        enqueued_ids=[123],
+        filters={
+            "days": 7,
+            "limit": 1,
+            "campaign_id": ids["campaign_id"],
+            "authors": ["high"],
+            "topics": ["ai-agents"],
+            "platforms": ["x"],
+            "min_score": 0.0,
+        },
+    )
+
+    artifact = artifact_path.read_text(encoding="utf-8")
+    assert artifact.startswith("# Quote Opportunity Review")
+    assert "- Enqueued IDs: 123" in artifact
+    assert '"enqueued_ids": [' in artifact
+    assert opportunities[0].source_url in artifact
+
+
+def test_cli_writes_markdown_artifact_with_filters(db, tmp_path, capsys):
+    ids = seed_quote_data(db)
+    artifact_path = tmp_path / "quote_opportunities.md"
+
+    import quote_opportunities
+
+    class Context:
+        def __enter__(self):
+            return None, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("quote_opportunities.script_context", return_value=Context()):
+        exit_code = quote_opportunities.main(
+            [
+                "--days",
+                "7",
+                "--limit",
+                "2",
+                "--campaign-id",
+                str(ids["campaign_id"]),
+                "--author",
+                "high",
+                "--topic",
+                "ai-agents",
+                "--platform",
+                "x",
+                "--enqueue",
+                "--out",
+                str(artifact_path),
+                "--format",
+                "markdown",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"Quote opportunity artifact: {artifact_path}" in captured.err
+    artifact = artifact_path.read_text(encoding="utf-8")
+    assert artifact.startswith("# Quote Opportunity Review")
+    assert "Enqueued IDs:" in artifact
+    assert "high" in artifact
+    assert "ai-agents" in artifact
 
 
 def test_main_json_output(db, capsys):
