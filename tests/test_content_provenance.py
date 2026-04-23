@@ -13,7 +13,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from content_provenance import format_human_provenance, format_json_provenance, main
+from content_provenance import (
+    format_human_provenance,
+    format_json_provenance,
+    format_provenance_markdown,
+    main,
+)
 
 
 def seed_content_provenance(db) -> int:
@@ -123,6 +128,30 @@ def test_format_human_provenance_is_concise(db):
     assert "A concise generated post about provenance." in output
 
 
+def test_format_markdown_provenance_includes_sections_and_missing_markers(db):
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=[],
+        source_messages=[],
+        content="Bare provenance content.",
+        eval_score=6.0,
+        eval_feedback="plain",
+    )
+
+    output = format_provenance_markdown(db.get_content_provenance(content_id))
+
+    assert output.startswith(f"# Content #{content_id} (x_post, unpublished)")
+    assert "## Source commits (0)" in output
+    assert "## Claude messages (0)" in output
+    assert "## GitHub activity (0)" in output
+    assert "## Knowledge links (0)" in output
+    assert "## Variants (0)" in output
+    assert "## Publications (0)" in output
+    assert "## Engagement snapshots (0)" in output
+    assert "## Pipeline runs (0)" in output
+    assert output.count("- none") >= 8
+
+
 def test_main_json_output(db, capsys):
     content_id = seed_content_provenance(db)
 
@@ -136,6 +165,24 @@ def test_main_json_output(db, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["content"]["id"] == content_id
     assert payload["publications"][0]["platform"] == "bluesky"
+
+
+def test_main_writes_markdown_bundle(db, tmp_path, capsys):
+    content_id = seed_content_provenance(db)
+    output_path = tmp_path / "provenance.md"
+
+    @contextmanager
+    def fake_script_context():
+        yield None, db
+
+    with patch("content_provenance.script_context", fake_script_context):
+        main([str(content_id), "--markdown", "--output", str(output_path)])
+
+    output = output_path.read_text(encoding="utf-8")
+    assert output.startswith(f"# Content #{content_id}")
+    assert "## Source commits (1)" in output
+    assert "## Pipeline runs (1)" in output
+    assert "Exported provenance bundle" in capsys.readouterr().err
 
 
 def test_main_missing_content_exits(db):
