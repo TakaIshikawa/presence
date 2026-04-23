@@ -1,5 +1,6 @@
 """Tests for scripts/eval_pipeline.py — dry-run pipeline evaluation script."""
 
+import json
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -631,6 +632,146 @@ class TestRecording:
         assert kwargs["final_score"] == 8.4
         assert kwargs["filter_stats"] == {"repetition_rejected": 1}
         assert kwargs["final_content"] == "Generated content with [REDACTED]"
+
+
+class TestJsonArtifactOutput:
+    def test_single_run_writes_json_artifact_with_redacted_content(self, tmp_path):
+        """--out writes a machine-readable summary and redacts final content."""
+        config = _make_config()
+        config.privacy.redaction_patterns = [
+            {"name": "secret", "pattern": "SECRET123", "placeholder": "[REDACTED]"}
+        ]
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit()]
+
+        mock_parser = MagicMock()
+        mock_parser.get_messages_since.return_value = [_make_prompt()]
+
+        mock_pipeline = MagicMock()
+        mock_pipeline._build_avoidance_context.return_value = ""
+        mock_pipeline.run.return_value = _make_pipeline_result(
+            final_content="Generated content with SECRET123",
+            final_score=8.4,
+            filter_stats={"repetition_rejected": 1},
+        )
+
+        artifact_path = tmp_path / "eval_artifact.json"
+
+        with patch("eval_pipeline.script_context") as mock_ctx, \
+             patch("eval_pipeline.ClaudeLogParser") as MockLogParser, \
+             patch("eval_pipeline.SynthesisPipeline") as MockPipeline, \
+             patch("sys.argv", [
+                 "eval_pipeline.py",
+                 "--runs",
+                 "1",
+                 "--out",
+                 str(artifact_path),
+             ]):
+
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            MockLogParser.return_value = mock_parser
+            MockPipeline.return_value = mock_pipeline
+
+            import eval_pipeline
+            eval_pipeline.main()
+
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == 1
+        assert payload["mode"] == "single"
+        assert payload["content_type"] == "x_thread"
+        assert payload["source_windows"] == [
+            {"run": 1, "hours": 8, "commit_count": 1, "prompt_count": 1}
+        ]
+        assert payload["aggregate"]["run_count"] == 1
+        assert payload["aggregate"]["average_score"] == 8.4
+        assert payload["runs"][0]["final_content"] == "Generated content with [REDACTED]"
+        assert "SECRET123" not in artifact_path.read_text(encoding="utf-8")
+
+    def test_matrix_writes_json_artifact_with_variant_aggregates(self, tmp_path):
+        """--matrix writes ranked variant summaries and per-run details."""
+        config = _make_config(embeddings_enabled=False)
+        config.synthesis.num_candidates = 4
+        db = MagicMock()
+        db.create_eval_batch.side_effect = [101, 102]
+        db.get_commits_in_range.side_effect = [
+            [_make_commit(sha="a", message="feat: first window")],
+            [_make_commit(sha="b", message="feat: second window")],
+        ]
+
+        mock_parser = MagicMock()
+        mock_parser.get_messages_since.side_effect = [
+            [_make_prompt("Prompt window 1")],
+            [_make_prompt("Prompt window 2")],
+        ]
+
+        prompt_a = tmp_path / "prompt_a.txt"
+        prompt_b = tmp_path / "prompt_b.txt"
+        prompt_a.write_text("Prompt A {prompts} {commits} {commit_count}")
+        prompt_b.write_text("Prompt B {prompts} {commits} {commit_count}")
+
+        pipeline_a = MagicMock()
+        pipeline_b = MagicMock()
+        for pipeline, score, secret in (
+            (pipeline_a, 9.0, "SECRET_A"),
+            (pipeline_b, 7.0, "SECRET_B"),
+        ):
+            pipeline.generator.CONTENT_TYPE_CONFIG = {
+                "x_thread": {"template": "x_thread_v2", "max_tokens": 2000},
+                "x_post": {"template": "x_post_v2", "max_tokens": 150},
+            }
+            pipeline.run.return_value = _make_pipeline_result(
+                candidates=["Candidate 1", "Candidate 2"],
+                final_content=f"Final {secret}",
+                final_score=score,
+            )
+
+        config.privacy.redaction_patterns = [
+            {"name": "secret", "pattern": r"SECRET_[AB]", "placeholder": "[REDACTED]"}
+        ]
+
+        artifact_path = tmp_path / "matrix.json"
+
+        with patch("eval_pipeline.script_context") as mock_ctx, \
+             patch("eval_pipeline.ClaudeLogParser") as MockLogParser, \
+             patch("eval_pipeline.SynthesisPipeline") as MockPipeline, \
+             patch(
+                 "sys.argv",
+                 [
+                     "eval_pipeline.py",
+                     "--matrix",
+                     "--runs",
+                     "2",
+                     "--label",
+                     "parent",
+                     "--out",
+                     str(artifact_path),
+                     "--variant",
+                     f"a:{prompt_a}:gen-a:eval-a",
+                     "--variant",
+                     f"b:{prompt_b}:gen-b:eval-b",
+                 ],
+             ):
+
+            mock_ctx.return_value = _mock_script_context(config, db)()
+            MockLogParser.return_value = mock_parser
+            MockPipeline.side_effect = [pipeline_a, pipeline_b]
+
+            import eval_pipeline
+            eval_pipeline.main()
+
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == 1
+        assert payload["mode"] == "matrix"
+        assert payload["aggregate"]["variant_count"] == 2
+        assert payload["aggregate"]["run_count"] == 4
+        assert payload["variants"][0]["name"] == "a"
+        assert payload["variants"][0]["runs"][0]["final_content"].endswith("[REDACTED]")
+        assert payload["variants"][0]["prompt_file"] == str(prompt_a)
+        assert payload["variants"][0]["aggregate"]["run_count"] == 2
+        assert payload["variants"][0]["aggregate"]["average_score"] == 9.0
+        assert payload["variants"][1]["aggregate"]["average_score"] == 7.0
+        assert "SECRET_A" not in artifact_path.read_text(encoding="utf-8")
+        assert "SECRET_B" not in artifact_path.read_text(encoding="utf-8")
 
     def test_list_batches_reads_without_pipeline(self, capsys):
         """--list prints recent batches without running synthesis."""
