@@ -14,6 +14,7 @@ from output.blog_writer import BlogWriter
 
 BLOG_SEED_VARIANT_PLATFORM = "blog"
 BLOG_SEED_VARIANT_TYPE = "post_mortem_seed"
+SEED_SOURCE_NAME = "post_mortem_repurposer"
 DEFAULT_MIN_ENGAGEMENT = 10.0
 DEFAULT_MAX_AGE_DAYS = 30
 DEFAULT_LIMIT = 5
@@ -52,6 +53,15 @@ class BlogSeedArtifact:
     engagement: dict[str, Any]
     claim_check: dict[str, Any] | None
     risk_notes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SeedRecordResult:
+    """Result of persisting a repurposed seed into a downstream queue."""
+
+    record_type: str
+    record_id: int
+    created: bool
 
 
 class PostMortemRepurposer:
@@ -101,6 +111,18 @@ class PostMortemRepurposer:
                      WHERE platform = ?
                        AND variant_type = ?
                  )
+                 AND gc.id NOT IN (
+                     SELECT CAST(json_extract(source_metadata, '$.source_content_id') AS INTEGER)
+                     FROM content_ideas
+                     WHERE source_metadata IS NOT NULL
+                       AND json_extract(source_metadata, '$.source_content_id') IS NOT NULL
+                 )
+                 AND gc.id NOT IN (
+                     SELECT CAST(json_extract(source_material, '$.source_content_id') AS INTEGER)
+                     FROM planned_topics
+                     WHERE source_material IS NOT NULL
+                       AND json_extract(source_material, '$.source_content_id') IS NOT NULL
+                 )
                ORDER BY pe.engagement_score DESC, gc.published_at DESC
                LIMIT ?""",
             (
@@ -123,6 +145,34 @@ class PostMortemRepurposer:
             )
             for row in cursor.fetchall()
         ]
+
+    def find_seeded_content_idea(self, source_content_id: int) -> dict | None:
+        """Return a previously seeded content idea for one source post, if any."""
+        cursor = self.db.conn.execute(
+            """SELECT * FROM content_ideas
+               WHERE source_metadata IS NOT NULL
+               ORDER BY created_at ASC, id ASC"""
+        )
+        for row in cursor.fetchall():
+            item = dict(row)
+            metadata = self._decode_json(item.get("source_metadata"))
+            if int(metadata.get("source_content_id") or -1) == int(source_content_id):
+                return item
+        return None
+
+    def find_seeded_planned_topic(self, source_content_id: int) -> dict | None:
+        """Return a previously seeded planned topic for one source post, if any."""
+        cursor = self.db.conn.execute(
+            """SELECT * FROM planned_topics
+               WHERE source_material IS NOT NULL
+               ORDER BY created_at ASC, id ASC"""
+        )
+        for row in cursor.fetchall():
+            item = dict(row)
+            metadata = self._decode_json(item.get("source_material"))
+            if int(metadata.get("source_content_id") or -1) == int(source_content_id):
+                return item
+        return None
 
     def build_seed(self, candidate: ResonatedPostCandidate) -> BlogSeedArtifact:
         """Assemble source context, claim checks, and a structured blog seed."""
@@ -163,10 +213,71 @@ class PostMortemRepurposer:
             content=artifact_to_json(artifact),
             metadata={
                 "artifact_type": artifact.artifact_type,
+                "source_content_id": artifact.source_content_id,
+                "source_content_type": artifact.source_content_type,
                 "title": artifact.title,
                 "generated_at": artifact.generated_at,
             },
         )
+
+    def record_content_idea(
+        self,
+        artifact: BlogSeedArtifact,
+        *,
+        priority: str = "normal",
+        topic: str | None = None,
+    ) -> SeedRecordResult:
+        """Persist the artifact as a content idea seed, if not already captured."""
+        existing = self.find_seeded_content_idea(artifact.source_content_id)
+        if existing is not None:
+            return SeedRecordResult("content_idea", int(existing["id"]), created=False)
+
+        seed_metadata = self._seed_metadata(artifact, seed_kind="content_idea")
+        idea_id = self.db.add_content_idea(
+            note=artifact.draft_seed,
+            topic=topic,
+            priority=priority,
+            source=SEED_SOURCE_NAME,
+            source_metadata=seed_metadata,
+        )
+        return SeedRecordResult("content_idea", int(idea_id), created=True)
+
+    def record_planned_topic(
+        self,
+        artifact: BlogSeedArtifact,
+        *,
+        target_date: str,
+        topic: str | None = None,
+        angle: str | None = None,
+        campaign_id: int | None = None,
+    ) -> SeedRecordResult:
+        """Persist the artifact as a planned topic seed, if not already captured."""
+        existing = self.find_seeded_planned_topic(artifact.source_content_id)
+        if existing is not None:
+            return SeedRecordResult("planned_topic", int(existing["id"]), created=False)
+
+        seed_metadata = self._seed_metadata(artifact, seed_kind="planned_topic")
+        source_material = json.dumps(
+            {
+                **seed_metadata,
+                "planned_topic": {
+                    "target_date": str(target_date).strip(),
+                    "topic": topic or artifact.title,
+                    "angle": angle,
+                    "campaign_id": campaign_id,
+                },
+            },
+            sort_keys=True,
+        )
+        planned_topic_id = self.db.insert_planned_topic(
+            topic=topic or artifact.title,
+            angle=str(angle).strip() if angle is not None else None,
+            target_date=str(target_date).strip(),
+            source_material=source_material,
+            campaign_id=campaign_id,
+            status="planned",
+        )
+        return SeedRecordResult("planned_topic", int(planned_topic_id), created=True)
 
     def _source_artifacts(self, provenance: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         commits = [
@@ -301,6 +412,36 @@ class PostMortemRepurposer:
             f"OUTLINE:\n{outline_text}\n\n"
             f"RISK NOTES:\n- {claim_line}\n"
         )
+
+    def _seed_metadata(self, artifact: BlogSeedArtifact, *, seed_kind: str) -> dict[str, Any]:
+        """Build a stable metadata blob for downstream seed records."""
+        return {
+            "source": SEED_SOURCE_NAME,
+            "seed_kind": seed_kind,
+            "source_content_id": artifact.source_content_id,
+            "source_content_type": artifact.source_content_type,
+            "artifact_type": artifact.artifact_type,
+            "artifact_title": artifact.title,
+            "artifact_generated_at": artifact.generated_at,
+            "artifact_outline": artifact.outline,
+            "artifact_draft_seed": artifact.draft_seed,
+            "artifact_engagement": artifact.engagement,
+            "artifact_claim_check": artifact.claim_check,
+            "artifact_risk_notes": artifact.risk_notes,
+            "artifact_source_links": artifact.source_links,
+        }
+
+    @staticmethod
+    def _decode_json(value: object | None) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
 
 
 def artifact_to_dict(artifact: BlogSeedArtifact) -> dict[str, Any]:
