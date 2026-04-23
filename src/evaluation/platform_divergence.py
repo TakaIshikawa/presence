@@ -5,8 +5,7 @@ identifies platform-specific performance divergences, and surfaces actionable
 insights for content adaptation.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
 from storage.db import Database
 
 
@@ -30,6 +29,21 @@ class PlatformComparison:
     avg_x_score: float
     avg_bluesky_score: float
     winner: str
+    recommendation: str = ""
+
+
+@dataclass
+class ContentTypeRecommendation:
+    """Structured recommendation for adapting a content type."""
+    content_type: str
+    content_type_label: str
+    count: int
+    avg_x_score: float
+    avg_bluesky_score: float
+    winner: str
+    recommendation: str
+    rationale: str
+    score_gap: float
 
 
 @dataclass
@@ -42,6 +56,8 @@ class DivergenceReport:
     high_divergence_items: list[DivergenceItem]
     content_type_breakdown: dict[str, PlatformComparison]
     format_insights: list[str]
+    platform_takeaway: str = ""
+    recommendations: list[ContentTypeRecommendation] = field(default_factory=list)
 
 
 class PlatformDivergenceAnalyzer:
@@ -118,6 +134,7 @@ class PlatformDivergenceAnalyzer:
         # Build content type breakdown
         type_breakdown = {}
         type_data = {}  # Collect data by type
+        recommendations: list[ContentTypeRecommendation] = []
 
         for item in cross_platform_data:
             content_type = item['content_type']
@@ -136,24 +153,42 @@ class PlatformDivergenceAnalyzer:
             if abs(avg_bluesky_type - avg_x_type) < 0.01:
                 winner = "tie"
 
+            recommendation = self._build_content_type_recommendation(
+                content_type=content_type,
+                count=count,
+                avg_x_score=avg_x_type,
+                avg_bluesky_score=avg_bluesky_type,
+                winner=winner,
+            )
+
             type_breakdown[content_type] = PlatformComparison(
                 content_type=content_type,
                 count=count,
                 avg_x_score=round(avg_x_type, 2),
                 avg_bluesky_score=round(avg_bluesky_type, 2),
-                winner=winner
+                winner=winner,
+                recommendation=recommendation.recommendation,
             )
+            recommendations.append(recommendation)
 
         # Generate format insights
         insights = self._generate_format_insights(type_breakdown, avg_x, avg_bluesky)
+        platform_takeaway = self._generate_platform_takeaway(
+            avg_x,
+            avg_bluesky,
+            platform_winner,
+            recommendations,
+        )
 
         return DivergenceReport(
             total_cross_posted=total_count,
             avg_x_score=round(avg_x, 2),
             avg_bluesky_score=round(avg_bluesky, 2),
             platform_winner=platform_winner,
+            platform_takeaway=platform_takeaway,
             high_divergence_items=high_divergence,
             content_type_breakdown=type_breakdown,
+            recommendations=recommendations,
             format_insights=insights
         )
 
@@ -164,10 +199,97 @@ class PlatformDivergenceAnalyzer:
             avg_x_score=0.0,
             avg_bluesky_score=0.0,
             platform_winner="tie",
+            platform_takeaway="No cross-posted content with engagement data yet.",
             high_divergence_items=[],
             content_type_breakdown={},
+            recommendations=[],
             format_insights=[]
         )
+
+    def _content_type_label(self, content_type: str) -> str:
+        """Convert an internal content type name into readable text."""
+        return content_type.replace("x_", "").replace("_", " ").title()
+
+    def _build_content_type_recommendation(
+        self,
+        content_type: str,
+        count: int,
+        avg_x_score: float,
+        avg_bluesky_score: float,
+        winner: str,
+    ) -> ContentTypeRecommendation:
+        """Build an actionable recommendation for a content type."""
+        type_label = self._content_type_label(content_type)
+        score_gap = abs(avg_bluesky_score - avg_x_score)
+
+        if winner == "bluesky":
+            recommendation = (
+                f"Favor Bluesky for {type_label.lower()} content. Keep the fuller framing, "
+                f"conversation hooks, and community-oriented tone."
+            )
+            rationale = (
+                f"Bluesky averaged {avg_bluesky_score:.2f} vs X at {avg_x_score:.2f}, "
+                f"a gap of {score_gap:.2f} points."
+            )
+        elif winner == "x":
+            recommendation = (
+                f"Favor X for {type_label.lower()} content. Tighten the hook, compress the copy, "
+                f"and lead with the strongest claim."
+            )
+            rationale = (
+                f"X averaged {avg_x_score:.2f} vs Bluesky at {avg_bluesky_score:.2f}, "
+                f"a gap of {score_gap:.2f} points."
+            )
+        else:
+            recommendation = (
+                f"Use {type_label.lower()} content on both platforms without major changes."
+            )
+            rationale = (
+                f"Average performance was effectively tied at {avg_x_score:.2f} on X and "
+                f"{avg_bluesky_score:.2f} on Bluesky."
+            )
+
+        return ContentTypeRecommendation(
+            content_type=content_type,
+            content_type_label=type_label,
+            count=count,
+            avg_x_score=round(avg_x_score, 2),
+            avg_bluesky_score=round(avg_bluesky_score, 2),
+            winner=winner,
+            recommendation=recommendation,
+            rationale=rationale,
+            score_gap=round(score_gap, 2),
+        )
+
+    def _generate_platform_takeaway(
+        self,
+        overall_avg_x: float,
+        overall_avg_bluesky: float,
+        platform_winner: str,
+        recommendations: list[ContentTypeRecommendation],
+    ) -> str:
+        """Generate a concise platform-level takeaway."""
+        if platform_winner == "tie":
+            base = (
+                f"Overall performance is balanced: X averaged {overall_avg_x:.2f} and "
+                f"Bluesky averaged {overall_avg_bluesky:.2f}."
+            )
+        elif platform_winner == "bluesky":
+            base = (
+                f"Bluesky is the stronger overall platform here, averaging "
+                f"{overall_avg_bluesky:.2f} vs {overall_avg_x:.2f} on X."
+            )
+        else:
+            base = (
+                f"X is the stronger overall platform here, averaging "
+                f"{overall_avg_x:.2f} vs {overall_avg_bluesky:.2f} on Bluesky."
+            )
+
+        if recommendations:
+            top_recommendation = max(recommendations, key=lambda item: item.score_gap)
+            return f"{base} Strongest format signal: {top_recommendation.recommendation}"
+
+        return base
 
     def _generate_format_insights(
         self,
@@ -188,12 +310,16 @@ class PlatformDivergenceAnalyzer:
         insights = []
 
         # Overall platform preference
-        if overall_avg_bluesky > overall_avg_x * 1.2:
+        if overall_avg_bluesky > overall_avg_x * 1.2 and overall_avg_x > 0:
             pct = int(((overall_avg_bluesky - overall_avg_x) / overall_avg_x) * 100)
             insights.append(f"Posts tend to get {pct}% more engagement on Bluesky")
-        elif overall_avg_x > overall_avg_bluesky * 1.2:
+        elif overall_avg_x > overall_avg_bluesky * 1.2 and overall_avg_bluesky > 0:
             pct = int(((overall_avg_x - overall_avg_bluesky) / overall_avg_bluesky) * 100)
             insights.append(f"Posts tend to get {pct}% more engagement on X")
+        elif overall_avg_bluesky > overall_avg_x:
+            insights.append("Posts tend to perform better on Bluesky")
+        elif overall_avg_x > overall_avg_bluesky:
+            insights.append("Posts tend to perform better on X")
         else:
             insights.append("Posts perform similarly across platforms")
 
@@ -201,12 +327,16 @@ class PlatformDivergenceAnalyzer:
         for content_type, comparison in type_breakdown.items():
             type_name = content_type.replace("x_", "").replace("_", " ").title()
 
-            if comparison.avg_bluesky_score > comparison.avg_x_score * 1.3:
+            if comparison.avg_bluesky_score > comparison.avg_x_score * 1.3 and comparison.avg_x_score > 0:
                 pct = int(((comparison.avg_bluesky_score - comparison.avg_x_score) / comparison.avg_x_score) * 100)
                 insights.append(f"{type_name}s perform {pct}% better on Bluesky than X")
-            elif comparison.avg_x_score > comparison.avg_bluesky_score * 1.3:
+            elif comparison.avg_x_score > comparison.avg_bluesky_score * 1.3 and comparison.avg_bluesky_score > 0:
                 pct = int(((comparison.avg_x_score - comparison.avg_bluesky_score) / comparison.avg_bluesky_score) * 100)
                 insights.append(f"{type_name}s perform {pct}% better on X than Bluesky")
+            elif comparison.avg_bluesky_score > comparison.avg_x_score:
+                insights.append(f"{type_name}s tend to perform better on Bluesky")
+            elif comparison.avg_x_score > comparison.avg_bluesky_score:
+                insights.append(f"{type_name}s tend to perform better on X")
             else:
                 insights.append(f"{type_name}s perform similarly across platforms")
 
@@ -230,7 +360,21 @@ class PlatformDivergenceAnalyzer:
         # Build context block
         lines = ["PLATFORM NOTES:"]
 
-        # Add format insights
+        # Add the strongest overall takeaway first so prompt consumers get the main signal.
+        if report.platform_takeaway:
+            lines.append(f"- {report.platform_takeaway}")
+
+        # Add the most actionable content-type recommendations first.
+        for recommendation in sorted(
+            report.recommendations,
+            key=lambda item: item.score_gap,
+            reverse=True,
+        )[:3]:
+            lines.append(
+                f"- {recommendation.content_type_label}: {recommendation.recommendation}"
+            )
+
+        # Add format insights as broader context.
         for insight in report.format_insights:
             lines.append(f"- {insight}")
 

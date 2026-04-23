@@ -195,8 +195,10 @@ class TestPlatformDivergenceAnalyzer:
         assert report.avg_x_score == 0.0
         assert report.avg_bluesky_score == 0.0
         assert report.platform_winner == "tie"
+        assert report.platform_takeaway == "No cross-posted content with engagement data yet."
         assert report.high_divergence_items == []
         assert report.content_type_breakdown == {}
+        assert report.recommendations == []
         assert report.format_insights == []
 
     def test_analyze_divergence_with_data(self, populated_db):
@@ -215,6 +217,8 @@ class TestPlatformDivergenceAnalyzer:
 
         # Platform winner should be close (Bluesky slightly ahead)
         assert report.platform_winner in ["bluesky", "tie"]
+        assert report.platform_takeaway
+        assert len(report.recommendations) > 0
 
     def test_high_divergence_detection(self, populated_db):
         """Test detection of high-divergence items."""
@@ -251,11 +255,13 @@ class TestPlatformDivergenceAnalyzer:
         assert isinstance(x_post, PlatformComparison)
         assert x_post.content_type == "x_post"
         assert x_post.count == 4
+        assert x_post.recommendation
 
         # Check x_thread breakdown (1 item)
         x_thread = report.content_type_breakdown["x_thread"]
         assert x_thread.content_type == "x_thread"
         assert x_thread.count == 1
+        assert x_thread.recommendation
 
     def test_format_insights_generation(self, populated_db):
         """Test format insights are generated."""
@@ -300,6 +306,7 @@ class TestPlatformDivergenceAnalyzer:
 
         assert context != ""
         assert "PLATFORM NOTES:" in context
+        assert "Strongest format signal:" in context
         assert len(context.split("\n")) > 1  # Should have multiple lines
 
     def test_divergence_ratio_calculation(self, test_db):
