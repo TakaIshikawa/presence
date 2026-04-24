@@ -42,6 +42,8 @@ synthesis:
   max_daily_estimated_cost: null     # optional USD cap; null disables daily publish budget gate
   feedback_lookback_days: 30  # recent reject/revise feedback to turn into prompt constraints
   feedback_max_items: 6       # max feedback-derived constraints included in generation prompts
+  format_cooldown_recent_posts: 5  # down-rank formats used in this many recent same-type generations
+  format_cooldown_penalty: 0.5     # per-use selection weight penalty; 0 disables cooldown
   claim_check_enabled: true
 
 polling:

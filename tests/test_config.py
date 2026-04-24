@@ -530,6 +530,19 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
         assert cfg.synthesis.claim_check_enabled is True
 
+    def test_synthesis_format_cooldown_defaults(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert cfg.synthesis.format_cooldown_recent_posts == 5
+        assert cfg.synthesis.format_cooldown_penalty == 0.5
+
+    def test_synthesis_format_cooldown_overrides(self, tmp_path):
+        data = _minimal_config_dict()
+        data["synthesis"]["format_cooldown_recent_posts"] = 0
+        data["synthesis"]["format_cooldown_penalty"] = 0.25
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.synthesis.format_cooldown_recent_posts == 0
+        assert cfg.synthesis.format_cooldown_penalty == 0.25
+
     def test_synthesis_claim_check_enabled_override(self, tmp_path):
         data = _minimal_config_dict()
         data["synthesis"]["claim_check_enabled"] = False

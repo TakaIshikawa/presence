@@ -156,6 +156,8 @@ def main() -> None:
             knowledge_store=knowledge_store,
             engagement_predictor=engagement_predictor,
             format_weighting_enabled=config.synthesis.format_weighting_enabled,
+            format_cooldown_recent_posts=config.synthesis.format_cooldown_recent_posts,
+            format_cooldown_penalty=config.synthesis.format_cooldown_penalty,
             claim_check_enabled=config.synthesis.claim_check_enabled,
             persona_guard_enabled=config.synthesis.persona_guard_enabled,
             persona_guard_min_score=config.synthesis.persona_guard_min_score,

@@ -494,6 +494,95 @@ class TestContentTypeRouting:
         assert "Open with a genuine question" in format_directives[1]
         assert result.content_format == "tip"
 
+    @patch("evaluation.format_performance.FormatPerformanceAnalyzer")
+    @patch("synthesis.pipeline.ContentRefiner")
+    @patch("synthesis.pipeline.CrossModelEvaluator")
+    @patch("synthesis.pipeline.ContentGenerator")
+    @patch("synthesis.pipeline.FewShotSelector")
+    def test_format_cooldown_downranks_recent_recommendation(
+        self, MockFS, MockGen, MockEval, MockRefiner, MockAnalyzer, db
+    ):
+        db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Recent tip",
+            eval_score=8.0,
+            eval_feedback="Good",
+            content_format="tip",
+        )
+
+        analyzer = MockAnalyzer.return_value
+        analyzer.get_recommended_formats.return_value = ["tip", "question"]
+        analyzer.compute_selection_weights.return_value = {"tip": 1.0, "question": 1.0}
+
+        pipeline = SynthesisPipeline(
+            "key",
+            "gen-model",
+            "eval-model",
+            db,
+            claim_check_enabled=False,
+            persona_guard_enabled=False,
+        )
+        pipeline.generator.generate_candidates.return_value = _make_candidates(
+            ["Question candidate", "Tip candidate", "Other candidate"]
+        )
+        pipeline.evaluator.evaluate.return_value = _make_comparison(
+            best_score=9.5,
+            ranking=[0, 1, 2],
+        )
+        pipeline.few_shot_selector.get_examples.return_value = []
+        pipeline.few_shot_selector.format_examples.return_value = ""
+
+        result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS, content_type="x_post")
+
+        format_directives = pipeline.generator.generate_candidates.call_args.kwargs[
+            "format_directives"
+        ]
+        format_stats = result.filter_stats["format_selection"]
+        assert "Open with a genuine question" in format_directives[0]
+        assert result.content_format == "question"
+        assert format_stats["selected_format"] == "question"
+        assert format_stats["selected_formats"][0] == "question"
+        assert format_stats["format_penalties"]["tip"] == 0.5
+
+    def test_format_cooldown_can_be_disabled(self, db):
+        db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Recent tip",
+            eval_score=8.0,
+            eval_feedback="Good",
+            content_format="tip",
+        )
+
+        zero_window = SynthesisPipeline(
+            "key",
+            "gen-model",
+            "eval-model",
+            db,
+            format_cooldown_recent_posts=0,
+        )
+        weights, metadata = zero_window._apply_format_cooldown(
+            "x_post", {"tip": 1.0}
+        )
+        assert weights == {"tip": 1.0}
+        assert metadata["format_penalties"] == {}
+
+        zero_penalty = SynthesisPipeline(
+            "key",
+            "gen-model",
+            "eval-model",
+            db,
+            format_cooldown_penalty=0,
+        )
+        weights, metadata = zero_penalty._apply_format_cooldown(
+            "x_post", {"tip": 1.0}
+        )
+        assert weights == {"tip": 1.0}
+        assert metadata["format_penalties"] == {}
+
 
 # --- Refinement gating ---
 

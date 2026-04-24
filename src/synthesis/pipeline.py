@@ -4,6 +4,7 @@ import json
 import logging
 import random
 import re
+import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -230,6 +231,8 @@ class SynthesisPipeline:
         knowledge_store=None,
         engagement_predictor=None,
         format_weighting_enabled: bool = True,
+        format_cooldown_recent_posts: int = 5,
+        format_cooldown_penalty: float = 0.5,
         claim_check_enabled: bool = True,
         persona_guard_enabled: bool = True,
         persona_guard_min_score: float = 0.55,
@@ -273,6 +276,8 @@ class SynthesisPipeline:
         self.knowledge_store = knowledge_store
         self.engagement_predictor = engagement_predictor
         self.format_weighting_enabled = format_weighting_enabled
+        self.format_cooldown_recent_posts = format_cooldown_recent_posts
+        self.format_cooldown_penalty = format_cooldown_penalty
         self.claim_check_enabled = claim_check_enabled
         self.restricted_prompt_behavior = restricted_prompt_behavior
         self.claim_checker = ClaimChecker()
@@ -747,6 +752,7 @@ class SynthesisPipeline:
         content_type: str = "x_post",
         weights: Optional[dict[str, float]] = None,
         recommended_formats: Optional[list[str]] = None,
+        reorder_recommended_by_weights: bool = False,
     ) -> tuple[list[str], list[str]]:
         """Select format directives for candidate generation.
 
@@ -756,6 +762,8 @@ class SynthesisPipeline:
             num: Number of formats to select
             content_type: Type of content ('x_post' or 'x_thread')
             weights: Optional dict mapping format name to selection weight
+            recommended_formats: Optional prioritized list of format names
+            reorder_recommended_by_weights: Re-rank recommendations by weights
 
         Returns:
             (directives, format_names): Lists of format directives and their names
@@ -771,11 +779,16 @@ class SynthesisPipeline:
 
         if recommended_formats:
             formats_by_name = dict(formats)
-            selected = [
-                (name, formats_by_name[name])
-                for name in recommended_formats
-                if name in formats_by_name
-            ][:num]
+            recommended = [
+                name for name in recommended_formats if name in formats_by_name
+            ]
+            if reorder_recommended_by_weights and weights:
+                recommended = sorted(
+                    recommended,
+                    key=lambda name: weights.get(name, 1.0),
+                    reverse=True,
+                )
+            selected = [(name, formats_by_name[name]) for name in recommended[:num]]
             if len(selected) < num:
                 selected_names = {name for name, _ in selected}
                 remaining = [
@@ -799,6 +812,76 @@ class SynthesisPipeline:
         directives = [directive for _, directive in selected]
         format_names = [name for name, _ in selected]
         return directives, format_names
+
+    def _recent_content_format_counts(
+        self, content_type: str, limit: int
+    ) -> dict[str, int]:
+        """Count recently generated formats for the same content type."""
+        if limit <= 0:
+            return {}
+
+        conn = getattr(self.db, "conn", None)
+        if not isinstance(conn, sqlite3.Connection):
+            return {}
+
+        try:
+            cursor = conn.execute(
+                """SELECT content_format
+                   FROM generated_content
+                   WHERE content_type = ? AND content_format IS NOT NULL
+                   ORDER BY datetime(created_at) DESC, id DESC
+                   LIMIT ?""",
+                (content_type, limit),
+            )
+        except sqlite3.Error as e:
+            logger.debug(f"  Format cooldown lookup failed (non-fatal): {e}")
+            return {}
+
+        counts: dict[str, int] = {}
+        for row in cursor.fetchall():
+            name = row["content_format"] if hasattr(row, "keys") else row[0]
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def _apply_format_cooldown(
+        self,
+        content_type: str,
+        weights: Optional[dict[str, float]],
+    ) -> tuple[dict[str, float] | None, dict]:
+        """Reduce selection weights for formats used in recent generations."""
+        recent_limit = max(0, int(self.format_cooldown_recent_posts or 0))
+        penalty = max(0.0, float(self.format_cooldown_penalty or 0.0))
+        metadata = {
+            "recent_posts": recent_limit,
+            "penalty": penalty,
+            "recent_counts": {},
+            "format_penalties": {},
+            "adjusted_weights": {},
+            "selected_formats": [],
+            "selected_format": None,
+            "selected_format_cooldown_penalty": 0.0,
+        }
+
+        if recent_limit <= 0 or penalty <= 0:
+            return weights, metadata
+
+        counts = self._recent_content_format_counts(content_type, recent_limit)
+        metadata["recent_counts"] = counts
+        if not counts:
+            return weights, metadata
+
+        base_weights = dict(weights or {})
+        adjusted = dict(base_weights)
+        for format_name, count in counts.items():
+            base = max(0.0, float(base_weights.get(format_name, 1.0)))
+            multiplier = max(0.01, (1.0 - min(penalty, 1.0)) ** count)
+            adjusted_weight = base * multiplier
+            adjusted[format_name] = adjusted_weight
+            metadata["format_penalties"][format_name] = round(1.0 - multiplier, 6)
+            metadata["adjusted_weights"][format_name] = round(adjusted_weight, 6)
+
+        return adjusted, metadata
 
     def _enforce_char_limit(
         self, candidates: list[str], max_chars: int
@@ -974,11 +1057,23 @@ class SynthesisPipeline:
             except Exception as e:
                 logger.debug(f"  Format weighting failed (non-fatal): {e}")
 
+        format_selection_weights, format_cooldown_stats = self._apply_format_cooldown(
+            content_type, format_weights
+        )
+        if format_cooldown_stats["format_penalties"]:
+            logger.debug(
+                "  Format cooldown penalties: "
+                f"{format_cooldown_stats['format_penalties']}"
+            )
+
         format_directives, format_names = self._select_format_directives(
             self.num_candidates,
             content_type,
-            weights=format_weights,
+            weights=format_selection_weights,
             recommended_formats=recommended_formats,
+            reorder_recommended_by_weights=bool(
+                format_cooldown_stats["format_penalties"]
+            ),
         )
         if content_type == "x_visual" and trend_context:
             trend_directive = next(
@@ -1029,6 +1124,10 @@ class SynthesisPipeline:
             "stale_pattern_rejected": stale_pattern_rejected,
             "stale_patterns_matched": stale_patterns_matched,
             "topic_saturated_rejected": topic_saturated_rejected,
+            "format_selection": {
+                **format_cooldown_stats,
+                "selected_formats": format_names,
+            },
         }
 
         # Stage 2.8: Semantic dedup filter
@@ -1154,6 +1253,12 @@ class SynthesisPipeline:
 
         # Capture the format used for the best candidate
         best_format = format_names[best_idx] if best_idx < len(format_names) else None
+        filter_stats["format_selection"]["selected_format"] = best_format
+        filter_stats["format_selection"]["selected_format_cooldown_penalty"] = (
+            filter_stats["format_selection"]["format_penalties"].get(best_format, 0.0)
+            if best_format
+            else 0.0
+        )
 
         # Stage 4 & 5: Refinement + final gate
         should_refine = (

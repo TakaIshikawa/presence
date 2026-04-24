@@ -59,6 +59,8 @@ class SynthesisConfig:
     feedback_lookback_days: int = 30
     feedback_max_items: int = 6
     format_weighting_enabled: bool = True
+    format_cooldown_recent_posts: int = 5
+    format_cooldown_penalty: float = 0.5
     claim_check_enabled: bool = True
     persona_guard_enabled: bool = True
     persona_guard_min_score: float = 0.55
@@ -722,6 +724,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
             feedback_lookback_days=data["synthesis"].get("feedback_lookback_days", 30),
             feedback_max_items=data["synthesis"].get("feedback_max_items", 6),
             format_weighting_enabled=data["synthesis"].get("format_weighting_enabled", True),
+            format_cooldown_recent_posts=data["synthesis"].get(
+                "format_cooldown_recent_posts", 5
+            ),
+            format_cooldown_penalty=data["synthesis"].get(
+                "format_cooldown_penalty", 0.5
+            ),
             claim_check_enabled=data["synthesis"].get("claim_check_enabled", True),
             persona_guard_enabled=data["synthesis"].get("persona_guard_enabled", True),
             persona_guard_min_score=data["synthesis"].get("persona_guard_min_score", 0.55),
