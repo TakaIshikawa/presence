@@ -420,6 +420,57 @@ class TestSearchSimilar:
         assert old_result.freshness_score > 0
         assert results[0].raw_similarity < old_result.raw_similarity
 
+    def test_equal_similarity_keeps_insert_order_without_freshness(self, db):
+        store = KnowledgeStore(db.conn, FixedQueryEmbedder())
+        old_item = _make_item(source_id="old", embedding=[1.0, 0.0])
+        fresh_item = _make_item(source_id="fresh", embedding=[1.0, 0.0])
+        store.add_item(old_item)
+        store.add_item(fresh_item)
+        now = datetime.now(timezone.utc)
+        store.conn.execute(
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
+            ((now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds"), "old"),
+        )
+        store.conn.execute(
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
+            (now.isoformat(sep=" ", timespec="seconds"), "fresh"),
+        )
+        store.conn.commit()
+
+        results = store.search_similar("query", min_similarity=-1.0)
+
+        assert [result.item.source_id for result in results] == ["old", "fresh"]
+        assert results[0].raw_similarity == pytest.approx(results[1].raw_similarity)
+        assert results[0].adjusted_score == pytest.approx(results[0].raw_similarity)
+
+    def test_equal_similarity_ranks_fresh_item_first_when_configured(self, db):
+        store = KnowledgeStore(
+            db.conn,
+            FixedQueryEmbedder(),
+            freshness_half_life_days=7,
+        )
+        old_item = _make_item(source_id="old", embedding=[1.0, 0.0])
+        fresh_item = _make_item(source_id="fresh", embedding=[1.0, 0.0])
+        store.add_item(old_item)
+        store.add_item(fresh_item)
+        now = datetime.now(timezone.utc)
+        store.conn.execute(
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
+            ((now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds"), "old"),
+        )
+        store.conn.execute(
+            "UPDATE knowledge SET published_at = ? WHERE source_id = ?",
+            (now.isoformat(sep=" ", timespec="seconds"), "fresh"),
+        )
+        store.conn.commit()
+
+        results = store.search_similar("query", min_similarity=-1.0)
+
+        assert [result.item.source_id for result in results] == ["fresh", "old"]
+        assert results[0].raw_similarity == pytest.approx(results[1].raw_similarity)
+        assert results[0].freshness_score > results[1].freshness_score
+        assert results[0].adjusted_score > results[1].adjusted_score
+
     def test_freshness_uses_ingested_at_when_published_at_missing(self, db):
         store = KnowledgeStore(db.conn, FixedQueryEmbedder())
         old_high = _make_item(source_id="old-high", embedding=[0.98, 0.02])
