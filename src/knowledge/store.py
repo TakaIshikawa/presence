@@ -18,6 +18,11 @@ from .embeddings import (
     deserialize_embedding,
     cosine_similarity
 )
+from .freshness_report import (
+    DEFAULT_STALE_AFTER_DAYS,
+    KnowledgeFreshnessReport,
+    build_knowledge_freshness_report,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -567,3 +572,15 @@ class KnowledgeStore:
             (content_id, knowledge_id, relevance)
         )
         self.conn.commit()
+
+    def freshness_report(
+        self,
+        stale_after_days: float = DEFAULT_STALE_AFTER_DAYS,
+        source_type: Optional[str] = None,
+    ) -> KnowledgeFreshnessReport:
+        """Return source-level freshness metrics for stored knowledge."""
+        return build_knowledge_freshness_report(
+            self.conn,
+            stale_after_days=stale_after_days,
+            source_type=source_type,
+        )
