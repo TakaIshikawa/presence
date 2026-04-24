@@ -327,6 +327,9 @@ def test_operations_health_warning_webhook_payload(db):
 
     assert payload["source"] == "operations_health"
     assert payload["status"] == "warning"
+    assert payload["generated_at"] == summary["generated_at"]
+    assert payload["warning_count"] == 1
+    assert len(payload["warnings"]) == 1
     assert len(payload["alerts"]) == 1
     assert payload["alerts"][0]["id"] == "poll_state"
     assert payload["alerts"][0]["level"] == "warning"

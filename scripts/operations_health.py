@@ -62,9 +62,13 @@ def main() -> None:
         output = {"summary": summary}
         if args.webhook_dry_run:
             output["webhook"] = webhook_result
+        elif webhook_result.get("status") == "failed":
+            print(f"Webhook warning: {webhook_result.get('error')}", file=sys.stderr)
         print(json.dumps(output if args.webhook_dry_run else summary, indent=2))
     else:
         print(format_operations_health(summary))
+        if webhook_result.get("status") == "failed":
+            print(f"Webhook warning: {webhook_result.get('error')}")
         if args.webhook_dry_run:
             print(json.dumps(webhook_result["payload"] or {}, indent=2))
 

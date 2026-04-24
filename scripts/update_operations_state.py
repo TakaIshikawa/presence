@@ -5,7 +5,6 @@ This ensures the tact maintainer has accurate data for anomaly detection.
 """
 
 import argparse
-import hashlib
 import json
 import logging
 import sqlite3
@@ -21,6 +20,11 @@ import requests
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from output.webhook_alerts import (
+    alert_fingerprint,
+    build_webhook_payload as _build_webhook_payload,
+    deliver_webhook_alerts,
+)
 from runner import script_context
 
 logger = logging.getLogger(__name__)
@@ -178,27 +182,7 @@ def update_operations_yaml(db_path, operations=None, alert_thresholds=None, now=
 
 def build_webhook_payload(summary: dict, source: str, min_level: str = "alert") -> dict:
     """Build a compact webhook payload for unhealthy checks at or above min_level."""
-    min_rank = _level_rank(min_level)
-    generated_at = summary.get("generatedAt") or summary.get("generated_at")
-    alerts = []
-    for check_id, check in summary.get("checks", {}).items():
-        level = _check_level(check)
-        if _level_rank(level) < min_rank:
-            continue
-        alerts.append(
-            {
-                "id": check_id,
-                "level": level,
-                "summary": _check_summary(check),
-                "fingerprint": alert_fingerprint(source, check_id, check),
-            }
-        )
-    return {
-        "source": source,
-        "status": summary.get("status", "ok"),
-        "generatedAt": generated_at,
-        "alerts": alerts,
-    }
+    return _build_webhook_payload(summary, source, min_level)
 
 
 def deliver_operations_alerts(
@@ -211,58 +195,17 @@ def deliver_operations_alerts(
     dry_run: bool = False,
 ) -> dict:
     """Deliver newly triggered unhealthy checks to the configured webhook."""
-    if not webhook_config.webhook_enabled or not webhook_config.webhook_url:
-        return {"status": "disabled", "sent": False, "payload": None, "dryRun": dry_run}
-
-    payload = build_webhook_payload(
+    return deliver_webhook_alerts(
+        conn,
         summary,
         source=source,
-        min_level=webhook_config.webhook_min_level,
+        webhook_url=webhook_config.webhook_url,
+        webhook_enabled=webhook_config.webhook_enabled,
+        webhook_min_level=webhook_config.webhook_min_level,
+        http_timeout=http_timeout,
+        dry_run=dry_run,
+        http_post=requests.post,
     )
-    if dry_run:
-        return {"status": "dry_run", "sent": False, "payload": payload, "dryRun": True}
-
-    new_alerts = []
-    for alert in payload["alerts"]:
-        check_key = _metadata_key(source, alert["id"])
-        previous = _get_metadata(conn, check_key)
-        if previous != alert["fingerprint"]:
-            new_alerts.append(alert)
-
-    _clear_resolved_fingerprints(
-        conn,
-        source=source,
-        active_check_ids=[alert["id"] for alert in payload["alerts"]],
-    )
-
-    if not new_alerts:
-        return {"status": "deduped", "sent": False, "payload": None, "dryRun": dry_run}
-
-    payload = {**payload, "alerts": new_alerts}
-    response = requests.post(webhook_config.webhook_url, json=payload, timeout=http_timeout)
-    response.raise_for_status()
-    for alert in new_alerts:
-        _set_metadata(conn, _metadata_key(source, alert["id"]), alert["fingerprint"])
-    conn.commit()
-    return {"status": "sent", "sent": True, "payload": payload, "dryRun": False}
-
-
-def alert_fingerprint(source: str, check_id: str, check: dict) -> str:
-    """Return a stable fingerprint for one unhealthy check."""
-    body = json.dumps(
-        {
-            "source": source,
-            "check_id": check_id,
-            "level": _check_level(check),
-            "summary": _check_summary(check),
-            "value": check.get("value"),
-            "threshold": check.get("threshold"),
-            "warnings": check.get("warnings", []),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def _consecutive_publish_failures(
@@ -622,5 +565,7 @@ if __name__ == '__main__':
         )
         if args.webhook_dry_run:
             print(json.dumps(result["payload"] or {}, indent=2))
+        elif result.get("status") == "failed":
+            logger.warning("Operations webhook delivery failed: %s", result.get("error"))
 
     exit(0 if success else 1)

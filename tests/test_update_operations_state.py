@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import requests
 import yaml
 
 # Add scripts/ to path
@@ -381,6 +382,9 @@ class TestOperationsAlertWebhook:
         assert payload["source"] == "update_operations_state"
         assert payload["status"] == "alert"
         assert payload["generatedAt"] == NOW.isoformat()
+        assert payload["generated_at"] == NOW.isoformat()
+        assert payload["warning_count"] == 1
+        assert payload["warnings"] == ["Publish queue backlog has 4 items > 2"]
         assert len(payload["alerts"]) == 1
         alert = payload["alerts"][0]
         assert alert["id"] == "queue_backlog"
@@ -427,6 +431,30 @@ class TestOperationsAlertWebhook:
         assert result["sent"] is False
         mock_post.assert_not_called()
 
+    def test_deliver_webhook_noops_below_min_level(self, db):
+        warning_summary = {
+            "status": "warning",
+            "generated_at": NOW.isoformat(),
+            "checks": {
+                "poll_state": {
+                    "status": "warning",
+                    "warnings": ["poll_state is stale"],
+                },
+            },
+            "warnings": ["poll_state is stale"],
+        }
+        with patch("update_operations_state.requests.post") as mock_post:
+            result = deliver_operations_alerts(
+                db.conn,
+                warning_summary,
+                self._webhook(webhook_min_level="alert"),
+                source="operations_health",
+            )
+
+        assert result["status"] == "below_min_level"
+        assert result["sent"] is False
+        mock_post.assert_not_called()
+
     def test_deliver_webhook_dry_run_does_not_post_or_persist(self, db):
         with patch("update_operations_state.requests.post") as mock_post:
             dry = deliver_operations_alerts(
@@ -452,3 +480,28 @@ class TestOperationsAlertWebhook:
         assert metadata_table is None
         assert real["status"] == "sent"
         assert mock_post.call_count == 1
+
+    def test_deliver_webhook_reports_http_error_without_persisting(self, db):
+        with patch("update_operations_state.requests.post") as mock_post:
+            mock_post.return_value.raise_for_status.side_effect = requests.HTTPError(
+                "500 Server Error"
+            )
+
+            failed = deliver_operations_alerts(
+                db.conn,
+                self._summary(),
+                self._webhook(),
+                source="update_operations_state",
+            )
+            retry = deliver_operations_alerts(
+                db.conn,
+                self._summary(),
+                self._webhook(),
+                source="update_operations_state",
+            )
+
+        assert failed["status"] == "failed"
+        assert failed["sent"] is False
+        assert "500 Server Error" in failed["error"]
+        assert retry["status"] == "failed"
+        assert mock_post.call_count == 2
