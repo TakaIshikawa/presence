@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS github_activity (
     repo_name TEXT NOT NULL,
     activity_type TEXT NOT NULL,  -- 'issue', 'pull_request', 'release', 'discussion', 'issue_comment', etc.
     number TEXT NOT NULL,
-    activity_type TEXT NOT NULL,  -- 'issue', 'pull_request', 'release', 'discussion', 'issue_comment', etc.
     title TEXT NOT NULL,
     body TEXT,
     state TEXT,
@@ -530,6 +529,44 @@ CREATE TABLE IF NOT EXISTS reply_queue (
 CREATE INDEX IF NOT EXISTS idx_reply_queue_status ON reply_queue(status);
 CREATE INDEX IF NOT EXISTS idx_reply_queue_inbound ON reply_queue(inbound_tweet_id);
 
+-- Durable audit trail for reply review and publishing decisions
+CREATE TABLE IF NOT EXISTS reply_review_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reply_queue_id INTEGER NOT NULL REFERENCES reply_queue(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,                -- approved | edited | rejected | expired | posted | failed
+    actor TEXT NOT NULL DEFAULT 'system',
+    old_status TEXT,
+    new_status TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_review_events_reply_created
+    ON reply_review_events(reply_queue_id, created_at DESC, id DESC);
+
+-- Follow-up reminders after high-value replies have been approved or sent
+CREATE TABLE IF NOT EXISTS reply_followup_reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_handle TEXT NOT NULL,
+    source_type TEXT NOT NULL CHECK (source_type IN ('reply_queue', 'proactive_actions')),
+    source_id INTEGER NOT NULL,
+    source_reply_id INTEGER REFERENCES reply_queue(id),
+    source_action_id INTEGER REFERENCES proactive_actions(id),
+    due_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'dismissed')),
+    reason TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT,
+    dismissed_at TEXT,
+    UNIQUE(source_type, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_followup_status_due
+    ON reply_followup_reminders(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_reply_followup_target
+    ON reply_followup_reminders(target_handle, status, due_at);
 -- Track which knowledge items were used in reply drafts
 CREATE TABLE IF NOT EXISTS reply_knowledge_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

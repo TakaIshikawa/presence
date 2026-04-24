@@ -43,6 +43,7 @@ class TestSchemaInit:
             "eval_results",
             "model_usage",
             "newsletter_link_clicks",
+            "reply_followup_reminders",
         }
         assert expected.issubset(tables)
 
@@ -3290,6 +3291,68 @@ class TestReplyQueue:
             db.get_expired_proactive_drafts(0)
         with pytest.raises(ValueError, match="limit"):
             db.dismiss_expired_proactive_drafts(48, limit=0)
+
+    def test_reply_followup_reminders_can_be_inserted_listed_done_and_dismissed(self, db):
+        now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+        first = db.insert_reply_followup_reminder(
+            target_handle="alice",
+            source_type="reply_queue",
+            source_id=1,
+            due_at="2026-04-23T10:00:00+00:00",
+            reason="High-value reply",
+        )
+        second = db.insert_reply_followup_reminder(
+            target_handle="bob",
+            source_type="proactive_actions",
+            source_id=2,
+            due_at="2026-04-30T10:00:00+00:00",
+            reason="Known contact",
+            notes="Check launch",
+        )
+
+        due = db.list_reply_followup_reminders(status="pending", due="due", now=now)
+        upcoming = db.list_reply_followup_reminders(
+            status="pending",
+            due="upcoming",
+            now=now,
+        )
+
+        assert [row["id"] for row in due] == [first]
+        assert [row["id"] for row in upcoming] == [second]
+
+        assert db.mark_reply_followup_done(first, notes="Followed up", now=now)
+        assert db.dismiss_reply_followup(second, now=now)
+
+        done = db.list_reply_followup_reminders(status="done", due="all", now=now)
+        dismissed = db.list_reply_followup_reminders(
+            status="dismissed",
+            due="all",
+            now=now,
+        )
+        assert done[0]["completed_at"] == "2026-04-23T12:00:00+00:00"
+        assert done[0]["notes"] == "Followed up"
+        assert dismissed[0]["dismissed_at"] == "2026-04-23T12:00:00+00:00"
+
+    def test_reply_followup_duplicate_source_is_suppressed(self, db):
+        first = db.insert_reply_followup_reminder(
+            target_handle="alice",
+            source_type="reply_queue",
+            source_id=10,
+            due_at="2026-04-30T10:00:00+00:00",
+            reason="High-value reply",
+        )
+        duplicate = db.insert_reply_followup_reminder(
+            target_handle="alice",
+            source_type="reply_queue",
+            source_id=10,
+            due_at="2026-05-01T10:00:00+00:00",
+            reason="Duplicate",
+        )
+
+        assert first is not None
+        assert duplicate is None
+        rows = db.list_reply_followup_reminders(status="all")
+        assert len(rows) == 1
 
 
 # ====================================================================

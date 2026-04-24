@@ -289,6 +289,49 @@ class Database:
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_platform ON reply_queue(platform, inbound_tweet_id)")
             if {"status", "detected_at"}.issubset(rq_cols):
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_reply_queue_pending_age ON reply_queue(status, detected_at)")
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS reply_review_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reply_queue_id INTEGER NOT NULL REFERENCES reply_queue(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT 'system',
+                    old_status TEXT,
+                    new_status TEXT,
+                    notes TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reply_review_events_reply_created "
+                "ON reply_review_events(reply_queue_id, created_at DESC, id DESC)"
+            )
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS reply_followup_reminders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_handle TEXT NOT NULL,
+                    source_type TEXT NOT NULL CHECK (source_type IN ('reply_queue', 'proactive_actions')),
+                    source_id INTEGER NOT NULL,
+                    source_reply_id INTEGER REFERENCES reply_queue(id),
+                    source_action_id INTEGER REFERENCES proactive_actions(id),
+                    due_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'dismissed')),
+                    reason TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TEXT,
+                    dismissed_at TEXT,
+                    UNIQUE(source_type, source_id)
+                )
+            """)
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reply_followup_status_due "
+                "ON reply_followup_reminders(status, due_at)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reply_followup_target "
+                "ON reply_followup_reminders(target_handle, status, due_at)"
+            )
             # Migrate proactive_actions for platform/thread metadata.
             pa_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(proactive_actions)")}
             if pa_cols and "platform_metadata" not in pa_cols:
@@ -3829,15 +3872,82 @@ class Database:
         cutoff = now - timedelta(hours=draft_ttl_hours)
         reviewed_at = now.isoformat()
         cursor = self.conn.execute(
-            """UPDATE reply_queue
-               SET status = 'dismissed', reviewed_at = ?
+            """SELECT id, status FROM reply_queue
                WHERE status = 'pending'
                  AND detected_at IS NOT NULL
                  AND datetime(detected_at) <= datetime(?)""",
-            (reviewed_at, cutoff.isoformat()),
+            (cutoff.isoformat(),),
+        )
+        rows = cursor.fetchall()
+        for row in rows:
+            self.conn.execute(
+                """UPDATE reply_queue
+                   SET status = 'dismissed', reviewed_at = ?
+                   WHERE id = ?""",
+                (reviewed_at, row["id"]),
+            )
+            self._insert_reply_review_event_uncommitted(
+                reply_id=row["id"],
+                event_type="expired",
+                actor="system",
+                old_status=row["status"],
+                new_status="dismissed",
+                notes=f"Expired after {draft_ttl_hours} hours",
+                created_at=reviewed_at,
+            )
+        self.conn.commit()
+        return len(rows)
+
+    def record_reply_review_event(
+        self,
+        reply_id: int,
+        event_type: str,
+        actor: str = "system",
+        old_status: Optional[str] = None,
+        new_status: Optional[str] = None,
+        notes: Optional[str] = None,
+        created_at: Optional[str] = None,
+    ) -> int:
+        """Record a durable audit event for a reply draft."""
+        event_id = self._insert_reply_review_event_uncommitted(
+            reply_id=reply_id,
+            event_type=event_type,
+            actor=actor,
+            old_status=old_status,
+            new_status=new_status,
+            notes=notes,
+            created_at=created_at,
         )
         self.conn.commit()
-        return cursor.rowcount
+        return event_id
+
+    def _insert_reply_review_event_uncommitted(
+        self,
+        reply_id: int,
+        event_type: str,
+        actor: str,
+        old_status: Optional[str],
+        new_status: Optional[str],
+        notes: Optional[str],
+        created_at: Optional[str] = None,
+    ) -> int:
+        cursor = self.conn.execute(
+            """INSERT INTO reply_review_events
+               (reply_queue_id, event_type, actor, old_status, new_status, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))""",
+            (reply_id, event_type, actor, old_status, new_status, notes, created_at),
+        )
+        return cursor.lastrowid
+
+    def list_reply_review_events(self, reply_id: int) -> list[dict]:
+        """List audit events for a reply draft, newest first."""
+        cursor = self.conn.execute(
+            """SELECT * FROM reply_review_events
+               WHERE reply_queue_id = ?
+               ORDER BY datetime(created_at) DESC, id DESC""",
+            (reply_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def update_reply_status(
         self,
@@ -3845,9 +3955,17 @@ class Database:
         status: str,
         posted_tweet_id: Optional[str] = None,
         posted_platform_id: Optional[str] = None,
+        actor: str = "system",
+        notes: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> None:
         """Update a reply's status (approved, posted, dismissed)."""
         now = datetime.now(timezone.utc).isoformat()
+        row = self.conn.execute(
+            "SELECT status FROM reply_queue WHERE id = ?",
+            (reply_id,),
+        ).fetchone()
+        old_status = row["status"] if row else None
         if status == "posted" and (posted_tweet_id or posted_platform_id):
             platform_id = posted_platform_id or posted_tweet_id
             self.conn.execute(
@@ -3870,8 +3988,223 @@ class Database:
                 "UPDATE reply_queue SET status = ?, reviewed_at = ? WHERE id = ?",
                 (status, now, reply_id)
             )
+        self._insert_reply_review_event_uncommitted(
+            reply_id=reply_id,
+            event_type=event_type or self._reply_event_type_for_status(status),
+            actor=actor,
+            old_status=old_status,
+            new_status=status,
+            notes=notes,
+            created_at=now,
+        )
         self.conn.commit()
 
+    @staticmethod
+    def _reply_event_type_for_status(status: str) -> str:
+        if status == "posted":
+            return "posted"
+        if status == "dismissed":
+            return "rejected"
+        if status == "approved":
+            return "approved"
+        return status
+
+    # Reply follow-up reminders
+    def insert_reply_followup_reminder(
+        self,
+        target_handle: str,
+        source_type: str,
+        source_id: int,
+        due_at: str,
+        reason: str,
+        notes: Optional[str] = None,
+    ) -> Optional[int]:
+        """Insert a reply follow-up reminder, suppressing duplicate source rows."""
+        if source_type not in {"reply_queue", "proactive_actions"}:
+            raise ValueError("source_type must be reply_queue or proactive_actions")
+        source_reply_id = source_id if source_type == "reply_queue" else None
+        source_action_id = source_id if source_type == "proactive_actions" else None
+        try:
+            cursor = self.conn.execute(
+                """INSERT INTO reply_followup_reminders
+                   (target_handle, source_type, source_id, source_reply_id,
+                    source_action_id, due_at, reason, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    target_handle,
+                    source_type,
+                    source_id,
+                    source_reply_id,
+                    source_action_id,
+                    due_at,
+                    reason,
+                    notes,
+                ),
+            )
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+    def list_reply_followup_reminders(
+        self,
+        status: str = "pending",
+        due: Optional[str] = None,
+        now: Optional[datetime] = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """List follow-up reminders, optionally filtering pending rows by due status."""
+        if status not in {"pending", "done", "dismissed", "all"}:
+            raise ValueError("status must be pending, done, dismissed, or all")
+        if due not in {None, "due", "upcoming", "overdue", "all"}:
+            raise ValueError("due must be due, upcoming, overdue, all, or None")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        now = now or datetime.now(timezone.utc)
+        filters = []
+        params: list[object] = []
+        if status != "all":
+            filters.append("status = ?")
+            params.append(status)
+        if due in {"due", "overdue"}:
+            filters.append("datetime(due_at) <= datetime(?)")
+            params.append(now.isoformat())
+        elif due == "upcoming":
+            filters.append("datetime(due_at) > datetime(?)")
+            params.append(now.isoformat())
+
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM reply_followup_reminders
+                {where}
+                ORDER BY datetime(due_at) ASC, id ASC
+                LIMIT ?""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_reply_followup_done(
+        self,
+        reminder_id: int,
+        notes: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> bool:
+        """Mark a follow-up reminder done."""
+        timestamp = (now or datetime.now(timezone.utc)).isoformat()
+        cursor = self.conn.execute(
+            """UPDATE reply_followup_reminders
+               SET status = 'done',
+                   completed_at = ?,
+                   updated_at = ?,
+                   notes = COALESCE(?, notes)
+               WHERE id = ? AND status = 'pending'""",
+            (timestamp, timestamp, notes, reminder_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def dismiss_reply_followup(
+        self,
+        reminder_id: int,
+        notes: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> bool:
+        """Dismiss a follow-up reminder."""
+        timestamp = (now or datetime.now(timezone.utc)).isoformat()
+        cursor = self.conn.execute(
+            """UPDATE reply_followup_reminders
+               SET status = 'dismissed',
+                   dismissed_at = ?,
+                   updated_at = ?,
+                   notes = COALESCE(?, notes)
+               WHERE id = ? AND status = 'pending'""",
+            (timestamp, timestamp, notes, reminder_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def count_recent_reply_followups_to_target(
+        self,
+        target_handle: str,
+        lookback_days: int,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Count non-dismissed follow-up reminders for a target within a lookback window."""
+        if lookback_days <= 0:
+            return 0
+        normalized = target_handle.lstrip("@").lower()
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=lookback_days)
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) FROM reply_followup_reminders
+               WHERE LOWER(LTRIM(target_handle, '@')) = ?
+                 AND status IN ('pending', 'done')
+                 AND datetime(created_at) >= datetime(?)""",
+            (normalized, cutoff.isoformat()),
+        )
+        return cursor.fetchone()[0]
+
+    def get_reply_followup_source_candidates(
+        self,
+        lookback_days: int = 14,
+        limit: int = 50,
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get approved/posted reply sources that could become follow-up reminders."""
+        if lookback_days <= 0:
+            raise ValueError("lookback_days must be positive")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=lookback_days)
+        cursor = self.conn.execute(
+            """SELECT
+                    'reply_queue' AS source_type,
+                    id AS source_id,
+                    inbound_author_handle AS target_handle,
+                    inbound_text AS target_text,
+                    draft_text,
+                    status,
+                    priority,
+                    intent,
+                    quality_score,
+                    quality_flags,
+                    relationship_context,
+                    COALESCE(posted_at, reviewed_at, detected_at) AS source_at
+                FROM reply_queue
+                WHERE status IN ('approved', 'posted')
+                  AND draft_text IS NOT NULL
+                  AND TRIM(draft_text) != ''
+                  AND inbound_author_handle IS NOT NULL
+                  AND COALESCE(posted_at, reviewed_at, detected_at) IS NOT NULL
+                  AND datetime(COALESCE(posted_at, reviewed_at, detected_at)) >= datetime(?)
+                UNION ALL
+                SELECT
+                    'proactive_actions' AS source_type,
+                    id AS source_id,
+                    target_author_handle AS target_handle,
+                    target_tweet_text AS target_text,
+                    draft_text,
+                    status,
+                    NULL AS priority,
+                    NULL AS intent,
+                    relevance_score AS quality_score,
+                    NULL AS quality_flags,
+                    relationship_context,
+                    COALESCE(posted_at, reviewed_at, created_at) AS source_at
+                FROM proactive_actions
+                WHERE action_type = 'reply'
+                  AND status IN ('approved', 'posted')
+                  AND draft_text IS NOT NULL
+                  AND TRIM(draft_text) != ''
+                  AND target_author_handle IS NOT NULL
+                  AND COALESCE(posted_at, reviewed_at, created_at) IS NOT NULL
+                  AND datetime(COALESCE(posted_at, reviewed_at, created_at)) >= datetime(?)
+                ORDER BY source_at DESC, source_type, source_id
+                LIMIT ?""",
+            (cutoff.isoformat(), cutoff.isoformat(), limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
     def count_replies_today(self) -> int:
         """Count replies posted today (UTC)."""
         cursor = self.conn.execute(
