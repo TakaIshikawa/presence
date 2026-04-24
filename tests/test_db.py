@@ -181,6 +181,8 @@ class TestSchemaInit:
         expected = {
             "newsletter_send_id",
             "issue_id",
+            "content_id",
+            "source_kind",
             "link_url",
             "raw_url",
             "clicks",
@@ -4175,6 +4177,179 @@ class TestNewsletterMethods:
         assert rows[0]["unique_clicks"] == 4
         assert rows[0]["raw_metrics"] == {"source": "buttondown"}
         assert rows[0]["fetched_at"] == fetched_at
+
+    def test_newsletter_link_clicks_resolve_published_url(self, db):
+        """Clicked published URLs are attributed to generated_content."""
+        content_id = db.insert_generated_content(
+            content_type="blog_post",
+            source_commits=[],
+            source_messages=[],
+            content="Post",
+            eval_score=8.0,
+            eval_feedback="ok",
+        )
+        db.conn.execute(
+            "UPDATE generated_content SET published_url = ? WHERE id = ?",
+            ("https://example.com/posts/launch", content_id),
+        )
+        db.conn.commit()
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-published-url",
+            subject="Links",
+            content_ids=[content_id],
+            subscriber_count=100,
+        )
+
+        db.insert_newsletter_link_clicks(
+            newsletter_send_id=send_id,
+            issue_id="issue-published-url",
+            link_clicks=[
+                {
+                    "url": "https://example.com/posts/launch?utm_source=buttondown",
+                    "clicks": 3,
+                }
+            ],
+            fetched_at="2026-04-23T10:00:00+00:00",
+        )
+
+        row = db.list_newsletter_link_clicks(newsletter_send_id=send_id)[0]
+        assert row["content_id"] == content_id
+        assert row["source_kind"] == "published_url"
+
+    def test_newsletter_link_clicks_resolve_metadata_then_single_source(self, db):
+        """Send metadata mappings win, with single-source sends as fallback."""
+        metadata_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Metadata post",
+            eval_score=8.0,
+            eval_feedback="ok",
+        )
+        fallback_id = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=[],
+            source_messages=[],
+            content="Fallback thread",
+            eval_score=8.0,
+            eval_feedback="ok",
+        )
+        metadata_send_id = db.insert_newsletter_send(
+            issue_id="issue-metadata",
+            subject="Metadata",
+            content_ids=[metadata_id, fallback_id],
+            metadata={
+                "link_content_ids": {
+                    "https://example.com/a": metadata_id,
+                }
+            },
+        )
+        fallback_send_id = db.insert_newsletter_send(
+            issue_id="issue-single-source",
+            subject="Single",
+            content_ids=[fallback_id],
+        )
+
+        db.insert_newsletter_link_clicks(
+            metadata_send_id,
+            "issue-metadata",
+            [{"url": "https://example.com/a?utm_campaign=weekly", "clicks": 2}],
+        )
+        db.insert_newsletter_link_clicks(
+            fallback_send_id,
+            "issue-single-source",
+            [{"url": "https://external.example.com/essay", "clicks": 1}],
+        )
+
+        metadata_row = db.list_newsletter_link_clicks(metadata_send_id)[0]
+        fallback_row = db.list_newsletter_link_clicks(fallback_send_id)[0]
+        assert metadata_row["content_id"] == metadata_id
+        assert metadata_row["source_kind"] == "send_metadata"
+        assert fallback_row["content_id"] == fallback_id
+        assert fallback_row["source_kind"] == "send_source_content_ids"
+
+    def test_newsletter_link_clicks_migration_preserves_and_backfills_rows(
+        self,
+        tmp_path,
+        schema_path,
+    ):
+        """Old link-click tables keep rows and gain nullable attribution columns."""
+        db_path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE generated_content (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_type TEXT NOT NULL,
+                source_commits TEXT,
+                source_messages TEXT,
+                content TEXT NOT NULL,
+                eval_score REAL,
+                eval_feedback TEXT,
+                published INTEGER DEFAULT 0,
+                published_url TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE newsletter_sends (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id TEXT,
+                subject TEXT NOT NULL,
+                source_content_ids TEXT,
+                subscriber_count INTEGER,
+                status TEXT DEFAULT 'sent',
+                sent_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE newsletter_link_clicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
+                issue_id TEXT NOT NULL,
+                link_url TEXT NOT NULL,
+                raw_url TEXT,
+                clicks INTEGER DEFAULT 0,
+                unique_clicks INTEGER,
+                raw_metrics JSON,
+                fetched_at TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(newsletter_send_id, issue_id, link_url, fetched_at)
+            );
+            INSERT INTO generated_content
+                (id, content_type, source_commits, source_messages, content,
+                 eval_score, eval_feedback, published_url)
+                VALUES (1, 'blog_post', '[]', '[]', 'post', 8, 'ok',
+                        'https://example.com/post');
+            INSERT INTO newsletter_sends
+                (id, issue_id, subject, source_content_ids, subscriber_count)
+                VALUES (1, 'issue-old', 'Old', '[1]', 10);
+            INSERT INTO newsletter_link_clicks
+                (newsletter_send_id, issue_id, link_url, clicks, fetched_at)
+                VALUES (1, 'issue-old',
+                        'https://example.com/post?utm_source=buttondown',
+                        4, '2026-04-23T10:00:00+00:00');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        legacy_db = Database(str(db_path))
+        legacy_db.connect()
+        legacy_db.init_schema(schema_path)
+        row = legacy_db.conn.execute(
+            """SELECT content_id, source_kind, clicks
+               FROM newsletter_link_clicks
+               WHERE issue_id = 'issue-old'"""
+        ).fetchone()
+        cols = {
+            item[1]
+            for item in legacy_db.conn.execute(
+                "PRAGMA table_info(newsletter_link_clicks)"
+            )
+        }
+        legacy_db.close()
+
+        assert {"content_id", "source_kind"}.issubset(cols)
+        assert row["clicks"] == 4
+        assert row["content_id"] == 1
+        assert row["source_kind"] == "published_url"
 
     def test_insert_and_list_newsletter_subscriber_metrics(self, db):
         """Newsletter subscriber snapshots are persisted newest-first."""

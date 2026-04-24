@@ -436,6 +436,8 @@ CREATE TABLE IF NOT EXISTS newsletter_link_clicks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
     issue_id TEXT NOT NULL,
+    content_id INTEGER REFERENCES generated_content(id),
+    source_kind TEXT,
     link_url TEXT NOT NULL,
     raw_url TEXT,
     clicks INTEGER DEFAULT 0,
@@ -452,6 +454,8 @@ CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_issue
     ON newsletter_link_clicks(issue_id);
 CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_url
     ON newsletter_link_clicks(link_url);
+CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_content
+    ON newsletter_link_clicks(content_id);
 
 -- Track aggregate newsletter subscriber metrics from Buttondown (time-series)
 CREATE TABLE IF NOT EXISTS newsletter_subscriber_metrics (

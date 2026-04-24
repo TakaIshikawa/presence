@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from engagement.reply_triage import score_pending_replies, sort_by_triage
 from output.publish_errors import classify_publish_error, normalize_error_category
@@ -26,6 +27,70 @@ CONTENT_IDEA_METADATA_ID_EXCLUSIONS = {
     "content_id",
     "content_idea_id",
 }
+NEWSLETTER_ATTRIBUTION_QUERY_KEYS = {
+    "content_id",
+    "generated_content_id",
+    "generated_content",
+    "gc_id",
+}
+NEWSLETTER_TRACKING_QUERY_PARAMS = {
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
+    "source",
+}
+
+
+def _normalize_newsletter_attribution_url(url: Optional[str]) -> str:
+    """Normalize URLs for durable newsletter-click attribution."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+
+    parsed = urlparse(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not _is_newsletter_tracking_param(key)
+    ]
+    netloc = parsed.netloc.lower()
+    if parsed.scheme == "http" and netloc.endswith(":80"):
+        netloc = netloc[:-3]
+    elif parsed.scheme == "https" and netloc.endswith(":443"):
+        netloc = netloc[:-4]
+    path = parsed.path.rstrip("/") or parsed.path
+    return urlunparse(
+        parsed._replace(
+            scheme=parsed.scheme.lower(),
+            netloc=netloc,
+            path=path,
+            query=urlencode(query, doseq=True),
+            fragment="",
+        )
+    )
+
+
+def _is_newsletter_tracking_param(key: str) -> bool:
+    normalized = (key or "").lower()
+    return normalized.startswith("utm_") or normalized in NEWSLETTER_TRACKING_QUERY_PARAMS
+
+
+def _tweet_id_from_url(url: Optional[str]) -> Optional[str]:
+    parsed = urlparse(url or "")
+    if parsed.netloc.lower() not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}:
+        return None
+    match = re.search(r"/status/([^/?#]+)", parsed.path)
+    return match.group(1) if match else None
+
+
+def _bluesky_post_id_from_url(url: Optional[str]) -> Optional[str]:
+    parsed = urlparse(url or "")
+    if parsed.netloc.lower() not in {"bsky.app", "www.bsky.app"}:
+        return None
+    match = re.search(r"/profile/[^/]+/post/([^/?#]+)", parsed.path)
+    return match.group(1) if match else None
 
 
 class DatabaseError(Exception):
@@ -584,6 +649,8 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     newsletter_send_id INTEGER REFERENCES newsletter_sends(id),
                     issue_id TEXT NOT NULL,
+                    content_id INTEGER REFERENCES generated_content(id),
+                    source_kind TEXT,
                     link_url TEXT NOT NULL,
                     raw_url TEXT,
                     clicks INTEGER DEFAULT 0,
@@ -594,9 +661,26 @@ class Database:
                     UNIQUE(newsletter_send_id, issue_id, link_url, fetched_at)
                 )
             """)
+            nlc_cols = {
+                row[1]
+                for row in self.conn.execute(
+                    "PRAGMA table_info(newsletter_link_clicks)"
+                )
+            }
+            if nlc_cols and "content_id" not in nlc_cols:
+                self.conn.execute(
+                    "ALTER TABLE newsletter_link_clicks "
+                    "ADD COLUMN content_id INTEGER REFERENCES generated_content(id)"
+                )
+            if nlc_cols and "source_kind" not in nlc_cols:
+                self.conn.execute(
+                    "ALTER TABLE newsletter_link_clicks ADD COLUMN source_kind TEXT"
+                )
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_send ON newsletter_link_clicks(newsletter_send_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_issue ON newsletter_link_clicks(issue_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_url ON newsletter_link_clicks(link_url)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_link_clicks_content ON newsletter_link_clicks(content_id)")
+            self._backfill_newsletter_link_attribution()
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS newsletter_subscriber_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -640,6 +724,21 @@ class Database:
                 self.conn.execute("ALTER TABLE content_publications ADD COLUMN last_error_at TEXT")
             if "error_category" not in cp_cols:
                 self.conn.execute("ALTER TABLE content_publications ADD COLUMN error_category TEXT")
+
+        if "newsletter_link_clicks" in tables:
+            nlc_cols = {
+                row[1]
+                for row in self.conn.execute("PRAGMA table_info(newsletter_link_clicks)")
+            }
+            if "content_id" not in nlc_cols:
+                self.conn.execute(
+                    "ALTER TABLE newsletter_link_clicks "
+                    "ADD COLUMN content_id INTEGER REFERENCES generated_content(id)"
+                )
+            if "source_kind" not in nlc_cols:
+                self.conn.execute(
+                    "ALTER TABLE newsletter_link_clicks ADD COLUMN source_kind TEXT"
+                )
 
         if "planned_topics" not in tables:
             self.conn.commit()
@@ -4002,13 +4101,21 @@ class Database:
                 raw_metrics = link.get("raw_metrics", {}) or {}
             if not link_url:
                 continue
+            content_id, source_kind = self._resolve_newsletter_link_attribution(
+                newsletter_send_id=newsletter_send_id,
+                link_url=link_url,
+                raw_url=raw_url,
+            )
             cursor = self.conn.execute(
                 """INSERT INTO newsletter_link_clicks
-                   (newsletter_send_id, issue_id, link_url, raw_url, clicks,
+                   (newsletter_send_id, issue_id, content_id, source_kind,
+                    link_url, raw_url, clicks,
                     unique_clicks, raw_metrics, fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(newsletter_send_id, issue_id, link_url, fetched_at)
                    DO UPDATE SET
+                       content_id = excluded.content_id,
+                       source_kind = excluded.source_kind,
                        raw_url = excluded.raw_url,
                        clicks = excluded.clicks,
                        unique_clicks = excluded.unique_clicks,
@@ -4016,6 +4123,8 @@ class Database:
                 (
                     newsletter_send_id,
                     issue_id,
+                    content_id,
+                    source_kind,
                     link_url,
                     raw_url,
                     int(clicks or 0),
@@ -4028,6 +4137,237 @@ class Database:
 
         self.conn.commit()
         return inserted_ids
+
+    def _backfill_newsletter_link_attribution(self) -> None:
+        """Populate attribution for existing link-click rows when resolvable."""
+        cols = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(newsletter_link_clicks)")
+        }
+        if not {"content_id", "source_kind"}.issubset(cols):
+            return
+
+        cursor = self.conn.execute(
+            """SELECT id, newsletter_send_id, link_url, raw_url
+               FROM newsletter_link_clicks
+               WHERE content_id IS NULL"""
+        )
+        updates = []
+        for row in cursor.fetchall():
+            content_id, source_kind = self._resolve_newsletter_link_attribution(
+                newsletter_send_id=int(row["newsletter_send_id"] or 0),
+                link_url=row["link_url"],
+                raw_url=row["raw_url"],
+            )
+            if content_id is not None:
+                updates.append((content_id, source_kind, row["id"]))
+        if updates:
+            self.conn.executemany(
+                """UPDATE newsletter_link_clicks
+                   SET content_id = ?, source_kind = ?
+                   WHERE id = ?""",
+                updates,
+            )
+
+    def _resolve_newsletter_link_attribution(
+        self,
+        newsletter_send_id: int,
+        link_url: str,
+        raw_url: Optional[str] = None,
+    ) -> tuple[Optional[int], Optional[str]]:
+        """Resolve a newsletter click destination back to generated content."""
+        candidate_urls = [link_url, raw_url]
+        for url in candidate_urls:
+            content_id = self._content_id_from_internal_url(url)
+            if content_id is not None:
+                return content_id, "internal_url"
+
+        for url in candidate_urls:
+            content_id = self._content_id_from_published_url(url)
+            if content_id is not None:
+                return content_id, "published_url"
+
+        send = self.conn.execute(
+            """SELECT source_content_ids, metadata
+               FROM newsletter_sends
+               WHERE id = ?""",
+            (newsletter_send_id,),
+        ).fetchone()
+        if send is None:
+            return None, None
+
+        metadata = self._parse_json_object(send["metadata"]) or {}
+        for url in candidate_urls:
+            content_id = self._content_id_from_send_metadata(metadata, url)
+            if content_id is not None:
+                return content_id, "send_metadata"
+
+        source_ids = self._parse_json_list(send["source_content_ids"])
+        valid_source_ids = []
+        for value in source_ids:
+            content_id = self._validated_generated_content_id(value)
+            if content_id is not None:
+                valid_source_ids.append(content_id)
+        if len(valid_source_ids) == 1:
+            return valid_source_ids[0], "send_source_content_ids"
+
+        return None, None
+
+    def _content_id_from_internal_url(self, url: Optional[str]) -> Optional[int]:
+        if not url:
+            return None
+        parsed = urlparse(url)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        for key in NEWSLETTER_ATTRIBUTION_QUERY_KEYS:
+            content_id = self._validated_generated_content_id(query.get(key))
+            if content_id is not None:
+                return content_id
+
+        path_patterns = (
+            r"/(?:generated[-_]content|content)/(\d+)(?:/|$)",
+            r"/(?:newsletter|archive)/[^/]+/content/(\d+)(?:/|$)",
+        )
+        for pattern in path_patterns:
+            match = re.search(pattern, parsed.path or "", flags=re.IGNORECASE)
+            if match:
+                content_id = self._validated_generated_content_id(match.group(1))
+                if content_id is not None:
+                    return content_id
+        return None
+
+    def _content_id_from_published_url(self, url: Optional[str]) -> Optional[int]:
+        normalized = _normalize_newsletter_attribution_url(url)
+        if not normalized:
+            return None
+
+        cursor = self.conn.execute(
+            """SELECT id, published_url
+               FROM generated_content
+               WHERE published_url IS NOT NULL AND published_url != ''"""
+        )
+        for row in cursor.fetchall():
+            if _normalize_newsletter_attribution_url(row["published_url"]) == normalized:
+                return int(row["id"])
+
+        tweet_id = _tweet_id_from_url(url)
+        if tweet_id:
+            row = self.conn.execute(
+                "SELECT id FROM generated_content WHERE tweet_id = ?",
+                (tweet_id,),
+            ).fetchone()
+            if row:
+                return int(row["id"])
+
+        bluesky_post_id = _bluesky_post_id_from_url(url)
+        if bluesky_post_id:
+            cursor = self.conn.execute(
+                """SELECT id, bluesky_uri
+                   FROM generated_content
+                   WHERE bluesky_uri IS NOT NULL AND bluesky_uri != ''"""
+            )
+            for row in cursor.fetchall():
+                if str(row["bluesky_uri"]).rstrip("/").endswith(f"/{bluesky_post_id}"):
+                    return int(row["id"])
+        return None
+
+    def _content_id_from_send_metadata(
+        self,
+        metadata: dict,
+        url: Optional[str],
+    ) -> Optional[int]:
+        if not metadata:
+            return None
+        normalized_url = _normalize_newsletter_attribution_url(url)
+        if not normalized_url:
+            return None
+
+        exact_keys = (
+            "link_content_ids",
+            "link_attribution",
+            "url_content_ids",
+            "content_links",
+            "links",
+        )
+        for key in exact_keys:
+            content_id = self._content_id_from_metadata_value(
+                metadata.get(key),
+                normalized_url,
+            )
+            if content_id is not None:
+                return content_id
+
+        return self._content_id_from_metadata_value(metadata, normalized_url)
+
+    def _content_id_from_metadata_value(
+        self,
+        value,
+        normalized_url: str,
+    ) -> Optional[int]:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if _normalize_newsletter_attribution_url(str(key)) == normalized_url:
+                    content_id = self._content_id_from_metadata_item(item)
+                    if content_id is not None:
+                        return content_id
+                if isinstance(item, (dict, list)):
+                    content_id = self._content_id_from_metadata_value(
+                        item,
+                        normalized_url,
+                    )
+                    if content_id is not None:
+                        return content_id
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    item_url = (
+                        item.get("url")
+                        or item.get("link_url")
+                        or item.get("raw_url")
+                        or item.get("href")
+                    )
+                    if (
+                        item_url
+                        and _normalize_newsletter_attribution_url(item_url)
+                        == normalized_url
+                    ):
+                        content_id = self._content_id_from_metadata_item(item)
+                        if content_id is not None:
+                            return content_id
+                    content_id = self._content_id_from_metadata_value(
+                        item,
+                        normalized_url,
+                    )
+                    if content_id is not None:
+                        return content_id
+        return None
+
+    def _content_id_from_metadata_item(self, item) -> Optional[int]:
+        if isinstance(item, dict):
+            for key in ("content_id", "generated_content_id", "id"):
+                content_id = self._validated_generated_content_id(item.get(key))
+                if content_id is not None:
+                    return content_id
+        return self._validated_generated_content_id(item)
+
+    def _validated_generated_content_id(self, value) -> Optional[int]:
+        try:
+            content_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        if self._generated_content_exists(content_id):
+            return content_id
+        return None
+
+    def _generated_content_exists(self, value) -> bool:
+        try:
+            content_id = int(value)
+        except (TypeError, ValueError):
+            return False
+        row = self.conn.execute(
+            "SELECT 1 FROM generated_content WHERE id = ?",
+            (content_id,),
+        ).fetchone()
+        return row is not None
 
     def list_newsletter_link_clicks(
         self,
@@ -4043,7 +4383,8 @@ class Database:
         params.append(limit)
         cursor = self.conn.execute(
             f"""SELECT id, newsletter_send_id, issue_id, link_url, raw_url,
-                       clicks, unique_clicks, raw_metrics, fetched_at, created_at
+                       content_id, source_kind, clicks, unique_clicks, raw_metrics,
+                       fetched_at, created_at
                 FROM newsletter_link_clicks
                 {where}
                 ORDER BY fetched_at DESC, id DESC
