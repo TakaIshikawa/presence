@@ -79,6 +79,47 @@ def _queue_error_category(errors: list[tuple[str, str]]) -> str:
     return "unknown"
 
 
+def _result_metadata(result) -> dict:
+    metadata = {}
+    for key in ("status_code", "request_id", "response_id"):
+        value = getattr(result, key, None)
+        if value is not None:
+            metadata[key] = value
+    raw = getattr(result, "metadata", None)
+    if isinstance(raw, dict):
+        metadata.update(raw)
+    return metadata
+
+
+def _record_attempt_from_result(
+    db,
+    queue_id: int,
+    content_id: int,
+    platform: str,
+    result,
+    attempted_at: str,
+    error_category: str | None = None,
+) -> None:
+    success = bool(getattr(result, "success", False))
+    platform_post_id = None
+    if platform == "x":
+        platform_post_id = getattr(result, "tweet_id", None)
+    elif platform == "bluesky":
+        platform_post_id = getattr(result, "uri", None)
+    db.record_publication_attempt(
+        queue_id=queue_id,
+        content_id=content_id,
+        platform=platform,
+        attempted_at=attempted_at,
+        success=success,
+        platform_post_id=platform_post_id,
+        platform_url=getattr(result, "url", None),
+        error=None if success else str(getattr(result, "error", "")),
+        error_category=error_category,
+        response_metadata=_result_metadata(result),
+    )
+
+
 def _variant_type_for_content_type(content_type: str) -> str:
     if content_type == "x_thread":
         return "thread"
@@ -472,11 +513,28 @@ def main(argv: list[str] | None = None) -> None:
                             result = x_client.post(x_content)
 
                         if result.success:
+                            _record_attempt_from_result(
+                                db,
+                                queue_id,
+                                content_id,
+                                "x",
+                                result,
+                                now_iso,
+                            )
                             db.mark_published(content_id, result.url, tweet_id=result.tweet_id)
                             daily_counts["x"] = daily_counts.get("x", 0) + 1
                             logger.info(f"  Posted to X: {result.url}")
                         else:
                             category = _result_error_category(result, "x")
+                            _record_attempt_from_result(
+                                db,
+                                queue_id,
+                                content_id,
+                                "x",
+                                result,
+                                now_iso,
+                                error_category=category,
+                            )
                             logger.error(f"  X posting failed: {result.error}")
                             db.upsert_publication_failure(
                                 content_id,
@@ -523,6 +581,14 @@ def main(argv: list[str] | None = None) -> None:
                             bsky_result = bluesky_client.post(bsky_tweets[0])
 
                         if bsky_result.success:
+                            _record_attempt_from_result(
+                                db,
+                                queue_id,
+                                content_id,
+                                "bluesky",
+                                bsky_result,
+                                now_iso,
+                            )
                             db.mark_published_bluesky(
                                 content_id,
                                 bsky_result.uri,
@@ -532,6 +598,15 @@ def main(argv: list[str] | None = None) -> None:
                             logger.info(f"  Posted to Bluesky: {bsky_result.url}")
                         else:
                             category = _result_error_category(bsky_result, "bluesky")
+                            _record_attempt_from_result(
+                                db,
+                                queue_id,
+                                content_id,
+                                "bluesky",
+                                bsky_result,
+                                now_iso,
+                                error_category=category,
+                            )
                             logger.error(f"  Bluesky posting failed: {bsky_result.error}")
                             db.upsert_publication_failure(
                                 content_id,
@@ -544,6 +619,15 @@ def main(argv: list[str] | None = None) -> None:
                     else:
                         category = "auth"
                         logger.error("  Bluesky posting failed: client not configured")
+                        db.record_publication_attempt(
+                            queue_id=queue_id,
+                            content_id=content_id,
+                            platform="bluesky",
+                            attempted_at=now_iso,
+                            success=False,
+                            error="client not configured",
+                            error_category=category,
+                        )
                         db.upsert_publication_failure(
                             content_id,
                             "bluesky",

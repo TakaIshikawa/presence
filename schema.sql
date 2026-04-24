@@ -178,6 +178,25 @@ CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publicati
 CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status);
 CREATE INDEX IF NOT EXISTS idx_content_publications_retry ON content_publications(status, next_retry_at);
 
+-- Append-only audit log of every platform publish attempt
+CREATE TABLE IF NOT EXISTS publication_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue_id INTEGER REFERENCES publish_queue(id),
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    platform TEXT NOT NULL,              -- 'x', 'bluesky'
+    attempted_at TEXT NOT NULL,
+    success INTEGER NOT NULL,            -- 0 or 1
+    platform_post_id TEXT,
+    platform_url TEXT,
+    error TEXT,
+    error_category TEXT,                 -- auth, rate_limit, duplicate, media, network, unknown
+    response_metadata JSON,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_publication_attempts_queue ON publication_attempts(queue_id);
+CREATE INDEX IF NOT EXISTS idx_publication_attempts_content_platform ON publication_attempts(content_id, platform, attempted_at);
+CREATE INDEX IF NOT EXISTS idx_publication_attempts_platform_attempted ON publication_attempts(platform, attempted_at);
+
 -- Track engagement predictions from EngagementPredictor
 CREATE TABLE IF NOT EXISTS engagement_predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

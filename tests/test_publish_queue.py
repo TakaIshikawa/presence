@@ -1122,6 +1122,12 @@ def test_main_cross_posts_to_bluesky_when_platform_all(test_db, base_time):
     assert bsky_state["status"] == "published"
     assert bsky_state["platform_post_id"] == "at://did:plc:test/app.bsky.feed.post/abc"
     assert bsky_state["platform_url"] == "https://bsky.app/profile/test.bsky.social/post/abc"
+    attempts = test_db.get_publication_attempts(content_id=content_id)
+    assert {(row["platform"], row["success"]) for row in attempts} == {
+        ("x", 1),
+        ("bluesky", 1),
+    }
+    assert len(attempts) == 2
 
 
 def test_main_bluesky_failure_preserves_x_success(test_db, base_time):
@@ -1198,6 +1204,14 @@ def test_main_bluesky_failure_preserves_x_success(test_db, base_time):
     assert bsky_state["status"] == "failed"
     assert bsky_state["error"] == "Bluesky rate limit"
     assert bsky_state["attempt_count"] == 1
+    attempts = test_db.get_publication_attempts(content_id=content_id)
+    assert {(row["platform"], row["success"]) for row in attempts} == {
+        ("x", 1),
+        ("bluesky", 0),
+    }
+    bsky_attempt = next(row for row in attempts if row["platform"] == "bluesky")
+    assert bsky_attempt["error"] == "Bluesky rate limit"
+    assert bsky_attempt["error_category"] == "rate_limit"
 
 
 def test_main_completes_successfully_after_partial_platform_failure(test_db, base_time):
@@ -1293,6 +1307,12 @@ def test_main_completes_successfully_after_partial_platform_failure(test_db, bas
     assert bsky_state["status"] == "published"
     assert bsky_state["attempt_count"] == 2
     assert bsky_state["next_retry_at"] is None
+    attempts = test_db.get_publication_attempts(content_id=content_id)
+    assert [(row["platform"], row["success"]) for row in attempts] == [
+        ("bluesky", 1),
+        ("bluesky", 0),
+        ("x", 1),
+    ]
 
 
 def test_main_all_attempts_bluesky_when_x_fails_and_records_only_x_error(test_db, base_time):
@@ -1347,6 +1367,13 @@ def test_main_all_attempts_bluesky_when_x_fails_and_records_only_x_error(test_db
     assert content_row["published"] == 0
     assert content_row["published_url"] is None
     assert content_row["bluesky_uri"] == "at://did:plc:test/app.bsky.feed.post/abc"
+    attempts = test_db.get_publication_attempts(content_id=content_id)
+    assert {(row["platform"], row["success"]) for row in attempts} == {
+        ("x", 0),
+        ("bluesky", 1),
+    }
+    x_attempt = next(row for row in attempts if row["platform"] == "x")
+    assert x_attempt["error_category"] == "rate_limit"
 
 
 def test_main_all_skips_previously_successful_x_on_bluesky_retry(test_db, base_time):

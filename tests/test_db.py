@@ -34,6 +34,7 @@ class TestSchemaInit:
             "content_knowledge_links",
             "pipeline_runs",
             "content_publications",
+            "publication_attempts",
             "content_variants",
             "content_claim_checks",
             "content_ideas",
@@ -84,6 +85,26 @@ class TestSchemaInit:
             "last_error_at",
             "published_at",
             "updated_at",
+        }
+        assert expected.issubset(cols)
+
+    def test_publication_attempts_columns_exist(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(publication_attempts)")
+        }
+        expected = {
+            "queue_id",
+            "content_id",
+            "platform",
+            "attempted_at",
+            "success",
+            "platform_post_id",
+            "platform_url",
+            "error",
+            "error_category",
+            "response_metadata",
+            "created_at",
         }
         assert expected.issubset(cols)
 
@@ -616,6 +637,37 @@ class TestInitSchemaMigrations:
             assert "idx_content_publications_content" in indexes
             assert "idx_content_publications_platform_status" in indexes
             assert "idx_content_publications_retry" in indexes
+
+    def test_migration_creates_publication_attempts_for_existing_schema(self, schema_path):
+        """Test that publication_attempts is added to an existing in-memory schema."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            tables = {
+                row[0]
+                for row in db.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "publication_attempts" in tables
+            indexes = {
+                row[1]
+                for row in db.conn.execute(
+                    "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='publication_attempts'"
+                ).fetchall()
+            }
+            assert "idx_publication_attempts_queue" in indexes
+            assert "idx_publication_attempts_content_platform" in indexes
 
     def test_migration_adds_publication_retry_columns_before_schema_indexes(self, schema_path):
         """Old content_publications tables should initialize before retry index creation."""
@@ -1577,6 +1629,53 @@ class TestGeneratedContent:
         assert bsky_state["error"] == "Authentication failed"
         assert bsky_state["error_category"] == "auth"
         assert bsky_state["attempt_count"] == 1
+
+    def test_record_publication_attempt_persists_success_metadata(self, db):
+        content_id = self._insert_content(db)
+        queue_id = db.queue_for_publishing(
+            content_id,
+            "2026-04-17T12:00:00+00:00",
+            platform="x",
+        )
+
+        attempt_id = db.record_publication_attempt(
+            queue_id=queue_id,
+            content_id=content_id,
+            platform="x",
+            attempted_at="2026-04-17T12:01:00+00:00",
+            success=True,
+            platform_post_id="tweet-001",
+            platform_url="https://x.com/test/status/tweet-001",
+            response_metadata={"request_id": "req-1"},
+        )
+
+        attempts = db.get_publication_attempts(content_id=content_id)
+        assert attempts[0]["id"] == attempt_id
+        assert attempts[0]["queue_id"] == queue_id
+        assert attempts[0]["platform"] == "x"
+        assert attempts[0]["success"] == 1
+        assert attempts[0]["platform_post_id"] == "tweet-001"
+        assert attempts[0]["error"] is None
+        assert attempts[0]["error_category"] is None
+        assert attempts[0]["response_metadata"] == {"request_id": "req-1"}
+
+    def test_record_publication_attempt_normalizes_failure_category(self, db):
+        content_id = self._insert_content(db)
+
+        db.record_publication_attempt(
+            queue_id=None,
+            content_id=content_id,
+            platform="bluesky",
+            attempted_at="2026-04-17T12:01:00+00:00",
+            success=False,
+            error="Rate limit exceeded",
+            error_category="rate_limit",
+        )
+
+        attempts = db.get_publication_attempts(content_id=content_id)
+        assert attempts[0]["success"] == 0
+        assert attempts[0]["error"] == "Rate limit exceeded"
+        assert attempts[0]["error_category"] == "rate_limit"
 
     def test_publication_failure_retry_increments_attempt_count(self, db):
         content_id = self._insert_content(db)

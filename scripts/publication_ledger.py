@@ -36,11 +36,14 @@ def _display_bluesky_uri(row: dict) -> str | None:
     return row.get("bluesky_uri")
 
 
-def ledger_rows_for_json(rows: list[dict]) -> list[dict]:
+def ledger_rows_for_json(
+    rows: list[dict],
+    include_attempts: bool = False,
+) -> list[dict]:
     """Normalize ledger rows for machine-readable output."""
     normalized = []
     for row in rows:
-        normalized.append(
+        normalized_row = (
             {
                 "content_id": row["content_id"],
                 "content_type": row["content_type"],
@@ -76,12 +79,22 @@ def ledger_rows_for_json(rows: list[dict]) -> list[dict]:
                 "hold_reason": row["hold_reason"],
             }
         )
+        if include_attempts:
+            normalized_row["publication_attempts"] = {
+                "attempt_count": row.get("recent_attempt_count") or 0,
+                "last_attempt_at": row.get("last_attempt_at"),
+                "last_attempt_error": row.get("last_attempt_error"),
+            }
+        normalized.append(normalized_row)
     return normalized
 
 
-def format_json_ledger(rows: list[dict]) -> str:
+def format_json_ledger(rows: list[dict], include_attempts: bool = False) -> str:
     """Format ledger rows as JSON."""
-    return json.dumps(ledger_rows_for_json(rows), indent=2)
+    return json.dumps(
+        ledger_rows_for_json(rows, include_attempts=include_attempts),
+        indent=2,
+    )
 
 
 def format_table_ledger(rows: list[dict]) -> str:
@@ -163,6 +176,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Output machine-readable JSON",
     )
+    parser.add_argument(
+        "--attempts",
+        action="store_true",
+        help="Include recent publication attempt summary in JSON output",
+    )
     return parser.parse_args(argv)
 
 
@@ -182,7 +200,7 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     if args.json:
-        print(format_json_ledger(rows))
+        print(format_json_ledger(rows, include_attempts=args.attempts))
     else:
         print(format_table_ledger(rows))
 

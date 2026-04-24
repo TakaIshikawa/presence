@@ -181,6 +181,36 @@ def test_publication_ledger_json_output(db):
     assert published["content_publication"]["status"] == "published"
 
 
+def test_publication_ledger_json_output_optionally_includes_attempt_summary(db):
+    ids = seed_publication_ledger(db)
+    queue_row = db.conn.execute(
+        "SELECT id FROM publish_queue WHERE content_id = ? AND platform = 'bluesky'",
+        (ids["failed_bsky"],),
+    ).fetchone()
+    db.record_publication_attempt(
+        queue_id=queue_row["id"],
+        content_id=ids["failed_bsky"],
+        platform="bluesky",
+        attempted_at=(BASE_TIME - timedelta(minutes=45)).isoformat(),
+        success=False,
+        error="auth failed",
+        error_category="auth",
+    )
+
+    rows = db.get_publication_ledger(days=7, platform="bluesky", now=BASE_TIME)
+    plain = json.loads(format_json_ledger(rows))
+    data = json.loads(format_json_ledger(rows, include_attempts=True))
+
+    plain_failed = next(row for row in plain if row["content_id"] == ids["failed_bsky"])
+    failed = next(row for row in data if row["content_id"] == ids["failed_bsky"])
+    assert "publication_attempts" not in plain_failed
+    assert failed["publication_attempts"] == {
+        "attempt_count": 1,
+        "last_attempt_at": (BASE_TIME - timedelta(minutes=45)).isoformat(),
+        "last_attempt_error": "auth failed",
+    }
+
+
 def test_publication_ledger_json_output_includes_hold_reason(db):
     ids = seed_publication_ledger(db)
 
@@ -221,9 +251,19 @@ def test_main_supports_flags(db, capsys):
         yield None, db
 
     with patch("publication_ledger.script_context", fake_script_context):
-        main(["--days", "7", "--platform", "x", "--status", "published", "--json"])
+        main([
+            "--days",
+            "7",
+            "--platform",
+            "x",
+            "--status",
+            "published",
+            "--json",
+            "--attempts",
+        ])
 
     output = json.loads(capsys.readouterr().out)
     assert {row["tweet_id"] for row in output} == {"tw-ok", "tw-partial"}
     assert all(row["platform"] == "x" for row in output)
     assert all(row["status"] == "published" for row in output)
+    assert all("publication_attempts" in row for row in output)

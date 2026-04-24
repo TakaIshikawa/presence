@@ -504,6 +504,26 @@ class Database:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_content ON content_publications(content_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_platform_status ON content_publications(platform, status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_publications_retry ON content_publications(status, next_retry_at)")
+            # Migrate: create append-only publication attempt audit table.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS publication_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    queue_id INTEGER REFERENCES publish_queue(id),
+                    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                    platform TEXT NOT NULL,
+                    attempted_at TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    platform_post_id TEXT,
+                    platform_url TEXT,
+                    error TEXT,
+                    error_category TEXT,
+                    response_metadata JSON,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_publication_attempts_queue ON publication_attempts(queue_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_publication_attempts_content_platform ON publication_attempts(content_id, platform, attempted_at)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_publication_attempts_platform_attempted ON publication_attempts(platform, attempted_at)")
             # Migrate: create newsletter_engagement table if missing
             ns_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(newsletter_sends)")}
             if ns_cols and "metadata" not in ns_cols:
@@ -1673,6 +1693,96 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def record_publication_attempt(
+        self,
+        queue_id: int | None,
+        content_id: int,
+        platform: str,
+        success: bool,
+        attempted_at: str | None = None,
+        platform_post_id: str | None = None,
+        platform_url: str | None = None,
+        error: str | None = None,
+        error_category: str | None = None,
+        response_metadata: dict | None = None,
+        commit: bool = True,
+    ) -> int:
+        """Append one durable publish attempt audit row."""
+        attempted_at = attempted_at or datetime.now(timezone.utc).isoformat()
+        category = None
+        if not success:
+            category = (
+                normalize_error_category(error_category)
+                if error_category is not None
+                else classify_publish_error(error, platform=platform)
+            )
+        metadata_json = (
+            json.dumps(response_metadata, sort_keys=True, default=str)
+            if response_metadata is not None
+            else None
+        )
+        cursor = self.conn.execute(
+            """INSERT INTO publication_attempts
+               (queue_id, content_id, platform, attempted_at, success,
+                platform_post_id, platform_url, error, error_category,
+                response_metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                queue_id,
+                content_id,
+                platform,
+                attempted_at,
+                1 if success else 0,
+                platform_post_id,
+                platform_url,
+                error,
+                category,
+                metadata_json,
+            ),
+        )
+        if commit:
+            self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def get_publication_attempts(
+        self,
+        content_id: int | None = None,
+        platform: str | None = None,
+        queue_id: int | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return recent publication attempts, newest first."""
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        filters = []
+        params: list[object] = []
+        if content_id is not None:
+            filters.append("content_id = ?")
+            params.append(content_id)
+        if platform is not None:
+            filters.append("platform = ?")
+            params.append(platform)
+        if queue_id is not None:
+            filters.append("queue_id = ?")
+            params.append(queue_id)
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT *
+                FROM publication_attempts
+                {where_clause}
+                ORDER BY attempted_at DESC, id DESC
+                LIMIT ?""",
+            params,
+        )
+        attempts = []
+        for row in cursor.fetchall():
+            attempt = dict(row)
+            if attempt.get("response_metadata") is not None:
+                attempt["response_metadata"] = json.loads(attempt["response_metadata"])
+            attempts.append(attempt)
+        return attempts
+
     def get_publication_ledger(
         self,
         days: int = 30,
@@ -1781,8 +1891,26 @@ class Database:
                      AND NOT EXISTS (
                        SELECT 1 FROM content_publications cp WHERE cp.content_id = gc.id
                    )
-                     AND gc.tweet_id IS NULL
-                     AND gc.bluesky_uri IS NULL
+                   AND gc.tweet_id IS NULL
+                   AND gc.bluesky_uri IS NULL
+               ),
+               attempt_summary AS (
+                   SELECT
+                       content_id,
+                       platform,
+                       COUNT(*) AS recent_attempt_count,
+                       MAX(attempted_at) AS last_attempt_at,
+                       (
+                           SELECT pa2.error
+                           FROM publication_attempts pa2
+                           WHERE pa2.content_id = pa.content_id
+                             AND pa2.platform = pa.platform
+                           ORDER BY pa2.attempted_at DESC, pa2.id DESC
+                           LIMIT 1
+                       ) AS last_attempt_error
+                   FROM publication_attempts pa
+                   WHERE attempted_at >= ?
+                   GROUP BY content_id, platform
                )
                SELECT
                    gc.id AS content_id,
@@ -1812,6 +1940,9 @@ class Database:
                    cp.last_error_at,
                    cp.published_at AS platform_published_at,
                    cp.updated_at AS publication_updated_at,
+                   attempt_summary.recent_attempt_count,
+                   attempt_summary.last_attempt_at,
+                   attempt_summary.last_attempt_error,
                    COALESCE(
                        CASE WHEN lq.queue_status = 'held' THEN 'held' ELSE cp.status END,
                        lq.queue_status,
@@ -1832,12 +1963,15 @@ class Database:
                LEFT JOIN content_publications cp
                  ON cp.content_id = targets.content_id
                 AND cp.platform = targets.platform
+               LEFT JOIN attempt_summary
+                 ON attempt_summary.content_id = targets.content_id
+                AND attempt_summary.platform = targets.platform
                WHERE {where_clause}
                ORDER BY
                    COALESCE(lq.scheduled_at, cp.published_at, cp.updated_at, gc.created_at) DESC,
                    gc.id DESC,
                    targets.platform ASC""",
-            params,
+            [cutoff, *params],
         )
         return [dict(row) for row in cursor.fetchall()]
 
