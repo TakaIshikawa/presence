@@ -192,6 +192,7 @@ class PublishingConfig:
     embargo_windows: list[dict] = field(default_factory=list)
     daily_platform_limits: dict[str, int] = field(default_factory=dict)
     alt_text_guard_mode: str = "strict"
+    persona_guard_publish_mode: str = "warning"
 
 
 @dataclass
@@ -337,6 +338,13 @@ def _alt_text_guard_mode(value: str | None) -> str:
     if value in {"strict", "warning"}:
         return value
     return "strict"
+
+
+def _persona_guard_publish_mode(value: str | None) -> str:
+    """Return a supported publish-time persona guard mode."""
+    if value in {"strict", "warning", "disabled"}:
+        return value
+    return "warning"
 
 
 def load_config(config_path: Optional[str] = None) -> Config:
@@ -535,6 +543,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
             },
             alt_text_guard_mode=_alt_text_guard_mode(
                 publishing_data.get("alt_text_guard_mode", "strict")
+            ),
+            persona_guard_publish_mode=_persona_guard_publish_mode(
+                publishing_data.get("persona_guard_publish_mode", "warning")
             ),
         )
 

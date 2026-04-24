@@ -145,6 +145,7 @@ publishing:
   embargo_windows: []
   daily_platform_limits: {}
   alt_text_guard_mode: "strict"  # strict blocks visual publish previews; warning only warns
+  persona_guard_publish_mode: "warning"  # strict holds failed persona checks; warning only warns; disabled skips
   # Examples:
   # - timezone: "Asia/Tokyo"
   #   start: "22:00"

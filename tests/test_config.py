@@ -582,6 +582,7 @@ class TestDefaults:
         assert cfg.publishing.embargo_windows == []
         assert cfg.publishing.daily_platform_limits == {}
         assert cfg.publishing.alt_text_guard_mode == "strict"
+        assert cfg.publishing.persona_guard_publish_mode == "warning"
 
     def test_publishing_embargo_windows_override(self, tmp_path):
         windows = [
@@ -607,6 +608,21 @@ class TestDefaults:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.publishing.alt_text_guard_mode == "warning"
+
+    @pytest.mark.parametrize("mode", ["strict", "warning", "disabled"])
+    def test_publishing_persona_guard_publish_mode_override(self, tmp_path, mode):
+        data = _minimal_config_dict(
+            publishing={"persona_guard_publish_mode": mode}
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.publishing.persona_guard_publish_mode == mode
+
+    def test_publishing_persona_guard_publish_mode_invalid_defaults_to_warning(self, tmp_path):
+        data = _minimal_config_dict(
+            publishing={"persona_guard_publish_mode": "block"}
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.publishing.persona_guard_publish_mode == "warning"
 
     def test_rate_limits_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

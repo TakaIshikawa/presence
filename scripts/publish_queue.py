@@ -192,6 +192,50 @@ def _alt_text_guard_mode(config) -> str:
     return "strict"
 
 
+def _persona_guard_publish_mode(config) -> str:
+    publishing_config = getattr(config, "publishing", None)
+    mode = getattr(publishing_config, "persona_guard_publish_mode", "warning")
+    if mode in {"strict", "warning", "disabled"}:
+        return mode
+    return "warning"
+
+
+def _persona_guard_failure_message(summary: dict | None) -> str | None:
+    if not summary:
+        return None
+    if not summary.get("checked") or summary.get("passed"):
+        return None
+    status = summary.get("status") or "failed"
+    score = summary.get("score")
+    reasons = summary.get("reasons") or []
+    pieces = [f"status={status}"]
+    if score is not None:
+        pieces.append(f"score={float(score):.2f}")
+    if reasons:
+        pieces.append("reasons=" + "; ".join(str(reason) for reason in reasons))
+    return "Persona guard failed: " + ", ".join(pieces)
+
+
+def _enforce_persona_guard(db, queue_id: int, content_id: int, config) -> bool:
+    """Return True when publishing may continue for this queue item."""
+    mode = _persona_guard_publish_mode(config)
+    if mode == "disabled":
+        return True
+
+    summary = db.get_persona_guard_summary(content_id)
+    message = _persona_guard_failure_message(summary)
+    if not message:
+        return True
+
+    if mode == "strict":
+        db.hold_publish_queue_item(queue_id, reason=message)
+        logger.error(f"  {message}; holding queue item {queue_id}")
+        return False
+
+    logger.warning(f"  Persona guard warning: {message}")
+    return True
+
+
 def _alt_text_guard_error(item: dict) -> str | None:
     result = validate_alt_text(
         item.get("image_alt_text"),
@@ -330,6 +374,9 @@ def main(argv: list[str] | None = None) -> None:
                 if not pending_platforms:
                     db.mark_queue_published(queue_id)
                     logger.info(f"  Queue item {queue_id} already completed")
+                    continue
+
+                if not _enforce_persona_guard(db, queue_id, content_id, config):
                     continue
 
                 license_guard = check_publication_license_guard(

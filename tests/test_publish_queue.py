@@ -2,6 +2,7 @@
 
 import sys
 import types
+import logging
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, call
@@ -1486,6 +1487,114 @@ def test_main_x_only_publishes_x_variant(test_db, base_time):
         main()
 
     assert fake_x.posts == ["X durable post"]
+
+
+def _queue_persona_guard_post(test_db, base_time, summary=None):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Persona checked post", "x_post", 7.0, 0),
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+    if summary is not None:
+        test_db.save_persona_guard_summary(content_id, summary)
+    return content_id, queue_id
+
+
+def _failed_persona_summary():
+    return {
+        "checked": True,
+        "passed": False,
+        "status": "failed",
+        "score": 0.31,
+        "reasons": ["banned tone markers: unlock"],
+        "metrics": {"banned_markers": 1},
+    }
+
+
+def _run_publish_queue_with_persona_mode(test_db, base_time, mode):
+    fake_x = FakeXClient(FakePostResult(
+        success=True,
+        url="https://x.com/test/status/persona",
+        tweet_id="persona",
+    ))
+    config = make_config(bluesky_enabled=False)
+    config.publishing.persona_guard_publish_mode = mode
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    return fake_x
+
+
+def test_main_strict_persona_guard_holds_failed_checked_content(test_db, base_time):
+    _, queue_id = _queue_persona_guard_post(
+        test_db,
+        base_time,
+        summary=_failed_persona_summary(),
+    )
+
+    fake_x = _run_publish_queue_with_persona_mode(test_db, base_time, "strict")
+
+    row = test_db.get_publish_queue_item(queue_id)
+    assert fake_x.posts == []
+    assert row["status"] == "held"
+    assert "Persona guard failed" in row["hold_reason"]
+    assert "banned tone markers: unlock" in row["hold_reason"]
+
+
+def test_main_warning_persona_guard_allows_failed_checked_content(
+    test_db,
+    base_time,
+    caplog,
+):
+    _, queue_id = _queue_persona_guard_post(
+        test_db,
+        base_time,
+        summary=_failed_persona_summary(),
+    )
+    caplog.set_level(logging.WARNING, logger="publish_queue")
+
+    fake_x = _run_publish_queue_with_persona_mode(test_db, base_time, "warning")
+
+    row = test_db.get_publish_queue_item(queue_id)
+    assert fake_x.posts == ["Persona checked post"]
+    assert row["status"] == "published"
+    assert "Persona guard warning" in caplog.text
+
+
+def test_main_disabled_persona_guard_allows_failed_checked_content(test_db, base_time):
+    _, queue_id = _queue_persona_guard_post(
+        test_db,
+        base_time,
+        summary=_failed_persona_summary(),
+    )
+
+    fake_x = _run_publish_queue_with_persona_mode(test_db, base_time, "disabled")
+
+    row = test_db.get_publish_queue_item(queue_id)
+    assert fake_x.posts == ["Persona checked post"]
+    assert row["status"] == "published"
+
+
+def test_main_strict_persona_guard_allows_missing_summary(test_db, base_time):
+    _, queue_id = _queue_persona_guard_post(test_db, base_time)
+
+    fake_x = _run_publish_queue_with_persona_mode(test_db, base_time, "strict")
+
+    row = test_db.get_publish_queue_item(queue_id)
+    assert fake_x.posts == ["Persona checked post"]
+    assert row["status"] == "published"
 
 
 def test_main_applies_thread_variant_before_parsing(test_db, base_time):
