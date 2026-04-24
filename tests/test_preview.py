@@ -363,3 +363,33 @@ def test_preview_surfaces_attribution_required_guard(db):
         f"- knowledge {knowledge_id}: attribution_required "
         "Source Author https://source.example/attribution"
     ) in text
+
+
+def test_preview_includes_saved_variants_grouped_by_platform(db):
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=[],
+        source_messages=[],
+        content="Original copy for X",
+        eval_score=8.0,
+        eval_feedback="Good",
+    )
+    variant_id = db.upsert_content_variant(
+        content_id,
+        "bluesky",
+        "post",
+        "Saved Bluesky copy",
+        {"adapter": "BlueskyPlatformAdapter"},
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    assert preview["variants"]["bluesky"][0]["id"] == variant_id
+    assert preview["platforms"]["bluesky"]["variants"][0]["content"] == "Saved Bluesky copy"
+    assert preview["platforms"]["bluesky"]["posts"][0]["text"] == "Saved Bluesky copy"
+    assert preview["platforms"]["bluesky"]["posts"][0]["source"] == "variant"
+
+    text = format_preview(preview)
+    assert "Saved variants:" in text
+    assert f"- #{variant_id} post" in text
+    assert "Saved Bluesky copy" in text

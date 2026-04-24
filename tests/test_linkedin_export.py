@@ -185,3 +185,37 @@ def test_queue_export_preserves_queue_metadata_and_json(db):
     assert payload["queue"]["scheduled_at"] == "2026-04-24T09:00:00+00:00"
     assert payload["queue_id"] == queue_id
     assert payload["graphemes"] == count_graphemes(export.text)
+
+
+def test_db_export_persists_linkedin_variant(db):
+    content_id = _insert_content(
+        db,
+        "Devs ship faster w/ tighter feedback bc prod tells the truth.",
+    )
+
+    export = build_linkedin_export_from_db(db, content_id=content_id)
+    variant = db.get_content_variant(content_id, "linkedin", "post")
+
+    assert variant is not None
+    assert variant["content"] == export.text
+    assert variant["metadata"]["source_content_type"] == "x_post"
+    assert variant["metadata"]["adapter"] == "LinkedInPlatformAdapter"
+    assert variant["metadata"]["adapted_graphemes"] == export.graphemes
+
+
+def test_db_export_updates_existing_linkedin_variant_without_duplicate(db):
+    content_id = _insert_content(db, "Original post")
+    existing_id = db.upsert_content_variant(
+        content_id,
+        "linkedin",
+        "post",
+        "Old LinkedIn copy",
+        {"adapter": "old"},
+    )
+
+    export = build_linkedin_export_from_db(db, content_id=content_id)
+    variant = db.get_content_variant(content_id, "linkedin", "post")
+
+    assert variant["id"] == existing_id
+    assert variant["content"] == export.text
+    assert len(db.list_content_variants(content_id, platform="linkedin", variant_type="post")) == 1

@@ -231,3 +231,63 @@ class TestPublish:
         cross_poster = CrossPoster(x_client=None, bluesky_client=None)
         results = cross_poster.publish("Test post", "x_post")
         assert results == {}
+
+    def test_bluesky_post_variant_is_persisted_when_content_id_supplied(self, db):
+        content_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content="Posting this on X before cross-posting.",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        mock_bsky = MagicMock()
+        mock_bsky.post.return_value = BlueskyPostResult(
+            success=True,
+            uri="at://did:plc:xyz/app.bsky.feed.post/abc",
+            url="https://bsky.app/profile/user/post/abc",
+        )
+
+        cross_poster = CrossPoster(bluesky_client=mock_bsky, db=db)
+        cross_poster.publish(
+            "Posting this on X before cross-posting.",
+            "x_post",
+            content_id=content_id,
+        )
+
+        variant = db.get_content_variant(content_id, "bluesky", "post")
+        assert variant is not None
+        assert variant["content"] == "Posting this before cross-posting."
+        assert variant["metadata"]["source_content_type"] == "x_post"
+        assert variant["metadata"]["adapter"] == "BlueskyPlatformAdapter"
+        assert variant["metadata"]["was_changed"] is True
+        mock_bsky.post.assert_called_once_with(variant["content"])
+
+    def test_bluesky_thread_variant_is_persisted_idempotently(self, db):
+        content_id = db.insert_generated_content(
+            content_type="x_thread",
+            source_commits=[],
+            source_messages=[],
+            content="TWEET 1:\nFirst on X\nTWEET 2:\nSecond on X",
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        mock_bsky = MagicMock()
+        mock_bsky.post_thread.return_value = BlueskyPostResult(
+            success=True,
+            uri="at://did:plc:xyz/app.bsky.feed.post/abc",
+            url="https://bsky.app/profile/user/post/abc",
+        )
+        cross_poster = CrossPoster(bluesky_client=mock_bsky, db=db)
+
+        tweets = ["First on X", "Second on X"]
+        cross_poster.publish("Raw content", "x_thread", tweets=tweets, content_id=content_id)
+        first = db.get_content_variant(content_id, "bluesky", "thread")
+        cross_poster.publish("Raw content", "x_thread", tweets=tweets, content_id=content_id)
+        second = db.get_content_variant(content_id, "bluesky", "thread")
+
+        assert second["id"] == first["id"]
+        assert "TWEET 1:" in second["content"]
+        assert "First" in second["content"]
+        assert " on X" not in second["content"]
+        assert second["metadata"]["part_count"] == 2

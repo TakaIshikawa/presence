@@ -397,11 +397,55 @@ def _split_x_posts(content: str, content_type: str) -> list[str]:
     return [content] if content else []
 
 
+def _variant_type_for_content_type(content_type: str) -> str:
+    if content_type == "x_thread":
+        return "thread"
+    return "post"
+
+
 def _post_counts(text: str) -> dict:
     return {
         "characters": len(text),
         "graphemes": count_graphemes(text),
     }
+
+
+def _fetch_content_variants(db: Any, content_id: int) -> list[dict]:
+    getter = getattr(db, "list_content_variants", None)
+    if callable(getter):
+        return [dict(variant) for variant in getter(content_id)]
+    return []
+
+
+def _variants_by_platform(variants: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for variant in variants:
+        grouped.setdefault(variant["platform"], []).append(variant)
+    return grouped
+
+
+def _serialize_variant(variant: dict) -> dict:
+    return {
+        "id": variant.get("id"),
+        "content_id": variant.get("content_id"),
+        "platform": variant.get("platform"),
+        "variant_type": variant.get("variant_type"),
+        "content": variant.get("content"),
+        "metadata": variant.get("metadata") or {},
+        "created_at": variant.get("created_at"),
+        "counts": _post_counts(variant.get("content") or ""),
+    }
+
+
+def _matching_variant(
+    variants: list[dict],
+    content_type: str,
+) -> dict | None:
+    wanted = _variant_type_for_content_type(content_type)
+    for variant in variants:
+        if variant.get("variant_type") == wanted:
+            return variant
+    return None
 
 
 def _platform_status(
@@ -449,6 +493,7 @@ def _render_platform_posts(
     content_type: str,
     adapter: BlueskyPlatformAdapter,
     suggestions: HashtagSuggestions | None = None,
+    variant: dict | None = None,
 ) -> list[dict]:
     variant_type = variant_type_for_content_type(content_type)
     variant_getter = getattr(db, "get_content_variant", None)
@@ -662,10 +707,14 @@ def build_publication_preview(
         content["id"],
         content.get("content") or "",
     ).as_dict()
+    variants = _fetch_content_variants(db, content["id"])
+    grouped_variants = _variants_by_platform(variants)
 
     platforms = {}
     for platform in ("x", "bluesky"):
         state = _fetch_publication_state(db, content["id"], platform)
+        platform_variants = grouped_variants.get(platform, [])
+        selected_variant = _matching_variant(platform_variants, content["content_type"])
         posts = _render_platform_posts(
             db,
             content["id"],
@@ -674,6 +723,7 @@ def build_publication_preview(
             content["content_type"],
             adapter,
             hashtag_suggestions,
+            selected_variant,
         )
         platform_attribution_guard = check_publication_attribution_guard(
             db,
@@ -694,6 +744,7 @@ def build_publication_preview(
                 platform in requested,
             ),
             "posts": posts,
+            "variants": [_serialize_variant(variant) for variant in platform_variants],
             "suggested_hashtags": (
                 list(hashtag_suggestions.for_platform(platform))
                 if hashtag_suggestions
@@ -730,6 +781,10 @@ def build_publication_preview(
             hashtag_suggestions.as_dict() if hashtag_suggestions else None
         ),
         "refreshed_variants": refreshed_variants,
+        "variants": {
+            platform: [_serialize_variant(variant) for variant in platform_variants]
+            for platform, platform_variants in grouped_variants.items()
+        },
         "platforms": platforms,
     }
 
@@ -1046,6 +1101,19 @@ def format_preview(preview: dict) -> str:
                 post_index = issue.get("post_index")
                 prefix = f"post {post_index}: " if post_index is not None else ""
                 lines.append(f"- {prefix}{issue['code']}: {issue['message']}")
+
+        variants = rendered.get("variants") or []
+        if variants:
+            lines.append("Saved variants:")
+            for variant in variants:
+                counts = variant["counts"]
+                lines.append(
+                    "- #{id} {variant_type} ({graphemes} graphemes)".format(
+                        id=variant["id"],
+                        variant_type=variant["variant_type"],
+                        graphemes=counts["graphemes"],
+                    )
+                )
 
         for post in rendered["posts"]:
             counts = post["counts"]

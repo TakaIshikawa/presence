@@ -179,11 +179,42 @@ def build_linkedin_export_from_db(
         content = dict(row)
 
     sources = _content_lineage(db, int(content_id))
-    return build_linkedin_export(
+    export = build_linkedin_export(
         content,
         sources=sources,
         queue=queue,
         options=options,
+    )
+    _persist_linkedin_variant(db, content, export)
+    return export
+
+
+def _persist_linkedin_variant(
+    db: Any,
+    content: dict[str, Any],
+    export: LinkedInExport,
+) -> None:
+    upsert = getattr(db, "upsert_content_variant", None)
+    if not callable(upsert):
+        return
+
+    source_text = content.get("content") or ""
+    upsert(
+        content_id=export.content_id,
+        platform="linkedin",
+        variant_type="post",
+        content=export.text,
+        metadata={
+            "source_content_type": export.content_type,
+            "adapter": "LinkedInPlatformAdapter",
+            "source_graphemes": count_graphemes(source_text),
+            "adapted_graphemes": export.graphemes,
+            "was_changed": export.text != source_text,
+            "was_trimmed": export.was_trimmed,
+            "include_sources": "Sources:" in export.text,
+            "source_count": len(export.sources),
+            "queue_id": export.queue_id,
+        },
     )
 
 

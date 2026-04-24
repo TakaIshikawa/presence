@@ -2270,13 +2270,27 @@ class Database:
             "source": "original",
         }
 
-    def list_content_variants(self, content_id: int) -> list[dict]:
-        """List all durable variants for a generated content item."""
+    def list_content_variants(
+        self,
+        content_id: int,
+        platform: str | None = None,
+        variant_type: str | None = None,
+    ) -> list[dict]:
+        """List durable variants for a generated content item."""
+        clauses = ["content_id = ?"]
+        params: list[object] = [content_id]
+        if platform is not None:
+            clauses.append("platform = ?")
+            params.append(platform)
+        if variant_type is not None:
+            clauses.append("variant_type = ?")
+            params.append(variant_type)
+
         cursor = self.conn.execute(
             """SELECT * FROM content_variants
-               WHERE content_id = ?
+               WHERE """ + " AND ".join(clauses) + """
                ORDER BY created_at, id""",
-            (content_id,),
+            params,
         )
         return [self._content_variant_from_row(row) for row in cursor.fetchall()]
 

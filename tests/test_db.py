@@ -2110,6 +2110,32 @@ class TestGeneratedContent:
         }
         assert len(variants) == 4
 
+    def test_list_content_variants_filters_by_platform_and_type(self, db):
+        content_id = self._insert_content(db)
+
+        db.upsert_content_variant(content_id, "x", "post", "X copy")
+        db.upsert_content_variant(content_id, "bluesky", "post", "Bluesky copy")
+        db.upsert_content_variant(content_id, "bluesky", "thread", "Bluesky thread")
+
+        bluesky_variants = db.list_content_variants(content_id, platform="bluesky")
+        post_variants = db.list_content_variants(content_id, variant_type="post")
+        exact = db.list_content_variants(
+            content_id,
+            platform="bluesky",
+            variant_type="thread",
+        )
+
+        assert {(v["platform"], v["variant_type"]) for v in bluesky_variants} == {
+            ("bluesky", "post"),
+            ("bluesky", "thread"),
+        }
+        assert {(v["platform"], v["variant_type"]) for v in post_variants} == {
+            ("x", "post"),
+            ("bluesky", "post"),
+        }
+        assert len(exact) == 1
+        assert exact[0]["content"] == "Bluesky thread"
+
     def test_list_generated_content_for_variant_refresh_returns_supported_content(self, db):
         x_post_id = self._insert_content(db, content_type="x_post", content="X post")
         thread_id = self._insert_content(db, content_type="x_thread", content="Thread")
