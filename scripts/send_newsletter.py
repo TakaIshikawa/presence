@@ -18,6 +18,10 @@ from output.newsletter import (
     NewsletterSubjectCandidate,
     ButtondownClient,
 )
+from output.newsletter_preview import (
+    build_preview_payload as _build_shared_preview_payload,
+    write_preview_artifact as _write_shared_preview_artifact,
+)
 
 
 def _arg_value(name: str) -> str:
@@ -138,6 +142,7 @@ def _utm_metadata(config, content) -> dict:
 
 
 def _preview_payload(
+    db,
     config,
     content,
     selected_subject: str,
@@ -147,23 +152,16 @@ def _preview_payload(
     week_end: datetime,
 ) -> dict:
     """Build the structured newsletter preview payload."""
-    subject_selection = _subject_selection_payload(
+    return _build_shared_preview_payload(
+        db,
+        config,
+        content,
         selected_subject,
         candidates,
         manual_subject,
+        week_start,
+        week_end,
     )
-    return {
-        "selected_subject": selected_subject,
-        "body_markdown": content.body_markdown,
-        "source_content_ids": content.source_content_ids,
-        "subject_candidates": [_candidate_to_dict(candidate) for candidate in candidates],
-        "subject_selection": subject_selection,
-        "week_range": {
-            "start": week_start.isoformat(),
-            "end": week_end.isoformat(),
-        },
-        "utm_metadata": _utm_metadata(config, content),
-    }
 
 
 def _format_preview_json(payload: dict) -> str:
@@ -212,13 +210,7 @@ def _format_preview_markdown(payload: dict) -> str:
 
 def _write_preview_artifact(path: Path, payload: dict) -> None:
     """Write a newsletter preview as JSON or Markdown based on extension."""
-    suffix = path.suffix.lower()
-    if suffix in {".md", ".markdown"}:
-        rendered = _format_preview_markdown(payload)
-    else:
-        rendered = _format_preview_json(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(rendered, encoding="utf-8")
+    _write_shared_preview_artifact(path, payload)
 
 
 def _persist_subject_candidates(
@@ -308,6 +300,7 @@ def main():
 
         if preview_mode:
             payload = _preview_payload(
+                db,
                 config,
                 content,
                 selected_subject,
