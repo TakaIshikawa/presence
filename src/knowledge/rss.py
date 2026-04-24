@@ -20,6 +20,7 @@ class FeedEntry:
     link: str
     summary: str
     content: str
+    published_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,14 @@ def _first_child_text(element: ET.Element, names: tuple[str, ...]) -> str:
     return ""
 
 
+def _first_child_raw_text(element: ET.Element, names: tuple[str, ...]) -> str:
+    for name in names:
+        for child in element:
+            if _local_name(child.tag) == name:
+                return " ".join("".join(child.itertext()).split())
+    return ""
+
+
 def _clean_text(value: str | None) -> str:
     if not value:
         return ""
@@ -186,8 +195,17 @@ def parse_feed(xml_text: str, limit: int = 5) -> list[FeedEntry]:
             link = _atom_link(entry)
             summary = _first_child_text(entry, ("summary",))
             content = _first_child_text(entry, ("content",)) or summary
+            published_at = _first_child_raw_text(entry, ("published", "updated"))
             if link and (title or content):
-                entries.append(FeedEntry(title=title or link, link=link, summary=summary, content=content))
+                entries.append(
+                    FeedEntry(
+                        title=title or link,
+                        link=link,
+                        summary=summary,
+                        content=content,
+                        published_at=published_at or None,
+                    )
+                )
             if len(entries) >= limit:
                 break
         return entries
@@ -198,8 +216,17 @@ def parse_feed(xml_text: str, limit: int = 5) -> list[FeedEntry]:
         link = _rss_link(item)
         summary = _first_child_text(item, ("description", "summary"))
         content = _first_child_text(item, ("encoded", "content")) or summary
+        published_at = _first_child_raw_text(item, ("pubDate", "date", "published", "updated"))
         if link and (title or content):
-            entries.append(FeedEntry(title=title or link, link=link, summary=summary, content=content))
+            entries.append(
+                FeedEntry(
+                    title=title or link,
+                    link=link,
+                    summary=summary,
+                    content=content,
+                    published_at=published_at or None,
+                )
+            )
         if len(entries) >= limit:
             break
 

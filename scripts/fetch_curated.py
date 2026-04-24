@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fetch content from curated external sources."""
 
+import argparse
 import logging
 import sys
 import time
@@ -238,8 +239,9 @@ def fetch_curated_feed_source(
     cooldown_hours: int = DEFAULT_SOURCE_COOLDOWN_HOURS,
     autodiscovery_enabled: bool = False,
     autodiscovery_timeout: float = DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS,
+    dry_run: bool = False,
 ) -> int:
-    """Fetch a curated RSS/Atom source and ingest new article entries."""
+    """Fetch a curated RSS/Atom source and ingest new article/newsletter entries."""
     logger = logging.getLogger(__name__)
     feed_url = getattr(source, "feed_url", None)
 
@@ -255,7 +257,7 @@ def fetch_curated_feed_source(
             identifier or feed_url,
             max(0.0, remaining.total_seconds() / 3600),
         )
-        if db is not None and source_type and identifier:
+        if db is not None and source_type and identifier and not dry_run:
             _record_source_skipped(db, source_type, identifier)
         return 0
 
@@ -271,13 +273,13 @@ def fetch_curated_feed_source(
         try:
             candidates = discover_feed_candidates(homepage_url, timeout=autodiscovery_timeout)
         except Exception as exc:
-            if db is not None and source_type and identifier:
+            if db is not None and source_type and identifier and not dry_run:
                 _record_source_failure(db, source_type, identifier, _source_error(exc))
             raise
 
         if not candidates:
             logger.info("No feed candidates discovered for %s", identifier or homepage_url)
-            if db is not None and source_type and identifier:
+            if db is not None and source_type and identifier and not dry_run:
                 _record_source_skipped(db, source_type, identifier, status="no_feed_discovered")
             return 0
 
@@ -287,7 +289,7 @@ def fetch_curated_feed_source(
             setattr(source, "feed_url", feed_url)
         except Exception:
             pass
-        if db is not None and source_type and identifier:
+        if db is not None and source_type and identifier and not dry_run:
             _cache_discovered_feed_url(db, source_type, identifier, feed_url)
 
     try:
@@ -298,11 +300,11 @@ def fetch_curated_feed_source(
             last_modified=getattr(source, "feed_last_modified", None),
         )
     except Exception as exc:
-        if db is not None and source_type and identifier:
+        if db is not None and source_type and identifier and not dry_run:
             _record_source_failure(db, source_type, identifier, _source_error(exc))
         raise
     update_feed_cache = getattr(db, "update_curated_source_feed_cache", None)
-    if db is not None and source_type and identifier and callable(update_feed_cache):
+    if db is not None and source_type and identifier and callable(update_feed_cache) and not dry_run:
         update_feed_cache(
             source_type,
             identifier,
@@ -311,7 +313,7 @@ def fetch_curated_feed_source(
         )
     if result.not_modified:
         logger.debug("Skipping %s; feed not modified", identifier or feed_url)
-        if db is not None and source_type and identifier:
+        if db is not None and source_type and identifier and not dry_run:
             _record_source_success(db, source_type, identifier, status="not_modified")
         return 0
 
@@ -335,6 +337,17 @@ def fetch_curated_feed_source(
             if not content:
                 continue
 
+            if dry_run:
+                logger.info(
+                    "[dry-run] Would ingest %s entry from %s: %s (%s)",
+                    knowledge_source_type,
+                    identifier or feed_url,
+                    entry.title,
+                    entry.link,
+                )
+                ingested += 1
+                continue
+
             ingest_entry(
                 store=store,
                 extractor=extractor,
@@ -343,14 +356,15 @@ def fetch_curated_feed_source(
                 title=entry.title,
                 author=author,
                 license_type=license_type,
+                published_at=entry.published_at,
             )
             ingested += 1
     except Exception as exc:
-        if db is not None and source_type and identifier:
+        if db is not None and source_type and identifier and not dry_run:
             _record_source_failure(db, source_type, identifier, _source_error(exc))
         raise
 
-    if db is not None and source_type and identifier:
+    if db is not None and source_type and identifier and not dry_run:
         _record_source_success(db, source_type, identifier)
     return ingested
 
@@ -390,13 +404,26 @@ def _fetch_account_with_health(
     return tweets
 
 
-def main():
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Fetch configured sources and report new entries without writing knowledge rows.",
+    )
+    args, _unknown = parser.parse_known_args(argv)
+    return args
+
+
+def main(argv: list[str] | None = None):
+    args = _parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     logger = logging.getLogger(__name__)
+    dry_run = bool(args.dry_run)
 
     with script_context() as (config, db):
         if not config.embeddings:
@@ -491,18 +518,26 @@ def main():
 
                     logger.info(f"Processing tweet {tweet['id']}...")
                     try:
-                        ingest_curated_post(
-                            store=store,
-                            extractor=extractor,
-                            post_id=tweet["id"],
-                            content=tweet["text"],
-                            url=tweet["url"],
-                            author=account.identifier,
-                            license_type=account.license,
-                            published_at=tweet.get("created_at"),
-                        )
-                        logger.info(f"Ingested tweet {tweet['id']}")
-                        time.sleep(1)  # Rate limiting
+                        if dry_run:
+                            logger.info(
+                                "[dry-run] Would ingest curated_x entry from @%s: %s (%s)",
+                                account.identifier,
+                                tweet["id"],
+                                tweet["url"],
+                            )
+                        else:
+                            ingest_curated_post(
+                                store=store,
+                                extractor=extractor,
+                                post_id=tweet["id"],
+                                content=tweet["text"],
+                                url=tweet["url"],
+                                author=account.identifier,
+                                license_type=account.license,
+                                published_at=tweet.get("created_at"),
+                            )
+                            logger.info(f"Ingested tweet {tweet['id']}")
+                            time.sleep(1)  # Rate limiting
                     except Exception as e:
                         logger.error(f"Failed to ingest tweet {tweet['id']}: {e}")
 
@@ -541,9 +576,11 @@ def main():
                         "feed_autodiscovery_timeout_seconds",
                         DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS,
                     ),
+                    dry_run=dry_run,
                 )
                 if count:
-                    logger.info("Ingested %d entries from %s", count, source.identifier)
+                    action = "Would ingest" if dry_run else "Ingested"
+                    logger.info("%s %d entries from %s", action, count, source.identifier)
             except Exception as e:
                 logger.error("Failed to fetch feed for %s: %s", getattr(source, "identifier", "source"), e)
 

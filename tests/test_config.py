@@ -945,6 +945,16 @@ class TestEdgeCases:
         assert cfg.curated_sources.blogs == []
         assert cfg.curated_sources.newsletters == []
 
+    def test_curated_sources_null_sublists(self, tmp_path):
+        """YAML keys with only commented examples parse as null, not lists."""
+        data = _minimal_config_dict(
+            curated_sources={"x_accounts": None, "blogs": None, "newsletters": None}
+        )
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.curated_sources.x_accounts == []
+        assert cfg.curated_sources.blogs == []
+        assert cfg.curated_sources.newsletters == []
+
     def test_curated_source_default_license(self, tmp_path):
         data = _minimal_config_dict(
             curated_sources={

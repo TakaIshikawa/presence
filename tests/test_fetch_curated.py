@@ -1,6 +1,7 @@
 """Tests for fetch_curated.py — tweet fetching and filtering."""
 
 from email.message import Message
+import logging
 import sys
 from types import ModuleType
 from pathlib import Path
@@ -132,6 +133,7 @@ class TestFetchCuratedFeeds:
           <entry>
             <title>Newsletter issue</title>
             <link href="https://newsletter.example.com/issues/42" rel="alternate" />
+            <published>2026-04-22T10:00:00Z</published>
             <summary>Issue summary</summary>
             <content type="html">&lt;p&gt;Issue content&lt;/p&gt;</content>
           </entry>
@@ -145,6 +147,7 @@ class TestFetchCuratedFeeds:
         assert entries[0].link == "https://newsletter.example.com/issues/42"
         assert entries[0].summary == "Issue summary"
         assert entries[0].content == "Issue content"
+        assert entries[0].published_at == "2026-04-22T10:00:00Z"
 
     @patch("fetch_curated.ingest_curated_article")
     @patch("fetch_curated.fetch_feed")
@@ -252,6 +255,37 @@ class TestFetchCuratedFeeds:
         assert mock_ingest.call_args.kwargs["url"] == "https://example.com/agent-loops"
         assert mock_ingest.call_args.kwargs["author"] == "Example Newsletter"
         assert mock_ingest.call_args.kwargs["license_type"] == "restricted"
+
+    @patch("fetch_curated.ingest_curated_newsletter")
+    @patch("fetch_curated.fetch_feed")
+    def test_newsletter_dry_run_reports_without_ingesting(self, mock_fetch, mock_ingest, caplog):
+        from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedFetchResult
+
+        caplog.set_level(logging.INFO)
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=1))
+        store = MagicMock()
+        store.exists.return_value = False
+        source = SimpleNamespace(
+            source_type="newsletter",
+            identifier="newsletter.example.com",
+            name="Example Newsletter",
+            license="restricted",
+            feed_url="https://newsletter.example.com/feed.xml",
+        )
+
+        count = fetch_curated_feed_source(
+            store,
+            MagicMock(),
+            source,
+            limit=1,
+            dry_run=True,
+        )
+
+        assert count == 1
+        mock_ingest.assert_not_called()
+        assert "[dry-run] Would ingest curated_newsletter entry" in caplog.text
 
     def test_config_source_uses_cached_discovered_feed_url(self, db):
         from fetch_curated import _active_feed_sources

@@ -134,6 +134,15 @@ curated_sources:
       name: "Simon Willison's Blog"
       feed_url: "https://simonwillison.net/atom/everything/"
       license: "attribution_required"
+  newsletters: []
+  # Curated newsletter RSS/Atom feeds are ingested as curated_newsletter
+  # knowledge rows. Use domain or identifier plus feed_url when known.
+  # Example:
+  # newsletters:
+  #   - domain: "newsletter.example.com"
+  #     name: "Example Newsletter"
+  #     feed_url: "https://newsletter.example.com/feed"
+  #     license: "attribution_required"
 
 # Posting schedule optimization
 scheduling:

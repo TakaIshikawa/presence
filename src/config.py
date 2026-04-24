@@ -410,7 +410,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 feed_url=acc.get("feed_url"),
                 homepage_url=acc.get("homepage_url", acc.get("url")),
             )
-            for acc in curated_sources_data.get("x_accounts", [])
+            for acc in curated_sources_data.get("x_accounts") or []
         ]
         blogs = [
             CuratedSource(
@@ -420,7 +420,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 feed_url=blog.get("feed_url"),
                 homepage_url=blog.get("homepage_url", blog.get("url")),
             )
-            for blog in curated_sources_data.get("blogs", [])
+            for blog in curated_sources_data.get("blogs") or []
         ]
         newsletters = [
             CuratedSource(
@@ -430,7 +430,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 feed_url=newsletter.get("feed_url"),
                 homepage_url=newsletter.get("homepage_url", newsletter.get("url")),
             )
-            for newsletter in curated_sources_data.get("newsletters", [])
+            for newsletter in curated_sources_data.get("newsletters") or []
         ]
         knowledge_context_data = curated_sources_data.get("knowledge_context", {})
         curated_sources_config = CuratedSourcesConfig(
