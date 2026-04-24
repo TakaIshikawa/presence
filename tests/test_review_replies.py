@@ -16,9 +16,12 @@ from review_replies import (
     _format_escalation_line,
     _format_quality_line,
     _format_triage_line,
+    _format_priority_line,
+    _prepare_pending_replies,
     _publish_reply,
     _record_publish_result,
 )
+from engagement.reply_priority import ReplyPriorityScore
 
 
 # --- format_relationship_context ---
@@ -208,3 +211,97 @@ class TestPublishReply:
 
         assert posted is False
         db.update_reply_status.assert_not_called()
+<<<<<<< HEAD
+=======
+        db.record_reply_review_event.assert_called_once_with(
+            123,
+            "failed",
+            actor="publisher",
+            old_status="pending",
+            new_status="pending",
+            notes="Missing refs",
+        )
+
+
+class TestPriorityReviewHelpers:
+    def test_prepare_pending_replies_preserves_default_order_without_enrichment(self):
+        pending = [
+            {"id": 2, "intent": "appreciation", "inbound_text": "Thanks!"},
+            {"id": 1, "intent": "bug_report", "priority": "high", "inbound_text": "Broken?"},
+        ]
+
+        result = _prepare_pending_replies(pending)
+
+        assert result is pending
+        assert "computed_priority" not in result[0]
+
+    def test_prepare_pending_replies_sorts_by_priority_when_requested(self):
+        pending = [
+            {"id": 2, "intent": "appreciation", "inbound_text": "Thanks!"},
+            {
+                "id": 1,
+                "intent": "bug_report",
+                "priority": "high",
+                "inbound_text": "Broken with an exception?",
+            },
+        ]
+
+        result = _prepare_pending_replies(pending, sort="priority")
+
+        assert [row["id"] for row in result] == [1, 2]
+        assert result[0]["computed_priority"].score > result[1]["computed_priority"].score
+
+    def test_show_priority_enriches_without_reordering(self):
+        pending = [
+            {"id": 2, "intent": "appreciation", "inbound_text": "Thanks!"},
+            {"id": 1, "intent": "bug_report", "priority": "high", "inbound_text": "Broken?"},
+        ]
+
+        result = _prepare_pending_replies(pending, show_priority=True)
+
+        assert [row["id"] for row in result] == [2, 1]
+        assert all("computed_priority" in row for row in result)
+
+    def test_format_priority_line_displays_score_label_and_reasons(self):
+        reply = {
+            "computed_priority": ReplyPriorityScore(
+                score=84,
+                label="urgent",
+                reasons=("intent:bug_report:+35", "age:+8"),
+            )
+        }
+
+        result = _format_priority_line(reply)
+
+        assert result == "Priority: urgent (84/100) | intent:bug_report:+35, age:+8"
+
+    def test_record_publish_result_compatibility_with_review_events(self, db):
+        reply_id = db.insert_reply_draft(
+            inbound_tweet_id="compat-1",
+            inbound_author_handle="alice",
+            inbound_author_id="user_A",
+            inbound_text="Can you explain?",
+            our_tweet_id="our_tw_1",
+            our_content_id=1,
+            our_post_text="Our original post",
+            draft_text="Sure.",
+        )
+        reply = {"id": reply_id, "status": "pending"}
+        publish_result = SimpleNamespace(
+            success=True,
+            tweet_id="posted-compat-1",
+            url="https://x.com/me/status/posted-compat-1",
+        )
+
+        posted = _record_publish_result(db, reply, publish_result)
+
+        assert posted is True
+        row = db.conn.execute(
+            "SELECT status, posted_tweet_id FROM reply_queue WHERE id = ?",
+            (reply_id,),
+        ).fetchone()
+        assert row["status"] == "posted"
+        assert row["posted_tweet_id"] == "posted-compat-1"
+        events = db.list_reply_review_events(reply_id)
+        assert events[0]["event_type"] == "posted"
+>>>>>>> 7a5700f (Add reply priority scoring)

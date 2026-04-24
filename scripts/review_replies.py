@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config import load_config
 from storage.db import Database
+from engagement.reply_priority import prioritize_replies, score_reply_priority
 from output.x_client import XClient
 from output.bluesky_client import BlueskyClient
 from engagement.reply_escalation import recommend_reply_escalations
@@ -24,14 +25,29 @@ from review_helpers import truncate, read_char, format_relationship_context
 DEFAULT_ESCALATION_MIN_AGE_HOURS = 6.0
 
 
-def main():
+def _build_parser():
+    parser = argparse.ArgumentParser(description="Interactively review pending reply drafts.")
+    parser.add_argument(
+        "--sort",
+        choices=["detected", "priority"],
+        default="detected",
+        help="Review order. Default preserves existing detected-at ordering.",
+    )
+    parser.add_argument(
+        "--show-priority",
+        action="store_true",
+        help="Display computed priority score details for each queued reply.",
+    )
+    return parser
+
+
+def main(argv=None):
+    args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-
-    args = _build_parser().parse_args()
 
     config = load_config()
 
@@ -39,7 +55,11 @@ def main():
     db.connect()
     db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
 
-    pending = db.get_pending_replies(sort_by=args.sort)
+    pending = _prepare_pending_replies(
+        db.get_pending_replies(),
+        sort=args.sort,
+        show_priority=args.show_priority,
+    )
     if not pending:
         logger.info("No pending reply drafts.")
         db.close()
@@ -79,6 +99,10 @@ def main():
         )
         if triage_line:
             header += f"\n     [{triage_line}]"
+
+        priority_line = _format_priority_line(reply) if args.show_priority else None
+        if priority_line:
+            header += f"\n     [{priority_line}]"
 
         logger.info(header)
         logger.info("")
@@ -202,6 +226,28 @@ def _posted_platform_id(result):
     return getattr(result, "uri", None) or getattr(result, "tweet_id", None)
 
 
+def _prepare_pending_replies(pending, sort="detected", show_priority=False):
+    if sort == "priority":
+        return prioritize_replies(pending)
+    if show_priority:
+        enriched = []
+        for reply in pending:
+            row = dict(reply)
+            row["computed_priority"] = score_reply_priority(reply)
+            enriched.append(row)
+        return enriched
+    return pending
+
+
+def _record_review_decision(db, reply, event_type, new_status=None, notes=None):
+    db.record_reply_review_event(
+        reply["id"],
+        event_type,
+        actor="reviewer",
+        old_status=reply.get("status"),
+        new_status=new_status,
+        notes=notes,
+    )
 def _record_publish_result(db, reply, result) -> bool:
     if result.success:
         posted_platform_id = _posted_platform_id(result)
@@ -256,7 +302,13 @@ def _format_escalation_line(reply):
     item = recommendations[0]
     reasons = "; ".join(item.reasons)
     return f"Recommendation: {item.recommendation} ({reasons})"
-
-
+def _format_priority_line(reply):
+    priority = reply.get("computed_priority")
+    if priority is None:
+        priority = score_reply_priority(reply)
+    result = f"Priority: {priority.label} ({priority.score}/100)"
+    if priority.reasons:
+        result += f" | {', '.join(priority.reasons)}"
+    return result
 if __name__ == "__main__":
     main()
