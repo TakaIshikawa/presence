@@ -13,6 +13,23 @@ from output.preview import (
 )
 
 
+def _insert_recent_accepted_posts(db):
+    for text in (
+        "I traced the queue worker timeout in worker.py and kept the retry path explicit.",
+        "I kept the pipeline guard small with a fixture and the exact error from the log.",
+        "Debugging the CLI is easier when the config failure names the file and branch.",
+    ):
+        recent_id = db.insert_generated_content(
+            content_type="x_post",
+            source_commits=[],
+            source_messages=[],
+            content=text,
+            eval_score=8.0,
+            eval_feedback="Good",
+        )
+        db.mark_published(recent_id, f"https://x.example/{recent_id}", str(recent_id))
+
+
 def test_preview_surfaces_failed_alt_text_guard(db):
     content_id = db.insert_generated_content(
         content_type="x_visual",
@@ -364,6 +381,34 @@ def test_preview_surfaces_attribution_required_guard(db):
         "Source Author https://source.example/attribution"
     ) in text
 
+def test_preview_includes_persona_drift_json_and_compact_warning(db):
+    _insert_recent_accepted_posts(db)
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=[],
+        source_messages=[],
+        content=(
+            "Thrilled to announce a revolutionary framework to unlock scalable "
+            "innovation and transform the future of high-performing teams."
+        ),
+        eval_score=8.0,
+        eval_feedback="Good",
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    assert preview["persona_drift"]["level"] == "high"
+    assert preview["persona_drift"]["score"] >= 0.6
+    assert "hype-heavy tone" in preview["persona_drift"]["reasons"]
+    assert preview["platforms"]["x"]["persona_drift"]["level"] == "high"
+
+    payload = json.loads(preview_to_json(preview))
+    assert set(payload["persona_drift"]) >= {"score", "level", "reasons"}
+
+    text = format_preview(preview)
+    assert "Persona drift: high" in text
+    assert "hype-heavy tone" in text
+
 
 def test_preview_includes_saved_variants_grouped_by_platform(db):
     content_id = db.insert_generated_content(
@@ -393,3 +438,23 @@ def test_preview_includes_saved_variants_grouped_by_platform(db):
     assert "Saved variants:" in text
     assert f"- #{variant_id} post" in text
     assert "Saved Bluesky copy" in text
+
+
+def test_preview_suppresses_low_persona_drift_warning(db):
+    _insert_recent_accepted_posts(db)
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=[],
+        source_messages=[],
+        content=(
+            "I think the retry path in worker.py is clearer now because the test "
+            "names the timeout and the log keeps the branch visible."
+        ),
+        eval_score=8.0,
+        eval_feedback="Good",
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    assert preview["persona_drift"]["level"] == "low"
+    assert "Persona drift:" not in format_preview(preview)

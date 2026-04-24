@@ -9,6 +9,7 @@ from typing import Any
 
 from synthesis.alt_text_guard import validate_alt_text
 from synthesis.hashtag_suggester import HashtagSuggestions, suggest_hashtags
+from synthesis.persona_drift import detect_persona_drift
 
 from .attribution_guard import check_publication_attribution_guard
 from .license_guard import (
@@ -123,6 +124,36 @@ def _fetch_persona_guard_summary(db: Any, content_id: int) -> dict | None:
     summary["reasons"] = json.loads(summary.get("reasons") or "[]")
     summary["metrics"] = json.loads(summary.get("metrics") or "{}")
     return summary
+
+
+def _fetch_recent_accepted_posts(db: Any, content_id: int, limit: int = 20) -> list[dict]:
+    getter = getattr(db, "get_recent_published_content_all", None)
+    if callable(getter):
+        rows = getter(limit=limit + 1)
+        return [dict(row) for row in rows if dict(row).get("id") != content_id][:limit]
+
+    row_factory = getattr(getattr(db, "conn", None), "row_factory", None)
+    rows = db.conn.execute(
+        """SELECT id, content, content_type, published_at
+           FROM generated_content
+           WHERE content_type IN ('x_post', 'x_thread')
+             AND published = 1
+             AND id != ?
+           ORDER BY published_at DESC
+           LIMIT ?""",
+        (content_id, limit),
+    ).fetchall()
+    if row_factory:
+        return [dict(row) for row in rows]
+    return [
+        {
+            "id": row[0],
+            "content": row[1],
+            "content_type": row[2],
+            "published_at": row[3],
+        }
+        for row in rows
+    ]
 
 
 def _fetch_content_topics(db: Any, content_id: int) -> list[dict]:
@@ -690,6 +721,11 @@ def build_publication_preview(
         claim_check=claim_check,
         persona_guard=persona_guard,
     )
+    recent_accepted_posts = _fetch_recent_accepted_posts(db, content["id"])
+    persona_drift = detect_persona_drift(
+        content.get("content") or "",
+        recent_accepted_posts,
+    ).as_dict()
     alt_text = validate_alt_text(
         content.get("image_alt_text"),
         image_prompt=content.get("image_prompt"),
@@ -734,6 +770,9 @@ def build_publication_preview(
             platform,
             [post["text"] for post in posts],
             content_type=content["content_type"],
+        platform_persona_drift = detect_persona_drift(
+            "\n".join(post["text"] for post in posts),
+            recent_accepted_posts,
         ).as_dict()
         platforms[platform] = {
             "status": _platform_status(
@@ -756,6 +795,7 @@ def build_publication_preview(
             "license_guard": license_guard,
             "attribution_guard": platform_attribution_guard,
             "thread_preflight": thread_preflight,
+            "persona_drift": platform_persona_drift,
         }
 
     return {
@@ -774,6 +814,7 @@ def build_publication_preview(
         "claim_check": claim_check,
         "persona_guard": persona_guard,
         "evidence": evidence,
+        "persona_drift": persona_drift,
         "alt_text": alt_text,
         "license_guard": license_guard,
         "attribution_guard": attribution_guard,
@@ -1027,6 +1068,17 @@ def format_preview(preview: dict) -> str:
         if persona_guard.get("reasons"):
             lines.append("Persona guard reasons:")
             lines.extend(f"- {reason}" for reason in persona_guard["reasons"])
+
+    persona_drift = preview.get("persona_drift")
+    if persona_drift and persona_drift.get("level") in {"medium", "high"}:
+        score = persona_drift.get("score")
+        score_text = "n/a" if score is None else f"{float(score):.2f}"
+        reasons = persona_drift.get("reasons") or []
+        compact_reasons = "; ".join(reasons[:3])
+        lines.append(
+            f"Persona drift: {persona_drift['level']} (score {score_text})"
+            + (f" - {compact_reasons}" if compact_reasons else "")
+        )
 
     license_guard = preview.get("license_guard")
     if license_guard:
