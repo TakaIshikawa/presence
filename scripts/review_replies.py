@@ -17,7 +17,11 @@ from config import load_config
 from storage.db import Database
 from output.x_client import XClient
 from output.bluesky_client import BlueskyClient
+from engagement.reply_escalation import recommend_reply_escalations
 from review_helpers import truncate, read_char, format_relationship_context
+
+
+DEFAULT_ESCALATION_MIN_AGE_HOURS = 6.0
 
 
 def main():
@@ -65,6 +69,9 @@ def main():
         quality_line = _format_quality_line(reply["quality_score"], reply["quality_flags"])
         if quality_line:
             header += f"\n     [{quality_line}]"
+        escalation_line = _format_escalation_line(reply)
+        if escalation_line:
+            header += f"\n     [{escalation_line}]"
 
         triage_line = _format_triage_line(
             reply.get("triage_score"),
@@ -235,6 +242,20 @@ def _format_triage_line(triage_score, triage_reason):
     if triage_reason:
         result += f" - {triage_reason}"
     return result
+
+
+def _format_escalation_line(reply):
+    """Format the escalation recommendation for display."""
+    recommendations = recommend_reply_escalations(
+        [reply],
+        min_age_hours=DEFAULT_ESCALATION_MIN_AGE_HOURS,
+        include_low_priority=True,
+    )
+    if not recommendations:
+        return None
+    item = recommendations[0]
+    reasons = "; ".join(item.reasons)
+    return f"Recommendation: {item.recommendation} ({reasons})"
 
 
 if __name__ == "__main__":

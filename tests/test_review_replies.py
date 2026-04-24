@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from review_helpers import format_relationship_context
 from review_replies import (
+    _format_escalation_line,
     _format_quality_line,
     _format_triage_line,
     _publish_reply,
@@ -98,6 +99,25 @@ class TestFormatTriageLine:
 
     def test_none_score_returns_none_for_backwards_compatibility(self):
         assert _format_triage_line(None, "high priority") is None
+
+
+class TestFormatEscalationLine:
+    def test_sycophantic_draft_shows_dismiss_recommendation(self):
+        reply = {
+            "id": 123,
+            "status": "pending",
+            "priority": "normal",
+            "platform": "x",
+            "inbound_author_handle": "alice",
+            "age_hours": 1,
+            "quality_score": 7.0,
+            "quality_flags": '["sycophantic"]',
+            "relationship_context": None,
+        }
+
+        result = _format_escalation_line(reply)
+
+        assert result == "Recommendation: dismiss (quality flag: sycophantic)"
 
 
 class TestPublishReply:
