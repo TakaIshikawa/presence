@@ -460,6 +460,34 @@ class TestFormatDirectives:
         assert calls[1].kwargs["messages"][0]["content"].startswith("[]\n")
         assert calls[2].kwargs["messages"][0]["content"].startswith("[]\n")
 
+    def test_recommended_format_biases_first_candidate_only(self, generator_with_client):
+        gen, client = generator_with_client
+        client.messages.create.return_value = _make_mock_response("post")
+        gen._load_prompt = MagicMock(
+            return_value="[{format_directive}]\n{prompts}\n{commits}\n{commit_count}\n{few_shot_section}"
+        )
+
+        results = gen.generate_candidates(
+            SAMPLE_PROMPTS,
+            SAMPLE_COMMITS,
+            num_candidates=2,
+            format_directives=["Use a question hook", "Start with a bold claim"],
+            recommended_format="tip",
+            recommended_format_reason="tip averaged 18.0 engagement across 3 recent posts.",
+        )
+
+        calls = client.messages.create.call_args_list
+        first_prompt = calls[0].kwargs["messages"][0]["content"]
+        second_prompt = calls[1].kwargs["messages"][0]["content"]
+        assert "RECOMMENDED FORMAT" in first_prompt
+        assert "'tip' content_format" in first_prompt
+        assert "tip averaged 18.0 engagement" in first_prompt
+        assert "Use a question hook" in first_prompt
+        assert "RECOMMENDED FORMAT" not in second_prompt
+        assert "Start with a bold claim" in second_prompt
+        assert results[0].content_format == "tip"
+        assert results[1].content_format is None
+
 
 # ---------------------------------------------------------------------------
 # 7. GeneratedContent dataclass fields populated correctly

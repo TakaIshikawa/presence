@@ -19,6 +19,7 @@ class GeneratedContent:
     content: str
     source_prompts: list[str]
     source_commits: list[str]
+    content_format: Optional[str] = None
     prompt_type: Optional[str] = None
     prompt_version: Optional[int] = None
     prompt_hash: Optional[str] = None
@@ -82,6 +83,21 @@ class ContentGenerator:
     @staticmethod
     def _merge_context(*parts: str) -> str:
         return "\n\n".join(part.strip() for part in parts if part and part.strip())
+
+    @staticmethod
+    def _recommended_format_directive(
+        recommended_format: str | None,
+        reason: str = "",
+    ) -> str:
+        if not recommended_format:
+            return ""
+        directive = (
+            f"RECOMMENDED FORMAT: Prefer the '{recommended_format}' content_format "
+            "for this candidate because recent engagement suggests it is working."
+        )
+        if reason:
+            directive = f"{directive}\nReason: {reason}"
+        return directive
 
     def generate_x_post(
         self,
@@ -201,6 +217,8 @@ class ContentGenerator:
         avoidance_context: str = "",
         pattern_context: str = "",
         trend_context: str = "",
+        recommended_format: str | None = None,
+        recommended_format_reason: str = "",
     ) -> list[GeneratedContent]:
         """Generate multiple candidates with temperature and format variation."""
         type_config = self.CONTENT_TYPE_CONFIG.get(
@@ -250,12 +268,21 @@ class ContentGenerator:
 
         temperatures = [0.5, 0.7, 0.9][:num_candidates]
         candidates = []
+        recommended_directive = self._recommended_format_directive(
+            recommended_format,
+            recommended_format_reason,
+        )
 
         for i, temp in enumerate(temperatures):
             # Each candidate gets a different format directive
             format_directive = ""
             if format_directives and i < len(format_directives):
                 format_directive = format_directives[i]
+            if i == 0 and recommended_directive:
+                format_directive = self._merge_context(
+                    recommended_directive,
+                    format_directive,
+                )
 
             filled = template.format(
                 prompts=prompts_text,
@@ -297,6 +324,7 @@ class ContentGenerator:
                     content=response.content[0].text.strip(),
                     source_prompts=prompts,
                     source_commits=[c.get("message") or c.get("commit_message", "") for c in commits],
+                    content_format=recommended_format if i == 0 else None,
                     prompt_type=prompt_template_type,
                     prompt_version=self._prompt_metadata(prompt_template_type).get("version"),
                     prompt_hash=self._prompt_metadata(prompt_template_type).get("prompt_hash"),
