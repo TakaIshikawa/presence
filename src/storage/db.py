@@ -1283,6 +1283,46 @@ class Database:
         )
         return [self._github_activity_from_row(row) for row in cursor.fetchall()]
 
+    def get_recent_closed_github_issues(
+        self,
+        days: int = 7,
+        repo_name: str | None = None,
+        limit: int | None = 10,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return recently closed GitHub issue activity, newest first."""
+        if days <= 0 or (limit is not None and limit <= 0):
+            return []
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+        params: list[object] = [cutoff]
+        repo_filter = ""
+        if repo_name:
+            repo_filter = " AND repo_name = ?"
+            params.append(repo_name)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE COALESCE(closed_at, updated_at) >= ?
+                  AND activity_type = 'issue'
+                  AND LOWER(COALESCE(state, '')) = 'closed'{repo_filter}
+                ORDER BY COALESCE(closed_at, updated_at) DESC, id DESC{limit_clause}""",
+            tuple(params),
+        )
+
+        rows: list[dict] = []
+        for row in cursor.fetchall():
+            item = self._github_activity_from_row(row)
+            metadata = item.get("metadata") or {}
+            url = str(item.get("url") or "")
+            if metadata.get("pull_request") or "/pull/" in url:
+                continue
+            rows.append(item)
+        return rows
+
     def get_recent_merged_github_pull_requests(
         self,
         days: int = 7,

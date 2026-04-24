@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed reviewable content ideas from stale open GitHub issues."""
+"""Seed reviewable content ideas from stale open or recently closed GitHub issues."""
 
 from __future__ import annotations
 
@@ -26,24 +26,30 @@ def format_results_table(results: list[IssueIdeaSeedResult]) -> str:
     proposed = sum(1 for result in results if result.status == "proposed")
     skipped = sum(1 for result in results if result.status == "skipped")
     duplicates = sum(1 for result in results if result.status == "duplicate")
-    lines = [f"created={created} proposed={proposed} skipped={skipped} duplicate={duplicates}"]
-    lines.append(f"{'Status':9s}  {'ID':>4s}  {'Repo':20s}  {'Issue':>6s}  Reason")
+    lines = [
+        f"created={created} proposed={proposed} skipped={skipped} duplicate={duplicates}"
+    ]
     lines.append(
-        f"{'-' * 9:9s}  {'-' * 4:>4s}  "
-        f"{'-' * 20:20s}  {'-' * 6:>6s}  {'-' * 32}"
+        f"{'Status':9s}  {'ID':>4s}  {'Priority':8s}  {'Issue':18s}  Topic / reason"
+    )
+    lines.append(
+        f"{'-' * 9:9s}  {'-' * 4:>4s}  {'-' * 8:8s}  "
+        f"{'-' * 18:18s}  {'-' * 44}"
     )
     if not results:
-        lines.append("none       ----  --------------------  ------  no eligible stale issues")
+        lines.append("none       ----  --------  ------------------  no eligible issues")
         return "\n".join(lines)
 
     for result in results:
         idea_id = str(result.idea_id) if result.idea_id is not None else "-"
+        issue_ref = f"{_shorten(result.repo_name, 10)}#{result.number}"
+        detail = f"{_shorten(result.topic, 44)} ({result.reason})"
         lines.append(
             f"{result.status:9s}  "
             f"{idea_id:>4s}  "
-            f"{_shorten(result.repo_name, 20):20s}  "
-            f"{result.number:6d}  "
-            f"{_shorten(result.reason, 32)}"
+            f"{(result.priority or '-'):8s}  "
+            f"{issue_ref:18s}  "
+            f"{detail}"
         )
     return "\n".join(lines)
 
@@ -55,24 +61,36 @@ def format_results_json(results: list[IssueIdeaSeedResult]) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--mode",
+        choices=("stale-open", "closed"),
+        default="stale-open",
+        help="Issue selection mode (default: stale-open)",
+    )
+    parser.add_argument(
         "--days-stale",
         type=int,
         default=30,
-        help="Minimum age in days since issue updated_at (default: 30)",
+        help="Minimum age in days since issue updated_at for stale-open mode",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=14,
+        help="Lookback window in days for closed issue activity",
     )
     parser.add_argument("--limit", type=int, default=10, help="Maximum issues to process")
     parser.add_argument(
         "--label",
         action="append",
         dest="labels",
-        help="Require at least one matching label; repeat for multiple labels",
+        help="Require at least one matching label in stale-open mode; repeat for multiple labels",
     )
     parser.add_argument("--repo", help="Only seed issues for this repo name")
     parser.add_argument(
         "--priority",
         choices=("high", "normal", "low"),
         default="normal",
-        help="Priority for created content ideas (default: normal)",
+        help="Priority for created stale-open content ideas (default: normal)",
     )
     parser.add_argument(
         "--dry-run",
@@ -83,12 +101,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     with script_context() as (_config, db):
         results = seed_issue_ideas(
             db,
+            mode="closed" if args.mode == "closed" else "stale_open",
             days_stale=args.days_stale,
+            days=args.days,
             limit=args.limit,
             labels=args.labels,
             repo=args.repo,
@@ -96,7 +116,8 @@ def main(argv: list[str] | None = None) -> None:
             dry_run=args.dry_run,
         )
     print(format_results_json(results) if args.json else format_results_table(results))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
