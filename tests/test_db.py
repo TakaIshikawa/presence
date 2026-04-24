@@ -959,6 +959,47 @@ class TestGitHubActivity:
         assert rows[0]["title"] == "New title"
         assert rows[0]["merged_at"] == "2026-04-01T13:00:00+00:00"
 
+    def test_comment_activity_upsert_is_idempotent_by_comment_id(self, db):
+        first_id = db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="review_comment",
+            number=601,
+            title="Review comment on #8",
+            body="Original review comment",
+            state="commented",
+            author="octo",
+            url="https://github.com/taka/repo/pull/8#discussion_r601",
+            updated_at="2026-04-01T12:00:00+00:00",
+            created_at="2026-04-01T11:00:00+00:00",
+            metadata={"comment_id": 601, "parent_pr_number": 8, "parent_number": 8},
+        )
+        second_id = db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="review_comment",
+            number=601,
+            title="Review comment on #8",
+            body="Updated review comment",
+            state="commented",
+            author="octo",
+            url="https://github.com/taka/repo/pull/8#discussion_r601",
+            updated_at="2026-04-01T12:05:00+00:00",
+            created_at="2026-04-01T11:00:00+00:00",
+            metadata={"comment_id": 601, "parent_pr_number": 8, "parent_number": 8},
+        )
+
+        rows = db.get_github_activity_in_range(
+            datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc),
+            activity_type="review_comment",
+        )
+
+        assert second_id == first_id
+        assert len(rows) == 1
+        assert rows[0]["activity_id"] == "repo#601:review_comment"
+        assert rows[0]["body"] == "Updated review comment"
+        assert rows[0]["metadata"]["comment_id"] == 601
+        assert rows[0]["metadata"]["parent_pr_number"] == 8
+
     def test_get_github_activity_in_range_parses_labels(self, db):
         db.upsert_github_activity(
             repo_name="repo",

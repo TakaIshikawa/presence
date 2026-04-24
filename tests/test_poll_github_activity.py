@@ -42,6 +42,7 @@ def test_ingest_github_activity_passes_dry_run(mock_poll, db):
         include_issues=False,
         include_discussions=True,
         include_pull_requests=True,
+        include_comments=True,
         dry_run=True,
         timeout=10,
         redaction_patterns=[{"name": "ticket", "pattern": "ticket-\\d+"}],
@@ -56,6 +57,7 @@ def test_ingest_github_activity_passes_dry_run(mock_poll, db):
         include_issues=False,
         include_discussions=True,
         include_pull_requests=True,
+        include_comments=True,
         dry_run=True,
         timeout=10,
         redaction_patterns=[{"name": "ticket", "pattern": "ticket-\\d+"}],
@@ -73,6 +75,7 @@ def test_main_dry_run_does_not_update_watermark(mock_context, mock_ingest, mock_
     config.github.include_issues = False
     config.github.include_discussions = True
     config.github.include_pull_requests = True
+    config.github.include_comments = False
     config.privacy.redaction_patterns = []
     config.timeouts.github_seconds = 10
     mock_context.return_value.__enter__.return_value = (config, db)
@@ -87,6 +90,7 @@ def test_main_dry_run_does_not_update_watermark(mock_context, mock_ingest, mock_
     assert mock_ingest.call_args.kwargs["include_issues"] is False
     assert mock_ingest.call_args.kwargs["include_discussions"] is True
     assert mock_ingest.call_args.kwargs["include_pull_requests"] is True
+    assert mock_ingest.call_args.kwargs["include_comments"] is False
 
 
 @patch("poll_github_activity.update_monitoring")
@@ -100,6 +104,7 @@ def test_main_persists_watermark_after_success(mock_context, mock_ingest, mock_u
     config.github.include_issues = True
     config.github.include_discussions = False
     config.github.include_pull_requests = False
+    config.github.include_comments = True
     config.privacy.redaction_patterns = []
     config.timeouts.github_seconds = 10
     mock_context.return_value.__enter__.return_value = (config, db)
@@ -114,3 +119,28 @@ def test_main_persists_watermark_after_success(mock_context, mock_ingest, mock_u
     assert mock_ingest.call_args.kwargs["include_issues"] is True
     assert mock_ingest.call_args.kwargs["include_discussions"] is False
     assert mock_ingest.call_args.kwargs["include_pull_requests"] is False
+    assert mock_ingest.call_args.kwargs["include_comments"] is True
+
+
+@patch("poll_github_activity.update_monitoring")
+@patch("poll_github_activity.ingest_github_activity")
+@patch("poll_github_activity.script_context")
+def test_main_include_comments_cli_overrides_default(mock_context, mock_ingest, mock_update, db):
+    config = MagicMock()
+    config.github.token = "tok"
+    config.github.username = "taka"
+    config.github.repositories = []
+    config.github.include_issues = True
+    config.github.include_discussions = False
+    config.github.include_pull_requests = False
+    config.github.include_comments = False
+    config.privacy.redaction_patterns = []
+    config.timeouts.github_seconds = 10
+    mock_context.return_value.__enter__.return_value = (config, db)
+    mock_context.return_value.__exit__.return_value = None
+    mock_ingest.return_value = []
+
+    assert main(["--dry-run", "--include-comments", "--since", "2026-04-01T12:00:00Z"]) == 0
+
+    mock_update.assert_not_called()
+    assert mock_ingest.call_args.kwargs["include_comments"] is True

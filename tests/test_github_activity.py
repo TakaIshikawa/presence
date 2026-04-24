@@ -84,6 +84,37 @@ def _release_payload(release_id: int = 101, tag: str = "v1.0.0") -> dict:
     }
 
 
+def _issue_comment_payload(comment_id: int = 501, issue_number: int = 7) -> dict:
+    return {
+        "id": comment_id,
+        "body": "Issue comment body with ticket-1234",
+        "user": {"login": "octo"},
+        "html_url": f"https://github.com/taka/repo/issues/{issue_number}#issuecomment-{comment_id}",
+        "issue_url": f"https://api.github.com/repos/taka/repo/issues/{issue_number}",
+        "created_at": "2026-04-01T11:00:00Z",
+        "updated_at": "2026-04-01T12:00:00Z",
+    }
+
+
+def _review_comment_payload(comment_id: int = 601, pr_number: int = 8) -> dict:
+    return {
+        "id": comment_id,
+        "pull_request_review_id": 77,
+        "body": "Review comment body with ticket-1234",
+        "user": {"login": "reviewer"},
+        "html_url": f"https://github.com/taka/repo/pull/{pr_number}#discussion_r{comment_id}",
+        "pull_request_url": f"https://api.github.com/repos/taka/repo/pulls/{pr_number}",
+        "path": "src/app.py",
+        "position": 4,
+        "original_position": 4,
+        "commit_id": "abc123",
+        "original_commit_id": "abc123",
+        "diff_hunk": "@@ -1 +1 @@",
+        "created_at": "2026-04-01T11:00:00Z",
+        "updated_at": "2026-04-01T12:00:00Z",
+    }
+
+
 def _discussion_payload(number: int = 4, title: str = "Discussion") -> dict:
     return {
         "number": number,
@@ -296,6 +327,58 @@ class TestGitHubActivityClient:
         assert len(activity.body) <= 1000
 
     @patch("requests.get", create=True)
+    def test_get_repo_issue_comments_normalizes_comment_activity(self, mock_get):
+        mock_get.return_value = _mock_response(json_data=[_issue_comment_payload()])
+
+        client = GitHubActivityClient(
+            "tok",
+            "taka",
+            redaction_patterns=[
+                {"name": "ticket", "pattern": r"ticket-\d+", "placeholder": "[REDACTED_TICKET]"}
+            ],
+        )
+        comments = list(client.get_repo_issue_comments("taka", "repo", repo_name="taka/repo", since=TIMESTAMP))
+
+        assert len(comments) == 1
+        comment = comments[0]
+        assert comment.activity_type == "issue_comment"
+        assert comment.number == 501
+        assert comment.title == "Issue comment on #7"
+        assert comment.author == "octo"
+        assert comment.url.endswith("#issuecomment-501")
+        assert "ticket-1234" not in comment.body
+        assert comment.metadata["comment_id"] == 501
+        assert comment.metadata["parent_issue_number"] == 7
+        assert comment.metadata["parent_number"] == 7
+        assert mock_get.call_args.kwargs["params"]["since"] == TIMESTAMP.isoformat()
+
+    @patch("requests.get", create=True)
+    def test_get_repo_review_comments_normalizes_comment_activity(self, mock_get):
+        mock_get.return_value = _mock_response(json_data=[_review_comment_payload()])
+
+        client = GitHubActivityClient(
+            "tok",
+            "taka",
+            redaction_patterns=[
+                {"name": "ticket", "pattern": r"ticket-\d+", "placeholder": "[REDACTED_TICKET]"}
+            ],
+        )
+        comments = list(client.get_repo_review_comments("taka", "repo", repo_name="taka/repo", since=TIMESTAMP))
+
+        assert len(comments) == 1
+        comment = comments[0]
+        assert comment.activity_type == "review_comment"
+        assert comment.number == 601
+        assert comment.title == "Review comment on #8"
+        assert comment.author == "reviewer"
+        assert "ticket-1234" not in comment.body
+        assert comment.metadata["comment_id"] == 601
+        assert comment.metadata["parent_pr_number"] == 8
+        assert comment.metadata["parent_number"] == 8
+        assert comment.metadata["pull_request_review_id"] == 77
+        assert comment.metadata["path"] == "src/app.py"
+
+    @patch("requests.get", create=True)
     def test_get_repo_releases_normalizes_metadata(self, mock_get):
         old = _release_payload(102, "v0.9.0")
         old["published_at"] = "2026-03-01T12:00:00Z"
@@ -374,12 +457,21 @@ class TestGitHubActivityClient:
             list(client.get_repo_issues("taka", "repo"))
 
     @patch.object(GitHubActivityClient, "get_repo_pull_requests")
+    @patch.object(GitHubActivityClient, "get_repo_review_comments")
+    @patch.object(GitHubActivityClient, "get_repo_issue_comments")
     @patch.object(GitHubActivityClient, "get_repo_releases")
     @patch.object(GitHubActivityClient, "get_repo_issues")
     @patch.object(GitHubActivityClient, "get_repo_discussions")
     @patch.object(GitHubActivityClient, "get_configured_repos")
     def test_get_all_recent_activity_skips_not_found_repos(
-        self, mock_repos, mock_discussions, mock_issues, mock_releases, mock_pulls
+        self,
+        mock_repos,
+        mock_discussions,
+        mock_issues,
+        mock_releases,
+        mock_issue_comments,
+        mock_review_comments,
+        mock_pulls,
     ):
         mock_repos.return_value = [
             {"owner": "taka", "name": "missing", "repo_name": "missing"},
@@ -404,6 +496,8 @@ class TestGitHubActivityClient:
 
         mock_issues.side_effect = issue_side_effect
         mock_pulls.return_value = iter([])
+        mock_issue_comments.return_value = iter([])
+        mock_review_comments.return_value = iter([])
         mock_releases.return_value = iter([])
         mock_discussions.return_value = iter([])
 
@@ -412,12 +506,15 @@ class TestGitHubActivityClient:
             client.get_all_recent_activity(
                 include_discussions=True,
                 include_pull_requests=True,
+                include_comments=True,
             )
         )
 
         assert results == [activity]
         assert mock_discussions.call_count == 1
         assert mock_pulls.call_count == 1
+        assert mock_issue_comments.call_count == 1
+        assert mock_review_comments.call_count == 1
 
     @patch.object(GitHubActivityClient, "get_repo_pull_requests")
     @patch.object(GitHubActivityClient, "get_repo_releases")
@@ -449,6 +546,30 @@ class TestGitHubActivityClient:
         assert list(client.get_all_recent_activity(include_issues=False)) == []
         mock_issues.assert_not_called()
         mock_releases.assert_called_once()
+
+    @patch.object(GitHubActivityClient, "get_repo_review_comments")
+    @patch.object(GitHubActivityClient, "get_repo_issue_comments")
+    @patch.object(GitHubActivityClient, "get_repo_releases")
+    @patch.object(GitHubActivityClient, "get_repo_issues")
+    @patch.object(GitHubActivityClient, "get_configured_repos")
+    def test_get_all_recent_activity_includes_comments_only_when_enabled(
+        self, mock_repos, mock_issues, mock_releases, mock_issue_comments, mock_review_comments
+    ):
+        mock_repos.return_value = [{"owner": "taka", "name": "repo", "repo_name": "repo"}]
+        mock_issues.return_value = iter([])
+        mock_releases.return_value = iter([])
+        mock_issue_comments.return_value = iter([])
+        mock_review_comments.return_value = iter([])
+
+        client = GitHubActivityClient("tok", "taka")
+
+        assert list(client.get_all_recent_activity()) == []
+        mock_issue_comments.assert_not_called()
+        mock_review_comments.assert_not_called()
+
+        assert list(client.get_all_recent_activity(include_comments=True)) == []
+        mock_issue_comments.assert_called_once()
+        mock_review_comments.assert_called_once()
 
 
 class TestPollNewActivity:
@@ -488,6 +609,7 @@ class TestPollNewActivity:
             include_discussions=True,
             include_pull_requests=True,
             include_issues=False,
+            include_comments=True,
         )
 
         assert result == [new]
@@ -496,6 +618,7 @@ class TestPollNewActivity:
         assert mock_activity.call_args.kwargs["include_discussions"] is True
         assert mock_activity.call_args.kwargs["include_pull_requests"] is True
         assert mock_activity.call_args.kwargs["include_issues"] is False
+        assert mock_activity.call_args.kwargs["include_comments"] is True
 
     @patch.object(GitHubActivityClient, "get_all_recent_activity")
     def test_dry_run_does_not_persist(self, mock_activity):

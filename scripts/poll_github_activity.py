@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll GitHub issues, pull requests, and releases without running publishing."""
+"""Poll GitHub issues, pull requests, releases, and comments without publishing."""
 
 from __future__ import annotations
 
@@ -46,6 +46,7 @@ def ingest_github_activity(
     include_issues: bool = True,
     include_discussions: bool = False,
     include_pull_requests: bool = False,
+    include_comments: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: list[str | dict] | None = None,
@@ -59,6 +60,7 @@ def ingest_github_activity(
         include_issues=include_issues,
         include_discussions=include_discussions,
         include_pull_requests=include_pull_requests,
+        include_comments=include_comments,
         dry_run=dry_run,
         timeout=timeout,
         redaction_patterns=redaction_patterns,
@@ -84,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=90,
         help="Initial lookback window when no previous activity poll exists.",
     )
+    parser.add_argument(
+        "--include-comments",
+        action="store_true",
+        help="Also ingest issue comments and pull request review comments.",
+    )
     return parser
 
 
@@ -98,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         include_issues = getattr(config.github, "include_issues", True)
         include_discussions = getattr(config.github, "include_discussions", False)
         include_pull_requests = getattr(config.github, "include_pull_requests", False)
+        include_comments = args.include_comments or getattr(config.github, "include_comments", False)
 
         logger.info("Polling GitHub issues/PRs/releases since %s", since.isoformat())
         if repositories:
@@ -108,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("Including GitHub pull requests")
         if include_discussions:
             logger.info("Including GitHub Discussions")
+        if include_comments:
+            logger.info("Including GitHub issue comments and PR review comments")
 
         activity = ingest_github_activity(
             db=db,
@@ -118,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             include_issues=include_issues,
             include_discussions=include_discussions,
             include_pull_requests=include_pull_requests,
+            include_comments=include_comments,
             dry_run=args.dry_run,
             timeout=config.timeouts.github_seconds,
             redaction_patterns=config.privacy.redaction_patterns,

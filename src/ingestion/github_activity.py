@@ -1,4 +1,4 @@
-"""Fetch recently updated GitHub issues, pull requests, and releases."""
+"""Fetch recently updated GitHub issues, pull requests, releases, and comments."""
 
 from __future__ import annotations
 
@@ -72,6 +72,15 @@ def _body_excerpt(value: str | None, max_len: int = BODY_EXCERPT_MAX_CHARS) -> s
     if max_len <= 3:
         return cleaned[:max_len]
     return cleaned[: max_len - 3].rstrip() + "..."
+
+
+def _number_from_url(value: str | None) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        return int(str(value).rstrip("/").rsplit("/", 1)[-1])
+    except ValueError:
+        return None
 
 
 class GitHubActivityClient:
@@ -356,6 +365,78 @@ class GitHubActivityClient:
                     break
             page += 1
 
+    def get_repo_issue_comments(
+        self,
+        owner: str,
+        repo: str,
+        repo_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recently updated issue comments as standalone activity."""
+        yielded = 0
+        page = 1
+        while yielded < limit:
+            per_page = min(100, limit - yielded)
+            params = {
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": per_page,
+                "page": page,
+            }
+            if since:
+                params["since"] = since.isoformat()
+            data = self._get(f"/repos/{owner}/{repo}/issues/comments", params)
+            if not data:
+                break
+            for item in data:
+                updated_at = _parse_github_datetime(item.get("updated_at"))
+                if since and updated_at and updated_at < since:
+                    return
+                yield self._issue_comment_to_activity(item, repo_name or repo)
+                yielded += 1
+                if yielded >= limit:
+                    break
+            if len(data) < per_page:
+                break
+            page += 1
+
+    def get_repo_review_comments(
+        self,
+        owner: str,
+        repo: str,
+        repo_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recently updated pull request review comments as standalone activity."""
+        yielded = 0
+        page = 1
+        while yielded < limit:
+            per_page = min(100, limit - yielded)
+            params = {
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": per_page,
+                "page": page,
+            }
+            if since:
+                params["since"] = since.isoformat()
+            data = self._get(f"/repos/{owner}/{repo}/pulls/comments", params)
+            if not data:
+                break
+            for item in data:
+                updated_at = _parse_github_datetime(item.get("updated_at"))
+                if since and updated_at and updated_at < since:
+                    return
+                yield self._review_comment_to_activity(item, repo_name or repo)
+                yielded += 1
+                if yielded >= limit:
+                    break
+            if len(data) < per_page:
+                break
+            page += 1
+
     def get_repo_releases(
         self,
         owner: str,
@@ -471,8 +552,9 @@ class GitHubActivityClient:
         include_discussions: bool = False,
         include_pull_requests: bool = False,
         include_issues: bool = True,
+        include_comments: bool = False,
     ) -> Iterator[GitHubActivity]:
-        """Yield recent issues, releases, and optionally pull requests/discussions."""
+        """Yield recent issues, releases, and optional PRs/discussions/comments."""
         for repo in self.get_configured_repos(repositories, include_forks=include_forks):
             try:
                 if include_issues:
@@ -485,6 +567,21 @@ class GitHubActivityClient:
                     )
                 if include_pull_requests:
                     yield from self.get_repo_pull_requests(
+                        repo["owner"],
+                        repo["name"],
+                        repo_name=repo["repo_name"],
+                        since=since,
+                        limit=limit_per_repo,
+                    )
+                if include_comments:
+                    yield from self.get_repo_issue_comments(
+                        repo["owner"],
+                        repo["name"],
+                        repo_name=repo["repo_name"],
+                        since=since,
+                        limit=limit_per_repo,
+                    )
+                    yield from self.get_repo_review_comments(
                         repo["owner"],
                         repo["name"],
                         repo_name=repo["repo_name"],
@@ -699,6 +796,67 @@ class GitHubActivityClient:
             metadata={key: value for key, value in metadata.items() if value is not None},
         )
 
+    def _issue_comment_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        created_at = _parse_github_datetime(item.get("created_at"))
+        updated_at = _parse_github_datetime(item.get("updated_at")) or created_at
+        comment_id = item["id"]
+        parent_number = _number_from_url(item.get("issue_url"))
+        metadata = {
+            "comment_id": comment_id,
+            "parent_issue_number": parent_number,
+            "parent_number": parent_number,
+            "parent_type": "issue",
+            "issue_url": item.get("issue_url"),
+        }
+
+        return GitHubActivity(
+            repo_name=repo_name,
+            activity_type="issue_comment",
+            number=comment_id,
+            title=f"Issue comment on #{parent_number}" if parent_number else "Issue comment",
+            state="commented",
+            author=(item.get("user") or {}).get("login", ""),
+            url=item.get("html_url", ""),
+            updated_at=updated_at,
+            created_at=created_at,
+            body=_body_excerpt(self.redactor.redact(item.get("body") or "")),
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        )
+
+    def _review_comment_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        created_at = _parse_github_datetime(item.get("created_at"))
+        updated_at = _parse_github_datetime(item.get("updated_at")) or created_at
+        comment_id = item["id"]
+        parent_number = _number_from_url(item.get("pull_request_url"))
+        metadata = {
+            "comment_id": comment_id,
+            "parent_pr_number": parent_number,
+            "parent_number": parent_number,
+            "parent_type": "pull_request",
+            "pull_request_review_id": item.get("pull_request_review_id"),
+            "pull_request_url": item.get("pull_request_url"),
+            "path": item.get("path"),
+            "position": item.get("position"),
+            "original_position": item.get("original_position"),
+            "commit_id": item.get("commit_id"),
+            "original_commit_id": item.get("original_commit_id"),
+            "diff_hunk": item.get("diff_hunk"),
+        }
+
+        return GitHubActivity(
+            repo_name=repo_name,
+            activity_type="review_comment",
+            number=comment_id,
+            title=f"Review comment on #{parent_number}" if parent_number else "Review comment",
+            state="commented",
+            author=(item.get("user") or {}).get("login", ""),
+            url=item.get("html_url", ""),
+            updated_at=updated_at,
+            created_at=created_at,
+            body=_body_excerpt(self.redactor.redact(item.get("body") or "")),
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        )
+
     def _discussion_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
         category = item.get("category") or {}
         answer = item.get("answer") or {}
@@ -747,11 +905,12 @@ def poll_new_activity(
     include_discussions: bool = False,
     include_pull_requests: bool = False,
     include_issues: bool = True,
+    include_comments: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: Optional[Iterable[str | dict]] = None,
 ) -> list[GitHubActivity]:
-    """Poll for recently updated GitHub issues/PRs and optionally persist them."""
+    """Poll for recently updated GitHub activity and optionally persist it."""
     client = GitHubActivityClient(
         token,
         username,
@@ -766,6 +925,7 @@ def poll_new_activity(
         include_discussions=include_discussions,
         include_pull_requests=include_pull_requests,
         include_issues=include_issues,
+        include_comments=include_comments,
     ):
         if db.is_github_activity_processed(
             activity.repo_name,
