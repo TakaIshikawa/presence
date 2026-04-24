@@ -35,6 +35,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         help="Override the LinkedIn grapheme limit used when trimming",
     )
+    adaptation = parser.add_mutually_exclusive_group()
+    adaptation.add_argument(
+        "--adapt",
+        dest="adapt",
+        action="store_true",
+        help="Apply deterministic LinkedIn text adaptation (default)",
+    )
+    adaptation.add_argument(
+        "--raw",
+        "--no-adapt",
+        dest="adapt",
+        action="store_false",
+        help="Export the generated text without LinkedIn-specific adaptation",
+    )
+    parser.set_defaults(adapt=True)
     parser.add_argument(
         "--include-sources",
         dest="include_sources",
@@ -54,7 +69,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    options_kwargs: dict[str, object] = {"include_sources": args.include_sources}
+    options_kwargs: dict[str, object] = {
+        "include_sources": args.include_sources,
+        "adapt": args.adapt,
+    }
     if args.max_length is not None:
         options_kwargs["max_length"] = args.max_length
 

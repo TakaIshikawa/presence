@@ -2,6 +2,7 @@
 
 import json
 
+from scripts.export_linkedin import parse_args
 from output.linkedin_export import (
     LinkedInExportOptions,
     build_linkedin_export,
@@ -62,6 +63,30 @@ def test_thread_is_condensed_into_one_linkedin_post():
     assert "with a small lesson" in export.text
     assert "developers miss it because" in export.text.lower()
     assert export.text.count("\n\n") >= 1
+
+
+def test_raw_mode_preserves_x_oriented_copy():
+    export = build_linkedin_export(
+        {
+            "id": 88,
+            "content_type": "x_post",
+            "content": "Tweeting this on X w/ tags #one #two #three #four #five #six.",
+        },
+        options=LinkedInExportOptions(adapt=False),
+    )
+
+    assert export.adapted is False
+    assert "Tweeting this on X" in export.text
+    assert "w/ tags" in export.text
+    assert "#six" in export.text
+
+
+def test_export_script_accepts_adapt_and_raw_modes():
+    adapted_args = parse_args(["--content-id", "1", "--adapt"])
+    raw_args = parse_args(["--content-id", "1", "--raw"])
+
+    assert adapted_args.adapt is True
+    assert raw_args.adapt is False
 
 
 def test_source_attribution_preserves_content_and_knowledge_links(db):

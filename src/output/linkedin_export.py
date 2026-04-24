@@ -42,6 +42,7 @@ class LinkedInExportOptions:
 
     max_length: int = LINKEDIN_GRAPHEME_LIMIT
     include_sources: bool = True
+    adapt: bool = True
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class LinkedInExport:
     sources: tuple[SourceAttribution, ...]
     max_length: int = LINKEDIN_GRAPHEME_LIMIT
     was_trimmed: bool = False
+    adapted: bool = True
     queue: dict[str, Any] | None = None
     queue_id: int | None = None
 
@@ -89,10 +91,14 @@ def build_linkedin_export(
     content_id = int(content["id"])
     content_type = content.get("content_type") or "x_post"
     source_text = _source_text_for_linkedin(content.get("content") or "", content_type)
-    expanded = expand_terse_x_language(source_text)
 
-    adapter = LinkedInPlatformAdapter(grapheme_limit=options.max_length)
-    body = adapter.adapt(expanded, content_type=content_type)
+    if options.adapt:
+        expanded = expand_terse_x_language(source_text)
+        adapter = LinkedInPlatformAdapter(grapheme_limit=options.max_length)
+        body = adapter.adapt(expanded, content_type=content_type)
+    else:
+        body = _normalize_spacing(source_text)
+
     attributions = _source_attributions(content.get("content") or "", sources or [])
 
     text, was_trimmed = _compose_post(
@@ -112,6 +118,7 @@ def build_linkedin_export(
         queue=dict(queue) if queue else None,
         max_length=options.max_length,
         was_trimmed=was_trimmed,
+        adapted=options.adapt,
         queue_id=queue_id,
     )
 
@@ -195,6 +202,7 @@ def format_linkedin_markdown(export: LinkedInExport) -> str:
         "",
         f"- Content ID: {export.content_id}",
         f"- Content type: {export.content_type}",
+        f"- Adapted: {'yes' if export.adapted else 'no'}",
     ]
     if export.queue_id is not None:
         lines.append(f"- Queue ID: {export.queue_id}")
