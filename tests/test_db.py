@@ -3068,6 +3068,15 @@ class TestReplyQueue:
         assert row["priority"] == "high"
         assert row["status"] == "pending"
 
+    def test_get_unanswered_inbound_mentions_excludes_replied_and_dismissed(self, db):
+        pending_id = self._insert_reply(db, tweet_id="pending-question")
+        self._insert_reply(db, tweet_id="dismissed-question", status="dismissed")
+        self._insert_reply(db, tweet_id="posted-question", status="posted")
+
+        rows = db.get_unanswered_inbound_mentions()
+
+        assert [row["id"] for row in rows] == [pending_id]
+
     def test_update_reply_classification_helpers(self, db):
         reply_id = self._insert_reply(db, tweet_id="needs-classification")
 

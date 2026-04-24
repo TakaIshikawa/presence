@@ -3712,6 +3712,30 @@ class Database:
             return sort_by_triage(replies)
         return replies
 
+    def get_unanswered_inbound_mentions(
+        self,
+        *,
+        limit: int = 100,
+        statuses: tuple[str, ...] = ("pending",),
+    ) -> list[dict]:
+        """Get inbound mentions that have not been replied to or dismissed."""
+        if limit <= 0:
+            return []
+        statuses = tuple(status for status in statuses if status)
+        if not statuses:
+            return []
+        cursor = self.conn.execute(
+            f"""SELECT * FROM reply_queue
+                WHERE status IN ({','.join('?' for _ in statuses)})
+                  AND posted_at IS NULL
+                  AND posted_tweet_id IS NULL
+                  AND posted_platform_id IS NULL
+                ORDER BY datetime(detected_at) ASC, id ASC
+                LIMIT ?""",
+            (*statuses, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     def get_pending_reply_sla(
         self,
         max_age_hours: Optional[int] = None,
