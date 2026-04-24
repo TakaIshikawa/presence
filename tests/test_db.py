@@ -2407,6 +2407,80 @@ class TestReplyQueue:
         assert "intent" in cols
         assert "priority" in cols
 
+    def test_get_pending_replies_adds_triage_fields(self, db):
+        self._insert_reply(
+            db,
+            tweet_id="triage-fields",
+            intent="question",
+            priority="high",
+            quality_score=8.0,
+        )
+
+        pending = db.get_pending_replies(now=datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc))
+
+        assert pending[0]["triage_score"] > 0
+        assert "high priority" in pending[0]["triage_reason"]
+
+    def test_get_pending_replies_defaults_to_triage_order(self, db):
+        older_low = self._insert_reply(
+            db,
+            tweet_id="older-low",
+            intent="appreciation",
+            priority="low",
+        )
+        newer_high = self._insert_reply(
+            db,
+            tweet_id="newer-high",
+            intent="bug_report",
+            priority="high",
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-24T12:00:00+00:00", older_low),
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-25T11:00:00+00:00", newer_high),
+        )
+        db.conn.commit()
+
+        pending = db.get_pending_replies(now=datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc))
+
+        assert [row["inbound_tweet_id"] for row in pending] == ["newer-high", "older-low"]
+
+    def test_get_pending_replies_detected_at_sort_preserves_legacy_order(self, db):
+        newer_high = self._insert_reply(
+            db,
+            tweet_id="legacy-newer-high",
+            intent="bug_report",
+            priority="high",
+        )
+        older_low = self._insert_reply(
+            db,
+            tweet_id="legacy-older-low",
+            intent="appreciation",
+            priority="low",
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-25T11:00:00+00:00", newer_high),
+        )
+        db.conn.execute(
+            "UPDATE reply_queue SET detected_at = ? WHERE id = ?",
+            ("2026-04-24T12:00:00+00:00", older_low),
+        )
+        db.conn.commit()
+
+        pending = db.get_pending_replies(
+            sort_by="detected_at",
+            now=datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc),
+        )
+
+        assert [row["inbound_tweet_id"] for row in pending] == [
+            "legacy-older-low",
+            "legacy-newer-high",
+        ]
+
     def test_insert_reply_draft_stores_intent_priority_and_status(self, db):
         self._insert_reply(
             db,

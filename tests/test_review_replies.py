@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from review_helpers import format_relationship_context
 from review_replies import (
     _format_quality_line,
+    _format_triage_line,
     _publish_reply,
     _record_publish_result,
 )
@@ -84,6 +85,19 @@ class TestFormatQualityLine:
     def test_score_with_malformed_flags(self):
         result = _format_quality_line(6.0, "not json")
         assert result == "Quality: 6.0/10"
+
+
+class TestFormatTriageLine:
+    def test_score_and_reason(self):
+        result = _format_triage_line(72.25, "high priority; question")
+        assert result == "Triage: 72.2 - high priority; question"
+
+    def test_score_without_reason(self):
+        result = _format_triage_line(31.0, None)
+        assert result == "Triage: 31.0"
+
+    def test_none_score_returns_none_for_backwards_compatibility(self):
+        assert _format_triage_line(None, "high priority") is None
 
 
 class TestPublishReply:

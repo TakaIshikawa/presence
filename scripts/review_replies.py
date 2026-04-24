@@ -4,6 +4,7 @@
 import json
 import logging
 import sys
+import argparse
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,13 +27,15 @@ def main():
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
+    args = _build_parser().parse_args()
+
     config = load_config()
 
     db = Database(config.paths.database)
     db.connect()
     db.init_schema(str(Path(__file__).parent.parent / "schema.sql"))
 
-    pending = db.get_pending_replies()
+    pending = db.get_pending_replies(sort_by=args.sort)
     if not pending:
         logger.info("No pending reply drafts.")
         db.close()
@@ -62,6 +65,13 @@ def main():
         quality_line = _format_quality_line(reply["quality_score"], reply["quality_flags"])
         if quality_line:
             header += f"\n     [{quality_line}]"
+
+        triage_line = _format_triage_line(
+            reply.get("triage_score"),
+            reply.get("triage_reason"),
+        )
+        if triage_line:
+            header += f"\n     [{triage_line}]"
 
         logger.info(header)
         logger.info("")
@@ -115,6 +125,19 @@ def main():
 
     logger.info(f"\nDone. {posted} replies posted.")
     db.close()
+
+
+def _build_parser():
+    parser = argparse.ArgumentParser(
+        description="Interactive review of pending reply drafts."
+    )
+    parser.add_argument(
+        "--sort",
+        choices=["triage", "detected_at"],
+        default="triage",
+        help="Review queue ordering (default: triage). Use detected_at for oldest-first.",
+    )
+    return parser
 
 
 def _get_x_client(config, x_client):
@@ -201,6 +224,16 @@ def _format_quality_line(quality_score, quality_flags_json):
     result = f"Quality: {quality_score:.1f}/10"
     if flags:
         result += f" ⚠ {', '.join(flags)}"
+    return result
+
+
+def _format_triage_line(triage_score, triage_reason):
+    """Format triage score and reason for display."""
+    if triage_score is None:
+        return None
+    result = f"Triage: {float(triage_score):.1f}"
+    if triage_reason:
+        result += f" - {triage_reason}"
     return result
 
 

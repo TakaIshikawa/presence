@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
+from engagement.reply_triage import score_pending_replies, sort_by_triage
 from output.publish_errors import classify_publish_error, normalize_error_category
 
 MAX_RETRIES = 3
@@ -3119,14 +3120,23 @@ class Database:
         )
         self.conn.commit()
 
-    def get_pending_replies(self) -> list[dict]:
-        """Get all reply drafts awaiting review."""
+    def get_pending_replies(
+        self,
+        sort_by: str = "triage",
+        now: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Get all reply drafts awaiting review with computed triage fields."""
+        if sort_by not in {"triage", "detected_at"}:
+            raise ValueError("sort_by must be one of: triage, detected_at")
         cursor = self.conn.execute(
             """SELECT * FROM reply_queue
                WHERE status = 'pending'
                ORDER BY detected_at ASC"""
         )
-        return [dict(row) for row in cursor.fetchall()]
+        replies = score_pending_replies([dict(row) for row in cursor.fetchall()], now=now)
+        if sort_by == "triage":
+            return sort_by_triage(replies)
+        return replies
 
     def get_pending_reply_sla(
         self,
