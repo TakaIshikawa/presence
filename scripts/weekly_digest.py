@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
 from ingestion.claude_logs import ClaudeLogParser
+from ingestion.claude_session_summary import build_session_summaries, summaries_to_prompt_context
 from synthesis.pipeline import SynthesisPipeline
 from output.blog_writer import BlogWriter
 from knowledge.embeddings import VoyageEmbeddings, serialize_embedding, EmbeddingError
@@ -165,8 +166,12 @@ def main(argv: list[str] | None = None):
         ]
         parser.log_skipped_project_counts("weekly_digest")
         prompt_texts = [p.prompt_text for p in prompts]
+        session_summaries = build_session_summaries(prompts)
+        prompt_context = summaries_to_prompt_context(session_summaries) or prompt_texts
 
         logger.info(f"Found {len(prompts)} prompts")
+        if session_summaries:
+            logger.info(f"Built {len(session_summaries)} Claude session summaries")
 
         if not prompt_texts:
             logger.info("No prompts found, skipping digest")
@@ -203,7 +208,7 @@ def main(argv: list[str] | None = None):
         # Run pipeline
         logger.info(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
         result = pipeline.run(
-            prompts=prompt_texts,
+            prompts=prompt_context,
             commits=commit_dicts,
             content_type="blog_post",
             threshold=config.synthesis.eval_threshold,

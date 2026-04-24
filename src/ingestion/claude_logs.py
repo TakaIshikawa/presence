@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ingestion.redaction import Redactor
+from ingestion.claude_session_summary import ClaudeSessionSummary, build_session_summaries
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,18 @@ class ClaudeLogParser:
         for msg in self.parse_global_history():
             if msg.timestamp >= since:
                 yield msg
+
+    def get_session_summaries_in_range(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> list[ClaudeSessionSummary]:
+        """Get deterministic session summaries for messages in [start, end)."""
+        messages = [
+            msg for msg in self.parse_global_history()
+            if start <= msg.timestamp < end
+        ]
+        return build_session_summaries(messages)
 
     def get_messages_for_project(self, project_path: str) -> Iterator[ClaudeMessage]:
         """Get all messages for a specific project."""

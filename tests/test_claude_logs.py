@@ -470,6 +470,60 @@ class TestGetMessagesSince:
 
 
 # ---------------------------------------------------------------------------
+# get_session_summaries_in_range
+# ---------------------------------------------------------------------------
+
+class TestGetSessionSummariesInRange:
+    def test_groups_messages_inside_date_range(self, tmp_path):
+        entries = [
+            _make_global_entry("before", session_id="s0", ts=_BASE_TS - timedelta(minutes=1)),
+            _make_global_entry("first", session_id="s1", ts=_BASE_TS),
+            _make_global_entry("second", session_id="s1", ts=_BASE_TS + timedelta(minutes=5)),
+            _make_global_entry("other", session_id="s2", ts=_BASE_TS + timedelta(minutes=10)),
+            _make_global_entry("end excluded", session_id="s3", ts=_BASE_TS + timedelta(hours=1)),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path))
+        summaries = parser.get_session_summaries_in_range(
+            _BASE_TS,
+            _BASE_TS + timedelta(hours=1),
+        )
+
+        assert [summary.session_id for summary in summaries] == ["s1", "s2"]
+        assert summaries[0].prompt_count == 2
+        assert summaries[0].prompt_excerpts == ("first", "second")
+
+    def test_preserves_allowlist_filtering_and_redaction(self, tmp_path):
+        project = tmp_path / "project-a"
+        entries = [
+            _make_global_entry(
+                "Use token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+                session_id="s1",
+                project=str(project),
+                ts=_BASE_TS,
+            ),
+            _make_global_entry(
+                "unallowed secret token=ghp_abcdefghijklmnopqrstuvwxyz999999",
+                session_id="s2",
+                project=str(tmp_path / "other"),
+                ts=_BASE_TS,
+            ),
+        ]
+        _write_global_history(tmp_path / "history.jsonl", entries)
+
+        parser = ClaudeLogParser(str(tmp_path), allowed_project_paths=[str(project)])
+        summaries = parser.get_session_summaries_in_range(
+            _BASE_TS,
+            _BASE_TS + timedelta(minutes=1),
+        )
+
+        assert len(summaries) == 1
+        assert summaries[0].project_path == str(project)
+        assert summaries[0].prompt_excerpts == ("Use token=[REDACTED_SECRET]",)
+
+
+# ---------------------------------------------------------------------------
 # get_messages_for_project
 # ---------------------------------------------------------------------------
 

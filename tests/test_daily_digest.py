@@ -92,9 +92,11 @@ def _make_pipeline_result(final_score=8.0, reject_reason=None, content_format=No
 
 def _make_prompt_message():
     msg = MagicMock()
+    msg.session_id = "session-123"
     msg.timestamp = PROMPT_TS
     msg.prompt_text = "Worked on error handling"
     msg.message_uuid = "uuid-123"
+    msg.project_path = "/tmp/project"
     return msg
 
 
@@ -209,10 +211,96 @@ class TestMainPostsWhenPassesThreshold:
 
         MockPipeline.return_value.run.assert_called_once()
         assert MockPipeline.return_value.run.call_args[1]["content_type"] == "x_thread"
+        prompts_passed = MockPipeline.return_value.run.call_args[1]["prompts"]
+        assert len(prompts_passed) == 1
+        assert "Claude session session-123" in prompts_passed[0]
+        assert "Worked on error handling" in prompts_passed[0]
         mock_parse_thread.assert_called_once_with(result.final_content)
         MockXClient.return_value.post_thread.assert_called_once_with(["tweet1", "tweet2"])
         db.mark_published.assert_called_once_with(42, "https://x.com/thread/123", tweet_id="tw123")
 
+    @_daily_patches
+    def test_uses_raw_prompt_fallback_when_no_session_summaries(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockXClient, mock_parse_thread, mock_monitoring,
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = []
+        db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
+        MockPipeline.return_value.run.return_value = _make_pipeline_result(final_score=5.0)
+
+        import daily_digest
+        with patch("daily_digest.build_session_summaries", return_value=[]):
+            daily_digest.main()
+
+        prompts_passed = MockPipeline.return_value.run.call_args[1]["prompts"]
+        assert prompts_passed == ["Worked on error handling"]
+
+    @_daily_patches
+    def test_queues_x_only_when_x_daily_cap_reached(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockXClient, mock_parse_thread, mock_monitoring,
+    ):
+        config = _make_config()
+        config.publishing.daily_platform_limits = {"x": 1}
+        config.publishing.embargo_windows = []
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = []
+        db.insert_generated_content.return_value = 42
+        db.count_platform_publications_since.return_value = 1
+        db.count_platform_queue_items_between.return_value = 0
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
+        MockPipeline.return_value.run.return_value = _make_pipeline_result(final_score=8.0)
+
+        import daily_digest
+        daily_digest.main()
+
+        MockXClient.return_value.post_thread.assert_not_called()
+        db.mark_published.assert_not_called()
+        db.queue_for_publishing.assert_called_once()
+        assert db.queue_for_publishing.call_args.kwargs["platform"] == "x"
+
+    @_daily_patches
+    def test_queues_all_platforms_when_bluesky_daily_cap_reached(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockXClient, mock_parse_thread, mock_monitoring,
+    ):
+        config = _make_config()
+        config.bluesky = MagicMock()
+        config.bluesky.enabled = True
+        config.bluesky.handle = "test.bsky.social"
+        config.bluesky.app_password = "secret"
+        config.publishing.daily_platform_limits = {"x": 2, "bluesky": 1}
+        config.publishing.embargo_windows = []
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = []
+        db.insert_generated_content.return_value = 42
+        db.count_platform_publications_since.side_effect = lambda platform, since: (
+            1 if platform == "bluesky" else 0
+        )
+        db.count_platform_queue_items_between.return_value = 0
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
+        MockPipeline.return_value.run.return_value = _make_pipeline_result(final_score=8.0)
+
+        import daily_digest
+        with patch("daily_digest.BlueskyClient"):
+            daily_digest.main()
+
+        MockXClient.return_value.post_thread.assert_not_called()
+        db.mark_published.assert_not_called()
+        db.queue_for_publishing.assert_called_once()
+        assert db.queue_for_publishing.call_args.kwargs["platform"] == "all"
 
 class TestMainDoesNotPostBelowThreshold:
     @_daily_patches

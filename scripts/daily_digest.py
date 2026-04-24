@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context, update_monitoring
 from ingestion.claude_logs import ClaudeLogParser
+from ingestion.claude_session_summary import build_session_summaries, summaries_to_prompt_context
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 from output.bluesky_client import BlueskyClient
@@ -137,8 +138,12 @@ def main():
         ]
         parser.log_skipped_project_counts("daily_digest")
         prompt_texts = [p.prompt_text for p in prompts]
+        session_summaries = build_session_summaries(prompts)
+        prompt_context = summaries_to_prompt_context(session_summaries) or prompt_texts
 
         logger.info(f"Found {len(prompts)} prompts")
+        if session_summaries:
+            logger.info(f"Built {len(session_summaries)} Claude session summaries")
 
         if not prompt_texts:
             logger.info("No prompts found, skipping digest")
@@ -175,7 +180,7 @@ def main():
         # Run pipeline
         logger.info(f"Running pipeline: {len(commits)} commits, {config.synthesis.num_candidates} candidates...")
         result = pipeline.run(
-            prompts=prompt_texts,
+            prompts=prompt_context,
             commits=commit_dicts,
             content_type="x_thread",
             threshold=config.synthesis.eval_threshold,
