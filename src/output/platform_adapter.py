@@ -584,3 +584,16 @@ class LinkedInPlatformAdapter:
             if paragraph.strip()
         ]
         return "\n\n".join(paragraphs)
+
+
+SUPPORTED_ADAPTER_PLATFORMS = ("bluesky", "linkedin")
+
+
+def build_platform_adapter(platform: str) -> BlueskyPlatformAdapter | LinkedInPlatformAdapter:
+    """Build the deterministic adapter for a supported destination platform."""
+    normalized = platform.lower()
+    if normalized == "bluesky":
+        return BlueskyPlatformAdapter()
+    if normalized == "linkedin":
+        return LinkedInPlatformAdapter()
+    raise ValueError(f"Unsupported platform: {platform}")
