@@ -15,14 +15,10 @@ from .license_guard import (
     STRICT_RESTRICTED_BEHAVIOR,
     check_publication_license_guard,
 )
-from .platform_adapter import (
-    BlueskyPlatformAdapter,
-    build_bluesky_variant,
-    build_linkedin_variant,
-    count_graphemes,
-    deterministic_variant_metadata,
-    split_x_posts,
-    variant_type_for_content_type,
+from .platform_adapter import BlueskyPlatformAdapter, count_graphemes
+from .thread_preflight import (
+    split_thread_content_for_preflight,
+    validate_thread_preflight,
 )
 
 
@@ -200,7 +196,9 @@ def _persona_guard_status(summary: dict | None) -> dict:
 
 
 def _split_x_posts(content: str, content_type: str) -> list[str]:
-    return split_x_posts(content, content_type)
+    if content_type == "x_thread":
+        return split_thread_content_for_preflight(content)
+    return [content] if content else []
 
 
 def _post_counts(text: str) -> dict:
@@ -480,6 +478,11 @@ def build_publication_preview(
             content["id"],
             [post["text"] for post in posts],
         ).as_dict()
+        thread_preflight = validate_thread_preflight(
+            platform,
+            [post["text"] for post in posts],
+            content_type=content["content_type"],
+        ).as_dict()
         platforms[platform] = {
             "status": _platform_status(
                 content,
@@ -499,6 +502,7 @@ def build_publication_preview(
             "alt_text": alt_text,
             "license_guard": license_guard,
             "attribution_guard": platform_attribution_guard,
+            "thread_preflight": thread_preflight,
         }
 
     return {
@@ -732,6 +736,18 @@ def format_preview(preview: dict) -> str:
             lines.append(f"Post ID: {status['platform_post_id']}")
         if status.get("error"):
             lines.append(f"Error: {status['error']}")
+
+        thread_preflight = rendered.get("thread_preflight")
+        if thread_preflight and thread_preflight.get("checked"):
+            lines.append(
+                "Thread preflight: {status} ({post_count} posts)".format(
+                    **thread_preflight
+                )
+            )
+            for issue in thread_preflight.get("issues", []):
+                post_index = issue.get("post_index")
+                prefix = f"post {post_index}: " if post_index is not None else ""
+                lines.append(f"- {prefix}{issue['code']}: {issue['message']}")
 
         for post in rendered["posts"]:
             counts = post["counts"]

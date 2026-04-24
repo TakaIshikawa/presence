@@ -1035,6 +1035,55 @@ def test_main_processes_thread_content_type(test_db, base_time):
     mock_x_client.post.assert_not_called()
 
 
+def test_main_fails_thread_preflight_without_calling_clients(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("TWEET 1:\nFirst\nTWEET 2:\n\n", "x_thread", 7.0, 0),
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(
+        content_id,
+        base_time.isoformat(),
+        platform="all",
+    )
+
+    fake_x = FakeXClient(FakePostResult(success=True, url="unused", tweet_id="unused"))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(success=True, uri="unused"))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    queue_row = test_db.conn.execute(
+        "SELECT status, error, error_category FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    x_state = test_db.get_publication_state(content_id, "x")
+    bsky_state = test_db.get_publication_state(content_id, "bluesky")
+
+    assert queue_row["status"] == "failed"
+    assert queue_row["error_category"] == "validation"
+    assert "Thread preflight failed" in queue_row["error"]
+    assert "empty_post" in queue_row["error"]
+    assert x_state["error_category"] == "validation"
+    assert bsky_state["error_category"] == "validation"
+    assert fake_x.posts == []
+    assert fake_x.threads == []
+    assert fake_bluesky.posts == []
+    assert fake_bluesky.threads == []
+
+
 def test_main_cross_posts_to_bluesky_when_platform_all(test_db, base_time):
     """Test that main() cross-posts to Bluesky when platform='all' and Bluesky is enabled."""
     # Create content

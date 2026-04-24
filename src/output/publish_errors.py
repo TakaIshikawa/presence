@@ -11,6 +11,7 @@ PublishErrorCategory = Literal[
     "duplicate",
     "media",
     "network",
+    "validation",
     "unknown",
 ]
 
@@ -20,6 +21,7 @@ KNOWN_ERROR_CATEGORIES: tuple[PublishErrorCategory, ...] = (
     "duplicate",
     "media",
     "network",
+    "validation",
     "unknown",
 )
 

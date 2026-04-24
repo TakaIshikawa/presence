@@ -143,6 +143,8 @@ def test_preview_queue_thread_splits_and_adapts(db):
     ]
     assert preview["platforms"]["x"]["posts"][0]["total"] == 2
     assert preview["platforms"]["bluesky"]["status"]["status"] == "queued"
+    assert preview["platforms"]["x"]["thread_preflight"]["status"] == "passed"
+    assert preview["platforms"]["bluesky"]["thread_preflight"]["status"] == "passed"
 
 
 def test_preview_visual_post_includes_image_path_and_publication_status(db):
@@ -563,6 +565,31 @@ def test_preview_queue_id_includes_claim_check_summary(db):
     assert preview["claim_check"]["checked"] is True
     assert preview["claim_check"]["status"] == "supported"
     assert "Claim check: supported (2 supported, 0 unsupported)" in format_preview(preview)
+
+
+def test_preview_includes_failed_thread_preflight_status(db):
+    content_id = _insert_content(
+        db,
+        "TWEET 1:\nFirst\nTWEET 2:\n\n",
+        content_type="x_thread",
+    )
+    queue_id = db.queue_for_publishing(
+        content_id,
+        "2026-04-17T12:00:00+00:00",
+        platform="all",
+    )
+
+    preview = build_publication_preview(db, queue_id=queue_id)
+
+    x_preflight = preview["platforms"]["x"]["thread_preflight"]
+    bsky_preflight = preview["platforms"]["bluesky"]["thread_preflight"]
+    assert x_preflight["status"] == "failed"
+    assert x_preflight["issues"][0]["code"] == "empty_post"
+    assert bsky_preflight["status"] == "failed"
+
+    text = format_preview(preview)
+    assert "Thread preflight: failed (2 posts)" in text
+    assert "- post 2: empty_post: Thread post text is empty" in text
 
 
 def test_preview_includes_persona_guard_summary(db):

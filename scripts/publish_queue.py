@@ -6,6 +6,7 @@ import signal
 import sys
 import logging
 import sqlite3
+import re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -128,8 +129,15 @@ def _variant_type_for_content_type(content_type: str) -> str:
 
 def _copy_parts(content: str, content_type: str) -> list[str]:
     if content_type == "x_thread":
+        if _has_thread_markers(content):
+            return split_thread_content_for_preflight(content)
         return parse_thread_content(content)
     return [content]
+
+
+def _has_thread_markers(content: str) -> bool:
+    marker_re = re.compile(r"^\s*TWEET\s+\d+\s*:", re.IGNORECASE)
+    return any(marker_re.match(line) for line in content.splitlines())
 
 
 def _daily_platform_limits(config) -> dict[str, int]:
@@ -194,6 +202,11 @@ from output.license_guard import (
     restricted_prompt_behavior_from_config,
 )
 from output.publish_errors import classify_publish_error, normalize_error_category
+from output.thread_preflight import (
+    summarize_thread_preflight_failures,
+    split_thread_content_for_preflight,
+    validate_platform_threads,
+)
 from synthesis.alt_text_guard import validate_alt_text
 
 try:
@@ -451,6 +464,55 @@ def main(argv: list[str] | None = None) -> None:
                 x_content = x_copy["content"]
                 x_parts = _copy_parts(x_content, content_type)
 
+                platform_thread_parts = {}
+                if content_type == "x_thread":
+                    if "x" in pending_platforms:
+                        platform_thread_parts["x"] = x_parts
+                    if "bluesky" in pending_platforms:
+                        bsky_copy = db.get_content_variant_or_original(
+                            content_id,
+                            "bluesky",
+                            variant_type,
+                        )
+                        if not bsky_copy:
+                            raise ValueError(f"content {content_id} not found")
+                        if bsky_copy["source"] == "variant":
+                            platform_thread_parts["bluesky"] = _copy_parts(
+                                bsky_copy["content"],
+                                content_type,
+                            )
+                        else:
+                            cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                            platform_thread_parts["bluesky"] = [
+                                cross_poster.adapt_for_bluesky(t, content_type)
+                                for t in x_parts
+                            ]
+
+                    preflight_results = validate_platform_threads(
+                        platform_thread_parts,
+                        content_type=content_type,
+                    )
+                    preflight_error = summarize_thread_preflight_failures(
+                        preflight_results
+                    )
+                    if preflight_error:
+                        error_text = f"Thread preflight failed: {preflight_error}"
+                        for failed_platform in pending_platforms:
+                            db.upsert_publication_failure(
+                                content_id,
+                                failed_platform,
+                                error_text,
+                                max_retry_delay_minutes=max_retry_delay_minutes,
+                                error_category="validation",
+                            )
+                        db.mark_queue_failed(
+                            queue_id,
+                            error_text,
+                            error_category="validation",
+                        )
+                        logger.error(f"  {error_text}")
+                        continue
+
                 for pending_platform in pending_platforms:
                     platform_content = _content_copy_for_platform(
                         db,
@@ -553,21 +615,23 @@ def main(argv: list[str] | None = None) -> None:
                         deferred_platforms.append("bluesky")
                         logger.info("  Bluesky daily publish cap reached; deferring")
                     elif bluesky_client:
-                        bsky_copy = db.get_content_variant_or_original(
-                            content_id,
-                            "bluesky",
-                            variant_type,
-                        )
-                        if not bsky_copy:
-                            raise ValueError(f"content {content_id} not found")
-                        if bsky_copy["source"] == "variant":
-                            bsky_tweets = _copy_parts(bsky_copy["content"], content_type)
+                        if content_type == "x_thread":
+                            bsky_tweets = platform_thread_parts["bluesky"]
                         else:
-                            cross_poster = CrossPoster(bluesky_client=bluesky_client)
-                            bsky_tweets = [
-                                cross_poster.adapt_for_bluesky(t, content_type)
-                                for t in x_parts
-                            ]
+                            bsky_copy = db.get_content_variant_or_original(
+                                content_id,
+                                "bluesky",
+                                variant_type,
+                            )
+                            if not bsky_copy:
+                                raise ValueError(f"content {content_id} not found")
+                            if bsky_copy["source"] == "variant":
+                                bsky_tweets = [bsky_copy["content"]]
+                            else:
+                                cross_poster = CrossPoster(bluesky_client=bluesky_client)
+                                bsky_tweets = [
+                                    cross_poster.adapt_for_bluesky(x_content, content_type)
+                                ]
 
                         if content_type == 'x_thread':
                             bsky_result = bluesky_client.post_thread(bsky_tweets)
