@@ -57,6 +57,7 @@ class BlogWriter:
         site_path: str,
         base_url: str = "https://takaishikawa.com",
         manifest_path: str | None = None,
+        default_social_image_path: str | None = None,
     ) -> None:
         self.site_path = Path(site_path).expanduser()
         self.blog_path = self.site_path / "blog"
@@ -66,7 +67,8 @@ class BlogWriter:
             self.manifest_path = path if path.is_absolute() else self.site_path / path
         else:
             self.manifest_path = self.drafts_path / "manifest.json"
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
+        self.default_social_image_path = default_social_image_path
 
     def _slugify(self, title: str) -> str:
         """Convert title to URL-friendly slug."""
@@ -178,6 +180,8 @@ class BlogWriter:
         *,
         title: str,
         summary: str,
+        canonical_url: str,
+        og_image: str | None = None,
         source_commits: list[str] | None = None,
         source_sessions: list[str] | None = None,
         generated_content_id: int | None = None,
@@ -188,6 +192,11 @@ class BlogWriter:
         fields = [
             ("title", title),
             ("summary", summary),
+            ("og_title", title),
+            ("og_description", summary),
+            ("og_image", og_image),
+            ("twitter_card", "summary_large_image" if og_image else "summary"),
+            ("canonical_url", canonical_url),
             ("source_commits", source_commits or []),
             ("source_sessions", source_sessions or []),
             ("generated_content_id", generated_content_id),
@@ -205,6 +214,28 @@ class BlogWriter:
             return path.relative_to(self.site_path).as_posix()
         except ValueError:
             return str(path)
+
+    def _public_url_for_path(self, path: str | None) -> str | None:
+        """Convert site-local image paths into public URLs for social metadata."""
+        if not path:
+            return None
+
+        if re.match(r"^https?://", path):
+            return path
+
+        image_path = Path(path).expanduser()
+        if image_path.is_absolute():
+            try:
+                relative_path = image_path.relative_to(self.site_path)
+                return f"{self.base_url}/{relative_path.as_posix().lstrip('/')}"
+            except ValueError:
+                return f"{self.base_url}/{path.lstrip('/')}"
+
+        return f"{self.base_url}/{path.lstrip('/')}"
+
+    def _social_image_url(self, image_path: str | None) -> str | None:
+        """Prefer a generated image path, falling back to the configured default."""
+        return self._public_url_for_path(image_path or self.default_social_image_path)
 
     def _json_safe(self, value: Any) -> Any:
         """Normalize tuples and other simple objects into JSON-compatible data."""
@@ -273,6 +304,7 @@ class BlogWriter:
         tags: list[str] | None = None,
         topics: list[Any] | None = None,
         summary: str | None = None,
+        image_path: str | None = None,
     ) -> BlogResult:
         """Parse generated content and write blog post."""
         title, body = self._extract_title_and_body(content)
@@ -288,11 +320,15 @@ class BlogWriter:
         description = summary or self._extract_description(body)
         date_str = datetime.now().strftime("%B %Y")
         post_tags = self._derive_tags(body, tags=tags, topics=topics)
+        canonical_url = f"{self.base_url}/blog/{slug}.html"
+        og_image = self._social_image_url(image_path)
 
         # Generate full HTML
         html = self._frontmatter(
             title=title,
             summary=description,
+            canonical_url=canonical_url,
+            og_image=og_image,
             source_commits=source_commits,
             source_sessions=source_sessions,
             generated_content_id=generated_content_id,
@@ -314,7 +350,7 @@ class BlogWriter:
         return BlogResult(
             success=True,
             file_path=str(file_path),
-            url=f"{self.base_url}/blog/{slug}.html"
+            url=canonical_url
         )
 
     def write_draft(

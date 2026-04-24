@@ -64,6 +64,7 @@ newsletter:
 
 blog:
   manifest_path: "drafts/manifest.json"
+  default_social_image_path: "/images/social-card.png"
 
 # Historical theme injection
 historical:

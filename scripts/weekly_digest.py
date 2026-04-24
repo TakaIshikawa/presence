@@ -87,7 +87,12 @@ def main():
             max_estimated_cost_per_run=config.synthesis.max_estimated_cost_per_run,
             max_daily_estimated_cost=config.synthesis.max_daily_estimated_cost,
         )
-        blog_writer = BlogWriter(config.paths.static_site)
+        blog_writer = BlogWriter(
+            config.paths.static_site,
+            default_social_image_path=getattr(
+                config.blog, "default_social_image_path", None
+            ),
+        )
 
         # Get this week's date range (last 7 days, UTC)
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)

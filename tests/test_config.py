@@ -380,11 +380,13 @@ class TestDataclassParsing:
         data = _minimal_config_dict(
             blog={
                 "manifest_path": "data/blog-drafts.json",
+                "default_social_image_path": "/images/social-card.png",
             }
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert isinstance(cfg.blog, BlogConfig)
         assert cfg.blog.manifest_path == "data/blog-drafts.json"
+        assert cfg.blog.default_social_image_path == "/images/social-card.png"
 
     def test_privacy_config_defaults_redaction_patterns(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

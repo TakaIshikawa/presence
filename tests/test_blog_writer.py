@@ -175,7 +175,7 @@ class TestWritePost:
 
     def test_html_contains_structured_frontmatter(self, tmp_path):
         site = _setup_site(tmp_path)
-        writer = BlogWriter(str(site))
+        writer = BlogWriter(str(site), default_social_image_path="/images/social-card.png")
 
         content = "TITLE: My Test Post\n\nTesting the publishing workflow."
         writer.write_post(
@@ -192,11 +192,46 @@ class TestWritePost:
         assert html.startswith("---\n")
         assert 'title: "My Test Post"' in html
         assert 'summary: "Custom summary."' in html
+        assert 'og_title: "My Test Post"' in html
+        assert 'og_description: "Custom summary."' in html
+        assert 'og_image: "https://takaishikawa.com/images/social-card.png"' in html
+        assert 'twitter_card: "summary_large_image"' in html
+        assert 'canonical_url: "https://takaishikawa.com/blog/my-test-post.html"' in html
         assert 'source_commits: ["abc123"]' in html
         assert 'source_sessions: ["session-1"]' in html
         assert "generated_content_id: 42" in html
         assert 'canonical_social_post_url: "https://x.com/taka/status/123"' in html
         assert 'tags: ["testing"]' in html
+
+    def test_frontmatter_prefers_generated_image_for_og_image(self, tmp_path):
+        site = _setup_site(tmp_path)
+        writer = BlogWriter(
+            str(site),
+            base_url="https://example.com/",
+            default_social_image_path="/images/default-card.png",
+        )
+
+        content = "TITLE: Visual Post\n\nPreview copy."
+        result = writer.write_post(content, image_path="generated_images/visual.png")
+
+        html = (site / "blog" / "visual-post.html").read_text()
+        assert result.url == "https://example.com/blog/visual-post.html"
+        assert 'canonical_url: "https://example.com/blog/visual-post.html"' in html
+        assert 'og_image: "https://example.com/generated_images/visual.png"' in html
+        assert 'twitter_card: "summary_large_image"' in html
+        assert "default-card.png" not in html
+
+    def test_frontmatter_uses_summary_card_without_image(self, tmp_path):
+        site = _setup_site(tmp_path)
+        writer = BlogWriter(str(site))
+
+        content = "TITLE: Text Only\n\nPreview copy."
+        writer.write_post(content)
+
+        html = (site / "blog" / "text-only.html").read_text()
+        assert "og_image: null" in html
+        assert 'twitter_card: "summary"' in html
+        assert 'canonical_url: "https://takaishikawa.com/blog/text-only.html"' in html
 
     def test_derives_tags_from_topic_keywords(self, tmp_path):
         site = _setup_site(tmp_path)

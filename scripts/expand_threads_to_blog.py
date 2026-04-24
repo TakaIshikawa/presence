@@ -169,7 +169,12 @@ def run(args: argparse.Namespace) -> list[ExpansionOutcome]:
             model=config.synthesis.model,
             timeout=config.timeouts.anthropic_seconds,
         )
-        blog_writer = BlogWriter(config.paths.static_site)
+        blog_writer = BlogWriter(
+            config.paths.static_site,
+            default_social_image_path=getattr(
+                config.blog, "default_social_image_path", None
+            ),
+        )
         return expand_candidates(
             db,
             candidates,

@@ -148,6 +148,7 @@ class NewsletterConfig:
 @dataclass
 class BlogConfig:
     manifest_path: Optional[str] = None
+    default_social_image_path: Optional[str] = None
 
 
 @dataclass
@@ -670,6 +671,11 @@ def load_config(config_path: Optional[str] = None) -> Config:
     blog_config = BlogConfig(
         manifest_path=_resolve_env_var(blog_data.get("manifest_path"))
         if blog_data.get("manifest_path") is not None
+        else None,
+        default_social_image_path=_resolve_env_var(
+            blog_data.get("default_social_image_path")
+        )
+        if blog_data.get("default_social_image_path") is not None
         else None,
     )
 
