@@ -2,8 +2,10 @@
 
 from email.message import Message
 from unittest.mock import patch
+from pathlib import Path
 
 from knowledge.rss import discover_feed_candidates
+from knowledge.link_metadata import parse_link_metadata
 
 
 class _MockPageResponse:
@@ -49,3 +51,21 @@ def test_discovers_ranked_feed_candidates_from_alternate_links(mock_urlopen):
     assert candidates[0].content_type == "application/atom+xml"
     assert candidates[0].title == "Atom"
     assert mock_urlopen.call_args.kwargs["timeout"] == 3
+
+
+def test_parse_link_metadata_normalizes_canonical_and_image_urls():
+    fixture = Path(__file__).parent / "fixtures" / "article_metadata.html"
+
+    metadata = parse_link_metadata(fixture.read_text(), "https://example.com/posts/source")
+
+    assert metadata.canonical_url == "https://example.com/canonical/article?utm_source=rss"
+    assert metadata.title == "Canonical Article Title"
+    assert metadata.description == "A compact summary of the article."
+    assert metadata.site_name == "Example Journal"
+    assert metadata.image == "https://example.com/images/article-card.png"
+
+
+def test_parse_link_metadata_handles_missing_metadata():
+    metadata = parse_link_metadata("<html><head><title>Only Title</title></head>", "https://example.com/a")
+
+    assert metadata.to_dict() == {"title": "Only Title"}

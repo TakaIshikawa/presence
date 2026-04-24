@@ -135,6 +135,10 @@ def cmd_trace(db, content_id: int, output_json: bool):
             print(f"       Content: {content_preview}")
         if item['source_url']:
             print(f"       URL: {item['source_url']}")
+        if item.get("canonical_url") and item["canonical_url"] != item.get("source_url"):
+            print(f"       Canonical: {item['canonical_url']}")
+        if item.get("link_title"):
+            print(f"       Title: {item['link_title']}")
         print()
 
     if output_json:

@@ -74,13 +74,14 @@ def format_text_report(payload: dict) -> str:
             lines.append(f"  {_shorten(row['content'], 120)}")
 
         status = "MISSING" if row["missing_traceable_link"] else "ok"
-        url = row["source_url"] or "-"
+        url = row.get("canonical_url") or row["source_url"] or "-"
+        title = row.get("link_title") or "-"
         license_value = row["license"] or "-"
         author = row["author"] or "-"
         lines.append(
             f"  - link #{row['link_id']} knowledge #{row['knowledge_id']} "
             f"[{status}] source={row['source_type']} author={author} "
-            f"url={url} license={license_value} "
+            f"title={_shorten(title, 60)} url={url} license={license_value} "
             f"attribution_required={_bool_text(row['attribution_required'])} "
             f"relevance={row['relevance_score']}"
         )

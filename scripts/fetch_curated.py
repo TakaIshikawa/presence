@@ -23,6 +23,7 @@ from knowledge.ingest import (
 )
 from knowledge.curated_accounts import get_active_x_accounts
 from knowledge.rss import discover_feed_candidates, fetch_feed
+from knowledge.link_metadata import fetch_link_metadata
 from output.x_client import XClient
 from output.x_api_guard import (
     get_x_api_block_reason,
@@ -35,6 +36,8 @@ DEFAULT_X_TWEETS_PER_ACCOUNT = 5
 DEFAULT_RSS_ENTRIES_PER_SOURCE = 5
 DEFAULT_FEED_AUTODISCOVERY_ENABLED = True
 DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS = 20.0
+DEFAULT_LINK_METADATA_ENRICHMENT_ENABLED = True
+DEFAULT_LINK_METADATA_TIMEOUT_SECONDS = 10.0
 DEFAULT_SOURCE_FAILURE_THRESHOLD = 3
 DEFAULT_SOURCE_COOLDOWN_HOURS = 24
 
@@ -184,6 +187,18 @@ def _cache_discovered_feed_url(db, source_type: str, identifier: str, feed_url: 
         conn.commit()
 
 
+def _entry_link_metadata(url: str, enabled: bool, timeout: float) -> dict:
+    if not enabled:
+        return {}
+    logger = logging.getLogger(__name__)
+    try:
+        metadata = fetch_link_metadata(url, timeout=timeout).to_dict()
+    except Exception as exc:
+        logger.warning("Skipping link metadata enrichment for %s: %s", url, exc)
+        return {}
+    return {"link_metadata": metadata} if metadata else {}
+
+
 def _active_feed_sources(config, db) -> list:
     """Return active blog/newsletter sources with optional feed URLs."""
     sources = []
@@ -240,6 +255,8 @@ def fetch_curated_feed_source(
     autodiscovery_enabled: bool = False,
     autodiscovery_timeout: float = DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS,
     dry_run: bool = False,
+    link_metadata_enrichment_enabled: bool = False,
+    link_metadata_timeout: float = DEFAULT_LINK_METADATA_TIMEOUT_SECONDS,
 ) -> int:
     """Fetch a curated RSS/Atom source and ingest new article/newsletter entries."""
     logger = logging.getLogger(__name__)
@@ -357,6 +374,11 @@ def fetch_curated_feed_source(
                 author=author,
                 license_type=license_type,
                 published_at=entry.published_at,
+                metadata=_entry_link_metadata(
+                    entry.link,
+                    link_metadata_enrichment_enabled,
+                    link_metadata_timeout,
+                ),
             )
             ingested += 1
     except Exception as exc:
@@ -575,6 +597,17 @@ def main(argv: list[str] | None = None):
                         config.curated_sources,
                         "feed_autodiscovery_timeout_seconds",
                         DEFAULT_FEED_AUTODISCOVERY_TIMEOUT_SECONDS,
+                    ),
+                    dry_run=dry_run,
+                    link_metadata_enrichment_enabled=getattr(
+                        config.curated_sources,
+                        "link_metadata_enrichment_enabled",
+                        DEFAULT_LINK_METADATA_ENRICHMENT_ENABLED,
+                    ),
+                    link_metadata_timeout=getattr(
+                        config.curated_sources,
+                        "link_metadata_timeout_seconds",
+                        DEFAULT_LINK_METADATA_TIMEOUT_SECONDS,
                     ),
                     dry_run=dry_run,
                 )

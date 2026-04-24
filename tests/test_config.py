@@ -249,6 +249,8 @@ class TestDataclassParsing:
                 "rss_entries_per_source": 3,
                 "feed_autodiscovery_enabled": False,
                 "feed_autodiscovery_timeout_seconds": 7.5,
+                "link_metadata_enrichment_enabled": False,
+                "link_metadata_timeout_seconds": 2.5,
                 "x_accounts": [
                     {"username": "acct1", "name": "Account 1", "license": "open"}
                 ],
@@ -275,6 +277,8 @@ class TestDataclassParsing:
         assert cfg.curated_sources.rss_entries_per_source == 3
         assert cfg.curated_sources.feed_autodiscovery_enabled is False
         assert cfg.curated_sources.feed_autodiscovery_timeout_seconds == 7.5
+        assert cfg.curated_sources.link_metadata_enrichment_enabled is False
+        assert cfg.curated_sources.link_metadata_timeout_seconds == 2.5
         assert cfg.curated_sources.source_failure_threshold == 3
         assert cfg.curated_sources.source_cooldown_hours == 24
         assert cfg.curated_sources.freshness_half_life_days == 30.0
@@ -325,6 +329,14 @@ class TestDataclassParsing:
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.curated_sources.freshness_half_life_days == 14.0
+
+    def test_curated_sources_link_metadata_defaults_enabled(self, tmp_path):
+        data = _minimal_config_dict(curated_sources={"x_accounts": [], "blogs": []})
+
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        assert cfg.curated_sources.link_metadata_enrichment_enabled is True
+        assert cfg.curated_sources.link_metadata_timeout_seconds == 10.0
 
     def test_image_gen_config(self, tmp_path):
         data = _minimal_config_dict(

@@ -383,6 +383,29 @@ class TestIngestCuratedArticle:
         assert item.source_id == "https://example.com/article"
         assert item.source_url == "https://example.com/article"
 
+    def test_stores_article_link_metadata(self, store, extractor_with_client):
+        ext, client = extractor_with_client
+        client.messages.create.return_value = _make_mock_response("insight")
+
+        ingest_curated_article(
+            store=store,
+            extractor=ext,
+            url="https://example.com/rss-link",
+            content="Article content here",
+            title="Title",
+            author="author",
+            metadata={
+                "link_metadata": {
+                    "canonical_url": "https://example.com/canonical",
+                    "title": "Canonical Title",
+                }
+            },
+        )
+
+        item = store.get_by_source("curated_article", "https://example.com/rss-link")
+        assert item.metadata["link_metadata"]["canonical_url"] == "https://example.com/canonical"
+        assert item.metadata["link_metadata"]["title"] == "Canonical Title"
+
     def test_deduplication_by_url(self, store, extractor_with_client):
         ext, client = extractor_with_client
         client.messages.create.return_value = _make_mock_response("insight")

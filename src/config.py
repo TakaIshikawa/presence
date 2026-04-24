@@ -130,6 +130,8 @@ class CuratedSourcesConfig:
     rss_entries_per_source: int = 5
     feed_autodiscovery_enabled: bool = True
     feed_autodiscovery_timeout_seconds: float = 20.0
+    link_metadata_enrichment_enabled: bool = True
+    link_metadata_timeout_seconds: float = 10.0
     source_failure_threshold: int = 3
     source_cooldown_hours: int = 24
     freshness_half_life_days: Optional[float] = 30.0
@@ -447,6 +449,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
             feed_autodiscovery_enabled=curated_sources_data.get("feed_autodiscovery_enabled", True),
             feed_autodiscovery_timeout_seconds=curated_sources_data.get(
                 "feed_autodiscovery_timeout_seconds", 20.0
+            ),
+            link_metadata_enrichment_enabled=curated_sources_data.get(
+                "link_metadata_enrichment_enabled", True
+            ),
+            link_metadata_timeout_seconds=curated_sources_data.get(
+                "link_metadata_timeout_seconds", 10.0
             ),
             source_failure_threshold=curated_sources_data.get("source_failure_threshold", 3),
             source_cooldown_hours=curated_sources_data.get("source_cooldown_hours", 24),

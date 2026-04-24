@@ -177,6 +177,121 @@ class TestFetchCuratedFeeds:
         assert mock_ingest.call_args.kwargs["title"] == "Building reliable agent loops"
         assert mock_ingest.call_args.kwargs["author"] == "Example Blog"
         assert mock_ingest.call_args.kwargs["license_type"] == "open"
+        assert mock_ingest.call_args.kwargs["metadata"] == {}
+
+    @patch("fetch_curated.ingest_curated_article")
+    @patch("fetch_curated.fetch_link_metadata")
+    @patch("fetch_curated.fetch_feed")
+    def test_feed_entry_metadata_enrichment_when_enabled(self, mock_fetch, mock_metadata, mock_ingest):
+        from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedFetchResult
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=1))
+        mock_metadata.return_value.to_dict.return_value = {
+            "canonical_url": "https://example.com/canonical-agent-loops",
+            "title": "Canonical Agent Loops",
+            "description": "Metadata summary",
+            "site_name": "Example",
+            "image": "https://example.com/card.png",
+        }
+        store = MagicMock()
+        store.exists.return_value = False
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example Blog",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+        )
+
+        count = fetch_curated_feed_source(
+            store,
+            MagicMock(),
+            source,
+            limit=1,
+            link_metadata_enrichment_enabled=True,
+            link_metadata_timeout=2.5,
+        )
+
+        assert count == 1
+        mock_metadata.assert_called_once_with("https://example.com/agent-loops", timeout=2.5)
+        assert mock_ingest.call_args.kwargs["metadata"] == {
+            "link_metadata": {
+                "canonical_url": "https://example.com/canonical-agent-loops",
+                "title": "Canonical Agent Loops",
+                "description": "Metadata summary",
+                "site_name": "Example",
+                "image": "https://example.com/card.png",
+            }
+        }
+
+    @patch("fetch_curated.ingest_curated_article")
+    @patch("fetch_curated.fetch_link_metadata")
+    @patch("fetch_curated.fetch_feed")
+    def test_metadata_enrichment_failure_does_not_block_ingest(
+        self, mock_fetch, mock_metadata, mock_ingest
+    ):
+        from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedFetchResult
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=1))
+        mock_metadata.side_effect = RuntimeError("metadata fetch failed")
+        store = MagicMock()
+        store.exists.return_value = False
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example Blog",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+        )
+
+        count = fetch_curated_feed_source(
+            store,
+            MagicMock(),
+            source,
+            limit=1,
+            link_metadata_enrichment_enabled=True,
+        )
+
+        assert count == 1
+        mock_ingest.assert_called_once()
+        assert mock_ingest.call_args.kwargs["metadata"] == {}
+
+    @patch("fetch_curated.ingest_curated_article")
+    @patch("fetch_curated.fetch_link_metadata")
+    @patch("fetch_curated.fetch_feed")
+    def test_metadata_enrichment_disabled_does_not_fetch_metadata(
+        self, mock_fetch, mock_metadata, mock_ingest
+    ):
+        from fetch_curated import fetch_curated_feed_source
+        from knowledge.rss import FeedFetchResult
+
+        fixture = Path(__file__).parent / "fixtures" / "curated_feed.xml"
+        mock_fetch.return_value = FeedFetchResult(parse_feed(fixture.read_text(), limit=1))
+        store = MagicMock()
+        store.exists.return_value = False
+        source = SimpleNamespace(
+            source_type="blog",
+            identifier="example.com",
+            name="Example Blog",
+            license="open",
+            feed_url="https://example.com/feed.xml",
+        )
+
+        count = fetch_curated_feed_source(
+            store,
+            MagicMock(),
+            source,
+            limit=1,
+            link_metadata_enrichment_enabled=False,
+        )
+
+        assert count == 1
+        mock_metadata.assert_not_called()
+        assert mock_ingest.call_args.kwargs["metadata"] == {}
 
     @patch("fetch_curated.ingest_curated_article")
     @patch("fetch_curated.fetch_feed")

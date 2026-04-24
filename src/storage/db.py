@@ -250,6 +250,8 @@ class Database:
                 self.conn.execute("ALTER TABLE knowledge ADD COLUMN published_at TEXT")
             if k_cols and "ingested_at" not in k_cols:
                 self.conn.execute("ALTER TABLE knowledge ADD COLUMN ingested_at TEXT")
+            if k_cols and "metadata" not in k_cols:
+                self.conn.execute("ALTER TABLE knowledge ADD COLUMN metadata JSON")
             # Migrate reply_queue for cultivate enrichment
             rq_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(reply_queue)")}
             if rq_cols and "relationship_context" not in rq_cols:
@@ -6904,9 +6906,16 @@ class Database:
 
         Returns list of dicts with knowledge details and relevance scores.
         """
+        metadata_select = (
+            "k.metadata"
+            if self._has_table_column("knowledge", "metadata")
+            else "NULL AS metadata"
+        )
         cursor = self.conn.execute(
-            """SELECT k.id, k.source_type, k.source_id, k.source_url,
+            f"""SELECT k.id, k.source_type, k.source_id, k.source_url,
                       k.author, k.content, k.insight, k.attribution_required,
+                      k.license,
+                      {metadata_select},
                       k.license,
                       ckl.relevance_score, ckl.created_at AS linked_at
                FROM content_knowledge_links ckl
@@ -6915,7 +6924,10 @@ class Database:
                ORDER BY ckl.relevance_score DESC""",
             (content_id,)
         )
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+        for row in rows:
+            self._attach_knowledge_link_metadata(row)
+        return rows
 
     def get_planned_topic_for_content(self, content_id: int) -> dict | None:
         """Return planned topic and campaign metadata for generated content."""
@@ -6946,8 +6958,13 @@ class Database:
         one of the local "own_*" source types. A link is missing a traceable
         citation when external knowledge has no source_url.
         """
+        metadata_select = (
+            "k.metadata"
+            if self._has_table_column("knowledge", "metadata")
+            else "NULL AS metadata"
+        )
         cursor = self.conn.execute(
-            """SELECT gc.id AS content_id,
+            f"""SELECT gc.id AS content_id,
                       gc.content_type,
                       gc.content,
                       gc.created_at AS generated_at,
@@ -6959,6 +6976,7 @@ class Database:
                       k.source_id,
                       k.author,
                       k.source_url,
+                      {metadata_select},
                       k.license,
                       k.attribution_required,
                       CASE
@@ -6978,6 +6996,8 @@ class Database:
             (f'-{days} days',),
         )
         rows = [dict(row) for row in cursor.fetchall()]
+        for row in rows:
+            self._attach_knowledge_link_metadata(row)
         if only_missing:
             rows = [row for row in rows if row["missing_traceable_link"]]
         return rows
@@ -6998,6 +7018,33 @@ class Database:
             "missing_traceable_link_count": len(missing_rows),
             "content_with_missing_traceable_links": len(missing_content_ids),
         }
+
+    @staticmethod
+    def _attach_knowledge_link_metadata(row: dict) -> None:
+        metadata = row.get("metadata")
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        link_metadata = metadata.get("link_metadata")
+        if not isinstance(link_metadata, dict):
+            link_metadata = {}
+        canonical_url = str(link_metadata.get("canonical_url") or "").strip()
+        title = str(link_metadata.get("title") or "").strip()
+        traceable_url = canonical_url or row.get("source_url") or ""
+        row["metadata"] = metadata
+        row["link_title"] = title
+        row["canonical_url"] = canonical_url
+        row["display_url"] = traceable_url or row.get("source_id") or ""
+        if row.get("is_external") and traceable_url:
+            row["missing_traceable_link"] = 0
+
+    def _has_table_column(self, table: str, column: str) -> bool:
+        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return column in {row[1] for row in rows}
 
     def get_unused_knowledge(self, days: int = 30) -> list[dict]:
         """Get knowledge items ingested but never used in generation.

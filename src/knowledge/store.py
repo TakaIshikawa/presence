@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import json
 import sqlite3
 from typing import Optional, Any
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ class KnowledgeItem:
     published_at: Optional[datetime | str] = None
     ingested_at: Optional[datetime | str] = None
     license: str = "attribution_required"
+    metadata: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +58,7 @@ class KnowledgeItem:
             "attribution_required": self.attribution_required,
             "license": self.license,
             "approved": self.approved,
+            "metadata": self.metadata or {},
         }
 
 
@@ -245,6 +248,18 @@ class KnowledgeStore:
         return KnowledgeStore._row_value(row, "created_at")
 
     @staticmethod
+    def _parse_metadata(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
     def _freshness_score(
         timestamp: Any,
         half_life_days: Optional[float],
@@ -319,6 +334,9 @@ class KnowledgeStore:
         if self._has_knowledge_column("ingested_at"):
             columns.append("ingested_at")
             values.append(item.ingested_at or datetime.now(timezone.utc).isoformat())
+        if self._has_knowledge_column("metadata"):
+            columns.append("metadata")
+            values.append(json.dumps(item.metadata or {}, sort_keys=True))
 
         update_columns = [
             "content",
@@ -332,6 +350,8 @@ class KnowledgeStore:
             update_columns.append("published_at")
         if "ingested_at" in columns:
             update_columns.append("ingested_at")
+        if "metadata" in columns:
+            update_columns.append("metadata")
 
         placeholders = ", ".join("?" for _ in columns)
         update_clause = ",\n               ".join(
@@ -414,6 +434,7 @@ class KnowledgeStore:
                     published_at=self._row_value(row, "published_at"),
                     ingested_at=self._row_value(row, "ingested_at"),
                     license=self._row_license(row),
+                    metadata=self._parse_metadata(self._row_value(row, "metadata")),
                 )
                 source_timestamp = self._source_timestamp(row)
                 freshness_score = self._freshness_score(
@@ -470,6 +491,7 @@ class KnowledgeStore:
             published_at=self._row_value(row, "published_at"),
             ingested_at=self._row_value(row, "ingested_at"),
             license=self._row_license(row),
+            metadata=self._parse_metadata(self._row_value(row, "metadata")),
         )
 
     def exists(self, source_type: str, source_id: str) -> bool:
@@ -510,6 +532,7 @@ class KnowledgeStore:
                 published_at=self._row_value(row, "published_at"),
                 ingested_at=self._row_value(row, "ingested_at"),
                 license=self._row_license(row),
+                metadata=self._parse_metadata(self._row_value(row, "metadata")),
             ))
         return items
 
@@ -552,6 +575,7 @@ class KnowledgeStore:
                 published_at=self._row_value(row, "published_at"),
                 ingested_at=self._row_value(row, "ingested_at"),
                 license=self._row_license(row),
+                metadata=self._parse_metadata(self._row_value(row, "metadata")),
             ))
         if not prompt_safe:
             return items

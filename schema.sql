@@ -294,6 +294,7 @@ CREATE TABLE IF NOT EXISTS knowledge (
     approved INTEGER DEFAULT 0,
     published_at TEXT,        -- original source publication timestamp when known
     ingested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    metadata JSON,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source_type, source_id)
 );

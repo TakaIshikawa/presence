@@ -170,6 +170,7 @@ def ingest_curated_article(
     author: str,
     license_type: str = "attribution_required",
     published_at: str | None = None,
+    metadata: dict | None = None,
 ) -> Optional[int]:
     """Ingest a curated article/blog post into knowledge base."""
     if store.exists("curated_article", url):
@@ -194,6 +195,7 @@ def ingest_curated_article(
         created_at=None,
         published_at=published_at,
         license=license_type,
+        metadata=metadata or {},
     )
     return store.add_item(item)
 
@@ -207,6 +209,7 @@ def ingest_curated_newsletter(
     author: str,
     license_type: str = "attribution_required",
     published_at: str | None = None,
+    metadata: dict | None = None,
 ) -> Optional[int]:
     """Ingest a curated newsletter issue into knowledge base."""
     if store.exists("curated_newsletter", url):
@@ -231,5 +234,6 @@ def ingest_curated_newsletter(
         created_at=None,
         published_at=published_at,
         license=license_type,
+        metadata=metadata or {},
     )
     return store.add_item(item)
