@@ -824,3 +824,49 @@ class TestPollNewActivity:
 
         assert result == [activity]
         db.upsert_github_activity.assert_not_called()
+
+
+def test_recent_github_issues_helper_filters_repo_and_label(db):
+    db.upsert_github_activity(
+        repo_name="taka/presence",
+        activity_type="issue",
+        number=1,
+        title="Bug",
+        state="open",
+        author="taka",
+        url="https://github.com/taka/presence/issues/1",
+        updated_at="2026-04-22T12:00:00+00:00",
+        labels=["bug", "customer"],
+    )
+    db.upsert_github_activity(
+        repo_name="taka/presence",
+        activity_type="issue",
+        number=2,
+        title="Docs",
+        state="open",
+        author="taka",
+        url="https://github.com/taka/presence/issues/2",
+        updated_at="2026-04-22T13:00:00+00:00",
+        labels=["docs"],
+    )
+    db.upsert_github_activity(
+        repo_name="taka/other",
+        activity_type="issue",
+        number=3,
+        title="Other",
+        state="open",
+        author="taka",
+        url="https://github.com/taka/other/issues/3",
+        updated_at="2026-04-22T14:00:00+00:00",
+        labels=["bug"],
+    )
+
+    issues = db.get_recent_github_issues(
+        days=7,
+        repo_name="taka/presence",
+        label="bug",
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+
+    assert [issue["number"] for issue in issues] == [1]
+    assert issues[0]["activity_id"] == "taka/presence#1:issue"

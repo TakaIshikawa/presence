@@ -1283,6 +1283,48 @@ class Database:
         )
         return [self._github_activity_from_row(row) for row in cursor.fetchall()]
 
+    def get_recent_github_issues(
+        self,
+        days: int = 7,
+        repo_name: str | None = None,
+        label: str | None = None,
+        limit: int | None = None,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return recently updated GitHub issue activity, newest first."""
+        if days <= 0 or (limit is not None and limit <= 0):
+            return []
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+        params: list[object] = [cutoff]
+        repo_filter = ""
+        if repo_name:
+            repo_filter = " AND repo_name = ?"
+            params.append(repo_name)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE updated_at >= ?
+                  AND activity_type = 'issue'{repo_filter}
+                ORDER BY updated_at DESC, id DESC{limit_clause}""",
+            tuple(params),
+        )
+        rows = [self._github_activity_from_row(row) for row in cursor.fetchall()]
+        if label:
+            normalized_label = str(label).strip().lower()
+            rows = [
+                row
+                for row in rows
+                if any(
+                    str(item).strip().lower() == normalized_label
+                    for item in row.get("labels") or []
+                )
+            ]
+        return rows
+
     def get_recent_closed_github_issues(
         self,
         days: int = 7,
@@ -1313,7 +1355,7 @@ class Database:
             tuple(params),
         )
 
-        rows: list[dict] = []
+        rows = []
         for row in cursor.fetchall():
             item = self._github_activity_from_row(row)
             metadata = item.get("metadata") or {}
