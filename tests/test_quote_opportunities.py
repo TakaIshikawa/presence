@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from engagement.quote_opportunities import QuoteOpportunityRecommender
+from engagement.quote_safety import QuoteSafetyReviewer
 from quote_opportunities import format_json_output, format_table_output, main, write_artifact
 
 
@@ -28,11 +29,12 @@ def _add_knowledge(
     published_at: str = "2026-04-23T09:00:00+00:00",
     source_type: str = "curated_x",
     approved: int = 1,
+    license_value: str = "attribution_required",
 ) -> int:
     cursor = db.conn.execute(
         """INSERT INTO knowledge
-           (source_type, source_id, source_url, author, content, insight, approved, published_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           (source_type, source_id, source_url, author, content, insight, approved, published_at, license)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             source_type,
             source_id,
@@ -42,6 +44,7 @@ def _add_knowledge(
             content,
             approved,
             published_at,
+            license_value,
         ),
     )
     db.conn.commit()
@@ -296,10 +299,31 @@ def test_cli_formatters_emit_json_and_table(db):
     payload = json.loads(format_json_output(opportunities, [123]))
     assert payload["enqueued_ids"] == [123]
     assert payload["opportunities"][0]["knowledge_id"] == opportunities[0].knowledge_id
+    assert "safety" not in payload["opportunities"][0]
 
     table = format_table_output(opportunities, [123])
     assert "Score" in table
     assert "Enqueued proactive quote actions: 123" in table
+    assert "safety:" not in table
+
+
+def test_cli_formatters_include_safety_only_when_requested(db):
+    ids = seed_quote_data(db)
+    opportunities = QuoteOpportunityRecommender(db).recommend(
+        days=7,
+        limit=1,
+        campaign_id=ids["campaign_id"],
+        min_score=0.0,
+        now=NOW,
+    )
+    reviews = QuoteSafetyReviewer(db).review_many(opportunities)
+
+    payload = json.loads(format_json_output(opportunities, safety_reviews=reviews))
+    assert payload["opportunities"][0]["safety"]["score"] == 1.0
+    assert payload["opportunities"][0]["safety"]["blocking_flags"] == []
+
+    table = format_table_output(opportunities, safety_reviews=reviews)
+    assert "safety: 1.00 flags=none" in table
 
 
 def test_write_artifact_writes_markdown_review_payload(db, tmp_path):
@@ -394,3 +418,43 @@ def test_main_json_output(db, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert len(payload["opportunities"]) == 1
     assert payload["opportunities"][0]["knowledge_id"] == ids["fresh_id"]
+
+
+def test_main_safety_report_filters_without_mutating_database(db, capsys):
+    ids = seed_quote_data(db)
+    unsafe_id = _add_knowledge(
+        db,
+        source_id="tweet-unsafe",
+        source_url="https://x.com/high/status/tweet-unsafe",
+        author="high",
+        content="AI agents need testing harnesses, but this garbage take is a scam.",
+        license_value="restricted",
+    )
+    before_actions = db.conn.execute("SELECT COUNT(*) FROM proactive_actions").fetchone()[0]
+
+    @contextmanager
+    def fake_script_context():
+        yield None, db
+
+    with patch("quote_opportunities.script_context", fake_script_context):
+        exit_code = main(
+            [
+                "--days",
+                "7",
+                "--campaign-id",
+                str(ids["campaign_id"]),
+                "--limit",
+                "10",
+                "--json",
+                "--safety-report",
+                "--min-safety-score",
+                "0.9",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert unsafe_id not in {item["knowledge_id"] for item in payload["opportunities"]}
+    assert all("safety" in item for item in payload["opportunities"])
+    after_actions = db.conn.execute("SELECT COUNT(*) FROM proactive_actions").fetchone()[0]
+    assert after_actions == before_actions

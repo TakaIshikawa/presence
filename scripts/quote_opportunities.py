@@ -17,6 +17,7 @@ from engagement.quote_opportunities import (  # noqa: E402
     QuoteOpportunityRecommender,
     opportunities_to_dict,
 )
+from engagement.quote_safety import QuoteSafetyReview, QuoteSafetyReviewer  # noqa: E402
 from runner import script_context  # noqa: E402
 
 
@@ -78,11 +79,17 @@ def build_review_payload(
     *,
     filters: dict[str, object] | None = None,
     generated_at: datetime | None = None,
+    safety_reviews: dict[int, QuoteSafetyReview] | None = None,
 ) -> dict[str, object]:
+    opportunity_payload = opportunities_to_dict(opportunities)
+    if safety_reviews is not None:
+        for item in opportunity_payload:
+            review = safety_reviews.get(item["knowledge_id"])
+            item["safety"] = review.to_dict() if review else None
     payload = {
         "generated_at": (generated_at or datetime.now(timezone.utc)).isoformat(),
         "filters": filters or {},
-        "opportunities": opportunities_to_dict(opportunities),
+        "opportunities": opportunity_payload,
         "enqueued_ids": enqueued_ids or [],
     }
     return payload
@@ -94,12 +101,14 @@ def format_json_output(
     *,
     filters: dict[str, object] | None = None,
     generated_at: datetime | None = None,
+    safety_reviews: dict[int, QuoteSafetyReview] | None = None,
 ) -> str:
     payload = build_review_payload(
         opportunities,
         enqueued_ids,
         filters=filters,
         generated_at=generated_at,
+        safety_reviews=safety_reviews,
     )
     return json.dumps(payload, indent=2, sort_keys=True)
 
@@ -127,12 +136,14 @@ def format_markdown_output(
     *,
     filters: dict[str, object] | None = None,
     generated_at: datetime | None = None,
+    safety_reviews: dict[int, QuoteSafetyReview] | None = None,
 ) -> str:
     payload = build_review_payload(
         opportunities,
         enqueued_ids,
         filters=filters,
         generated_at=generated_at,
+        safety_reviews=safety_reviews,
     )
     lines = [
         "# Quote Opportunity Review",
@@ -151,6 +162,7 @@ def format_markdown_output(
             ]
         )
         for item in opportunities:
+            safety = safety_reviews.get(item.knowledge_id) if safety_reviews is not None else None
             lines.append(
                 "| {score:.2f} | {freshness:.2f} | {novelty:.2f} | {author} | {source_type} | {topics} | {knowledge_id} | {source} |".format(
                     score=item.score,
@@ -165,6 +177,11 @@ def format_markdown_output(
             )
             if item.reasons:
                 lines.append(f"  - Reasons: {_shorten('; '.join(item.reasons), 120)}")
+            if safety is not None:
+                lines.append(
+                    f"  - Safety: {safety.score:.2f}; flags: {', '.join(safety.blocking_flags) or 'none'}; "
+                    f"reasons: {_shorten('; '.join(safety.reasons), 120)}"
+                )
     else:
         lines.append("No opportunities matched the selected filters.")
     lines.extend(
@@ -186,12 +203,14 @@ def format_json_artifact(
     *,
     filters: dict[str, object] | None = None,
     generated_at: datetime | None = None,
+    safety_reviews: dict[int, QuoteSafetyReview] | None = None,
 ) -> str:
     return format_json_output(
         opportunities,
         enqueued_ids,
         filters=filters,
         generated_at=generated_at,
+        safety_reviews=safety_reviews,
     )
 
 
@@ -203,6 +222,7 @@ def write_artifact(
     enqueued_ids: list[int] | None = None,
     filters: dict[str, object] | None = None,
     generated_at: datetime | None = None,
+    safety_reviews: dict[int, QuoteSafetyReview] | None = None,
 ) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +232,7 @@ def write_artifact(
             enqueued_ids,
             filters=filters,
             generated_at=generated_at,
+            safety_reviews=safety_reviews,
         )
         target.write_text(body + "\n", encoding="utf-8")
     elif format == "markdown":
@@ -220,6 +241,7 @@ def write_artifact(
             enqueued_ids,
             filters=filters,
             generated_at=generated_at,
+            safety_reviews=safety_reviews,
         )
         target.write_text(body, encoding="utf-8")
     else:
@@ -227,7 +249,12 @@ def write_artifact(
     return target
 
 
-def format_table_output(opportunities: list[QuoteOpportunity], enqueued_ids: list[int] | None = None) -> str:
+def format_table_output(
+    opportunities: list[QuoteOpportunity],
+    enqueued_ids: list[int] | None = None,
+    *,
+    safety_reviews: dict[int, QuoteSafetyReview] | None = None,
+) -> str:
     lines = [
         f"{'Score':>5s}  {'Fresh':>5s}  {'Novel':>5s}  {'Author':18s}  {'Topics':24s}  Source",
         f"{'-' * 5:>5s}  {'-' * 5:>5s}  {'-' * 5:>5s}  {'-' * 18:18s}  {'-' * 24:24s}  {'-' * 48}",
@@ -244,6 +271,12 @@ def format_table_output(opportunities: list[QuoteOpportunity], enqueued_ids: lis
         reason = "; ".join(item.reasons)
         if reason:
             lines.append(f"       reason: {_shorten(reason, 110)}")
+        safety = safety_reviews.get(item.knowledge_id) if safety_reviews is not None else None
+        if safety is not None:
+            lines.append(
+                f"       safety: {safety.score:.2f} flags={', '.join(safety.blocking_flags) or 'none'} "
+                f"reason={_shorten('; '.join(safety.reasons), 100)}"
+            )
     if enqueued_ids:
         lines.append("")
         lines.append(f"Enqueued proactive quote actions: {', '.join(str(item) for item in enqueued_ids)}")
@@ -288,6 +321,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum number of displayed opportunities to enqueue",
     )
     parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--safety-report",
+        action="store_true",
+        help="Include deterministic quote safety findings in the output",
+    )
+    parser.add_argument(
+        "--min-safety-score",
+        type=float,
+        help="Only include opportunities with at least this safety score",
+    )
     return parser.parse_args(argv)
 
 
@@ -311,6 +354,10 @@ def main(argv: list[str] | None = None) -> int:
         "platforms": args.platform and _split_values(args.platform) or [],
         "min_score": args.min_score,
     }
+    if args.safety_report:
+        filters["safety_report"] = True
+    if args.min_safety_score is not None:
+        filters["min_safety_score"] = args.min_safety_score
 
     with script_context() as (_config, db):
         recommender = QuoteOpportunityRecommender(db)
@@ -323,6 +370,15 @@ def main(argv: list[str] | None = None) -> int:
             topics=topics or None,
             source_types=source_types or None,
         )
+        safety_reviews = None
+        if args.safety_report or args.min_safety_score is not None:
+            safety_reviews = QuoteSafetyReviewer(db).review_many(opportunities)
+            if args.min_safety_score is not None:
+                opportunities = [
+                    opportunity
+                    for opportunity in opportunities
+                    if safety_reviews[opportunity.knowledge_id].score >= args.min_safety_score
+                ]
         enqueued_ids = recommender.enqueue(
             opportunities,
             limit=args.enqueue_limit,
@@ -337,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
             format=artifact_format,
             enqueued_ids=enqueued_ids,
             filters=filters,
+            safety_reviews=safety_reviews,
         )
         print(f"Quote opportunity artifact: {args.out}", file=sys.stderr)
     elif output_format == "json":
@@ -345,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
                 opportunities,
                 enqueued_ids,
                 filters=filters,
+                safety_reviews=safety_reviews,
             )
         )
     elif output_format == "markdown":
@@ -353,10 +411,11 @@ def main(argv: list[str] | None = None) -> int:
                 opportunities,
                 enqueued_ids,
                 filters=filters,
+                safety_reviews=safety_reviews,
             )
         )
     else:
-        print(format_table_output(opportunities, enqueued_ids))
+        print(format_table_output(opportunities, enqueued_ids, safety_reviews=safety_reviews))
     return 0
 
 
