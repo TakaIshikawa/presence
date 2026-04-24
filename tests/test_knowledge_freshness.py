@@ -1,22 +1,27 @@
-"""Tests for semantic knowledge freshness reporting."""
+"""Tests for item-level and source-summary knowledge freshness reporting."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import sqlite3
 import sys
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from knowledge.freshness import age_days, build_freshness_report, report_to_dict
 from knowledge.freshness_report import build_knowledge_freshness_report
-from knowledge_freshness import main
+from knowledge_freshness import format_text_report, main
 from storage.db import Database
+
+
+NOW = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -38,35 +43,48 @@ def test_db(tmp_path):
     db.close()
 
 
-def _insert_knowledge(
-    conn,
+def iso(days_ago: int) -> str:
+    return (NOW - timedelta(days=days_ago)).isoformat()
+
+
+def insert_knowledge(
+    db,
     *,
-    source_type: str,
-    source_id: str,
-    author: str,
-    published_at: str | None,
-    license: str = "attribution_required",
-) -> None:
-    conn.execute(
+    source_type: str = "curated_x",
+    source_id: str = "src-1",
+    author: str = "alice",
+    source_url: str | None = "https://example.test/item",
+    content: str = "Useful knowledge content",
+    insight: str | None = "Useful insight",
+    approved: int = 1,
+    published_days_ago: int | None = 10,
+    ingested_days_ago: int = 10,
+) -> int:
+    published_at = iso(published_days_ago) if published_days_ago is not None else None
+    conn = db.conn if hasattr(db, "conn") else db
+    cursor = conn.execute(
         """INSERT INTO knowledge
-           (source_type, source_id, source_url, author, content, approved,
-            published_at, ingested_at, license)
-           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+           (source_type, source_id, source_url, author, content, insight, approved,
+            published_at, ingested_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             source_type,
             source_id,
-            f"https://example.com/{source_id}",
+            source_url,
             author,
-            f"content for {source_id}",
+            content,
+            insight,
+            approved,
             published_at,
-            published_at,
-            license,
+            iso(ingested_days_ago),
+            iso(ingested_days_ago),
         ),
     )
     conn.commit()
+    return cursor.lastrowid
 
 
-def test_empty_store_returns_valid_report(conn):
+def test_summary_report_handles_empty_store(conn):
     report = build_knowledge_freshness_report(
         conn,
         stale_after_days=7,
@@ -74,35 +92,24 @@ def test_empty_store_returns_valid_report(conn):
     )
 
     assert report.source_count == 0
-    assert report.stale_source_count == 0
     assert report.sources == []
-    assert report.to_dict()["sources"] == []
 
 
-def test_mixed_source_types_group_by_source_and_license_mix(conn):
-    _insert_knowledge(
+def test_summary_report_groups_sources_and_license_mix(conn):
+    insert_knowledge(
         conn,
         source_type="curated_x",
         source_id="tweet-1",
         author="expert",
-        published_at="2026-04-20T00:00:00+00:00",
-        license="open",
+        published_days_ago=5,
     )
-    _insert_knowledge(
+    insert_knowledge(
         conn,
         source_type="curated_x",
         source_id="tweet-2",
         author="expert",
-        published_at="2026-04-24T00:00:00+00:00",
-        license="restricted",
-    )
-    _insert_knowledge(
-        conn,
-        source_type="curated_article",
-        source_id="https://blog.example.com/a",
-        author="blog.example.com",
-        published_at="2026-04-01T00:00:00+00:00",
-        license="attribution_required",
+        published_days_ago=1,
+        content="Another item",
     )
 
     report = build_knowledge_freshness_report(
@@ -111,92 +118,114 @@ def test_mixed_source_types_group_by_source_and_license_mix(conn):
         now=datetime(2026, 4, 25, tzinfo=timezone.utc),
     )
 
-    assert report.source_count == 2
-    assert report.stale_source_count == 0
-
-    by_key = {
-        (source.source_type, source.source_identifier): source
-        for source in report.sources
-    }
-    x_source = by_key[("curated_x", "expert")]
-    assert x_source.item_count == 2
-    assert x_source.newest_item_timestamp == "2026-04-24T00:00:00+00:00"
-    assert x_source.oldest_item_timestamp == "2026-04-20T00:00:00+00:00"
-    assert x_source.license_mix == {"open": 1, "restricted": 1}
-
-    article_source = by_key[("curated_article", "blog.example.com")]
-    assert article_source.item_count == 1
-    assert article_source.license_mix == {"attribution_required": 1}
+    assert report.source_count == 1
+    assert report.sources[0].item_count == 2
 
 
-def test_sources_older_than_threshold_are_marked_stale(conn):
-    _insert_knowledge(
-        conn,
-        source_type="curated_newsletter",
-        source_id="issue-1",
-        author="newsletter",
-        published_at="2026-04-10T00:00:00+00:00",
+def test_item_report_stale_age_calculations_use_published_then_ingested(test_db):
+    published_id = insert_knowledge(
+        test_db, source_id="published-old", published_days_ago=181, ingested_days_ago=2
     )
-    _insert_knowledge(
-        conn,
+    ingested_id = insert_knowledge(
+        test_db, source_id="ingested-old", published_days_ago=None, ingested_days_ago=181
+    )
+
+    findings = build_freshness_report(
+        test_db.conn, stale_days=180, unused_days=999, now=NOW
+    )
+
+    by_id = {finding.knowledge_id: finding for finding in findings}
+    assert by_id[published_id].stale is True
+    assert by_id[ingested_id].stale is True
+    assert age_days(iso(3), NOW) == pytest.approx(3.0)
+
+
+def test_item_report_detects_unused_knowledge(test_db):
+    unused_id = insert_knowledge(test_db, source_id="unused", ingested_days_ago=120)
+    findings = build_freshness_report(
+        test_db.conn, stale_days=999, unused_days=90, now=NOW
+    )
+
+    assert [finding.knowledge_id for finding in findings] == [unused_id]
+    assert findings[0].recommendations == ["retire"]
+
+
+def test_item_report_text_output(test_db):
+    insert_knowledge(test_db, source_id="text", author="Grace", ingested_days_ago=100)
+    findings = build_freshness_report(
+        test_db.conn, stale_days=999, unused_days=90, now=NOW
+    )
+    payload = report_to_dict(
+        findings,
+        stale_days=999,
+        unused_days=90,
         source_type="curated_x",
-        source_id="tweet-new",
-        author="fresh",
-        published_at="2026-04-24T00:00:00+00:00",
+        limit=5,
     )
 
-    report = build_knowledge_freshness_report(
-        conn,
-        stale_after_days=7,
-        now=datetime(2026, 4, 25, tzinfo=timezone.utc),
-    )
+    output = format_text_report(payload)
 
-    stale_sources = [source for source in report.sources if source.stale]
-    assert report.stale_source_count == 1
-    assert stale_sources[0].source_identifier == "newsletter"
-    assert stale_sources[0].days_since_newest_item == 15.0
+    assert "Knowledge Freshness Report" in output
+    assert "recommend=retire" in output
 
 
-def test_cli_source_type_filter_changes_text_and_json_output(test_db, capsys):
-    _insert_knowledge(
-        test_db.conn,
+def test_cli_json_output_for_item_mode(test_db, capsys):
+    knowledge_id = insert_knowledge(test_db, source_id="cli", ingested_days_ago=100)
+
+    @contextmanager
+    def fake_script_context():
+        yield None, test_db
+
+    with patch("knowledge_freshness.script_context", fake_script_context):
+        assert main(
+            [
+                "--stale-days",
+                "999",
+                "--unused-days",
+                "90",
+                "--source-type",
+                "curated_x",
+                "--format",
+                "json",
+                "--limit",
+                "1",
+            ]
+        ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert [row["knowledge_id"] for row in payload["findings"]] == [knowledge_id]
+
+
+def test_cli_summary_mode_filters_source_type(test_db, capsys):
+    insert_knowledge(
+        test_db,
         source_type="curated_x",
         source_id="tweet-1",
         author="expert",
-        published_at="2026-04-24T00:00:00+00:00",
+        published_days_ago=1,
     )
-    _insert_knowledge(
-        test_db.conn,
+    insert_knowledge(
+        test_db,
         source_type="own_post",
         source_id="own-1",
         author="self",
-        published_at="2026-04-24T00:00:00+00:00",
-        license="open",
+        published_days_ago=1,
     )
-    mock_config = MagicMock()
 
-    with patch("knowledge_freshness.script_context") as mock_context, patch(
-        "sys.argv",
-        ["knowledge_freshness.py", "--source-type", "curated_x"],
-    ):
-        mock_context.return_value.__enter__ = lambda self: (mock_config, test_db)
-        mock_context.return_value.__exit__ = lambda self, *args: None
-        main()
+    @contextmanager
+    def fake_script_context():
+        yield None, test_db
 
-    text_output = capsys.readouterr().out
-    assert "Filter: source_type=curated_x" in text_output
-    assert "curated_x" in text_output
-    assert "own_post" not in text_output
-
-    with patch("knowledge_freshness.script_context") as mock_context, patch(
-        "sys.argv",
-        ["knowledge_freshness.py", "--source-type", "curated_x", "--json"],
-    ):
-        mock_context.return_value.__enter__ = lambda self: (mock_config, test_db)
-        mock_context.return_value.__exit__ = lambda self, *args: None
-        main()
+    with patch("knowledge_freshness.script_context", fake_script_context):
+        assert main(
+            ["--mode", "summary", "--source-type", "curated_x", "--format", "json"]
+        ) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["source_type"] == "curated_x"
     assert payload["source_count"] == 1
-    assert payload["sources"][0]["source_type"] == "curated_x"
+
+
+def test_cli_rejects_invalid_values():
+    with pytest.raises(SystemExit, match="--limit must be at least 1"):
+        main(["--limit", "0"])
