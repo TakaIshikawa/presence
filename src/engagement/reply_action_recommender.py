@@ -1,11 +1,11 @@
-"""Recommend review actions for inbound mention reply drafts."""
+"""Recommend review actions for queued reply drafts and inbound mentions."""
 
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from engagement.reply_classifier import ReplyClassifier
 
@@ -386,3 +386,66 @@ def _fingerprint(text: str) -> str:
 
 def _priority_rank(priority: str) -> int:
     return {"high": 0, "normal": 1, "low": 2}.get(priority, 3)
+
+
+@dataclass(frozen=True)
+class ManualReplyReviewRecommendation:
+    """Action guidance for manual review packets."""
+
+    action: str
+    rationale: str
+    signals: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def recommend_reply_action(reply: Mapping[str, Any]) -> ManualReplyReviewRecommendation:
+    """Return conservative manual-review guidance for a reply draft."""
+    flags = _parse_flags(reply.get("quality_flags"))
+    score = _coerce_score(reply.get("quality_score"))
+    intent = str(reply.get("intent") or "other")
+    priority = str(reply.get("priority") or "normal")
+
+    signals: list[str] = []
+    if score is not None:
+        signals.append(f"quality_score:{score:.1f}")
+    signals.extend(f"flag:{flag}" for flag in flags)
+    signals.append(f"intent:{intent}")
+    signals.append(f"priority:{priority}")
+
+    if intent == "spam":
+        return ManualReplyReviewRecommendation(
+            action="dismiss",
+            rationale="Inbound mention is classified as spam.",
+            signals=signals,
+        )
+    if "sycophantic" in flags or "generic" in flags:
+        return ManualReplyReviewRecommendation(
+            action="revise",
+            rationale="Draft has quality flags that should be reviewed before approval.",
+            signals=signals,
+        )
+    if score is not None and score < 5.0:
+        return ManualReplyReviewRecommendation(
+            action="revise",
+            rationale="Draft quality score is below the approval band.",
+            signals=signals,
+        )
+    if priority == "low":
+        return ManualReplyReviewRecommendation(
+            action="skip",
+            rationale="Draft is low priority unless the reviewer wants to engage.",
+            signals=signals,
+        )
+    if score is not None and score >= 7.0:
+        return ManualReplyReviewRecommendation(
+            action="approve",
+            rationale="Draft has a passing quality score and no blocking flags.",
+            signals=signals,
+        )
+    return ManualReplyReviewRecommendation(
+        action="review",
+        rationale="No strong automatic recommendation is available.",
+        signals=signals,
+    )

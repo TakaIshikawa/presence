@@ -1,10 +1,13 @@
-"""Tests for inbound mention reply action recommendations."""
+"""Tests for reply action recommendations."""
 
 from __future__ import annotations
 
 import json
 
-from engagement.reply_action_recommender import ReplyActionRecommender
+from engagement.reply_action_recommender import (
+    ReplyActionRecommender,
+    recommend_reply_action,
+)
 
 
 def _row(**kwargs):
@@ -121,8 +124,18 @@ def test_high_context_question_needs_manual_review():
 
 def test_recommend_many_marks_duplicate_mentions_from_same_author():
     rows = [
-        _row(id=1, inbound_tweet_id="one", inbound_text="How does this handle retries?", intent="question"),
-        _row(id=2, inbound_tweet_id="two", inbound_text="How does this handle retries?", intent="question"),
+        _row(
+            id=1,
+            inbound_tweet_id="one",
+            inbound_text="How does this handle retries?",
+            intent="question",
+        ),
+        _row(
+            id=2,
+            inbound_tweet_id="two",
+            inbound_text="How does this handle retries?",
+            intent="question",
+        ),
     ]
 
     recommendations = ReplyActionRecommender().recommend_many(rows)
@@ -130,3 +143,44 @@ def test_recommend_many_marks_duplicate_mentions_from_same_author():
 
     assert duplicate.action == "no_response"
     assert duplicate.reason == "duplicate mention from same author"
+
+
+def test_recommend_approve_for_high_quality_clean_reply():
+    result = recommend_reply_action(
+        {
+            "quality_score": 8.0,
+            "quality_flags": None,
+            "intent": "question",
+            "priority": "normal",
+        }
+    )
+
+    assert result.action == "approve"
+    assert "quality_score:8.0" in result.signals
+
+
+def test_recommend_revise_for_sycophantic_flag():
+    result = recommend_reply_action(
+        {
+            "quality_score": 6.0,
+            "quality_flags": '["sycophantic"]',
+            "intent": "appreciation",
+            "priority": "normal",
+        }
+    )
+
+    assert result.action == "revise"
+    assert "flag:sycophantic" in result.signals
+
+
+def test_recommend_dismiss_for_spam():
+    result = recommend_reply_action(
+        {
+            "quality_score": None,
+            "quality_flags": None,
+            "intent": "spam",
+            "priority": "low",
+        }
+    )
+
+    assert result.action == "dismiss"
