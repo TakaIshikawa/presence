@@ -1283,6 +1283,38 @@ class Database:
         )
         return [self._github_activity_from_row(row) for row in cursor.fetchall()]
 
+<<<<<<< HEAD
+    def get_recent_github_issues(
+    def get_recent_github_discussions(
+        self,
+        days: int = 7,
+        repo_name: str | None = None,
+        limit: int | None = 10,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return recently updated GitHub discussion activity, newest first."""
+        if days <= 0 or (limit is not None and limit <= 0):
+            return []
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+        params: list[object] = [cutoff]
+        repo_filter = ""
+        if repo_name:
+            repo_filter = " AND repo_name = ?"
+            params.append(repo_name)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE updated_at >= ?
+                  AND activity_type = 'discussion'{repo_filter}
+                ORDER BY updated_at DESC, id DESC{limit_clause}""",
+            tuple(params),
+        )
+        return [self._github_activity_from_row(row) for row in cursor.fetchall()]
+
     def get_recent_github_issues(
         self,
         days: int = 7,

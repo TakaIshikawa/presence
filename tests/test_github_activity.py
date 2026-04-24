@@ -826,6 +826,7 @@ class TestPollNewActivity:
         db.upsert_github_activity.assert_not_called()
 
 
+<<<<<<< HEAD
 def test_recent_github_issues_helper_filters_repo_and_label(db):
     db.upsert_github_activity(
         repo_name="taka/presence",
@@ -870,3 +871,51 @@ def test_recent_github_issues_helper_filters_repo_and_label(db):
 
     assert [issue["number"] for issue in issues] == [1]
     assert issues[0]["activity_id"] == "taka/presence#1:issue"
+
+def test_recent_github_discussions_filters_repo_and_parses_metadata(db):
+    db.upsert_github_activity(
+        repo_name="taka/presence",
+        activity_type="discussion",
+        number=4,
+        title="How should discussion digests work?",
+        state="open",
+        author="octo",
+        url="https://github.com/taka/presence/discussions/4",
+        updated_at="2026-04-22T12:00:00+00:00",
+        created_at="2026-04-22T10:00:00+00:00",
+        labels=["question"],
+        metadata={"category": {"name": "Q&A"}, "comments_count": 3},
+    )
+    db.upsert_github_activity(
+        repo_name="taka/other",
+        activity_type="discussion",
+        number=5,
+        title="Other discussion",
+        state="open",
+        author="octo",
+        url="https://github.com/taka/other/discussions/5",
+        updated_at="2026-04-22T12:00:00+00:00",
+        created_at="2026-04-22T10:00:00+00:00",
+    )
+    db.upsert_github_activity(
+        repo_name="taka/presence",
+        activity_type="issue",
+        number=6,
+        title="Issue",
+        state="open",
+        author="octo",
+        url="https://github.com/taka/presence/issues/6",
+        updated_at="2026-04-22T12:00:00+00:00",
+        created_at="2026-04-22T10:00:00+00:00",
+    )
+
+    rows = db.get_recent_github_discussions(
+        days=7,
+        repo_name="taka/presence",
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["activity_id"] == "taka/presence#4:discussion"
+    assert rows[0]["labels"] == ["question"]
+    assert rows[0]["metadata"]["category"]["name"] == "Q&A"
