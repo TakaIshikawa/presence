@@ -12,6 +12,7 @@ from config import (
     AnthropicConfig,
     PathsConfig,
     SynthesisConfig,
+    ModelUsageConfig,
     PollingConfig,
     RepliesConfig,
     EmbeddingsConfig,
@@ -546,6 +547,22 @@ class TestDefaults:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.synthesis.max_estimated_cost_per_run == 0.25
         assert cfg.synthesis.max_daily_estimated_cost == 1.5
+
+    def test_model_usage_budgets_default_disabled(self, tmp_path):
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
+        assert isinstance(cfg.model_usage, ModelUsageConfig)
+        assert cfg.model_usage.max_daily_estimated_cost is None
+        assert cfg.model_usage.max_monthly_estimated_cost is None
+
+    def test_model_usage_budgets_override(self, tmp_path):
+        data = _minimal_config_dict()
+        data["model_usage"] = {
+            "max_daily_estimated_cost": 2.5,
+            "max_monthly_estimated_cost": 25.0,
+        }
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+        assert cfg.model_usage.max_daily_estimated_cost == 2.5
+        assert cfg.model_usage.max_monthly_estimated_cost == 25.0
 
     def test_synthesis_claim_check_enabled_default(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

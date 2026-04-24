@@ -46,6 +46,10 @@ synthesis:
   format_cooldown_penalty: 0.5     # per-use selection weight penalty; 0 disables cooldown
   claim_check_enabled: true
 
+model_usage:
+  max_daily_estimated_cost: null    # optional USD cap for model_budget guard; null disables
+  max_monthly_estimated_cost: null  # optional USD cap for model_budget guard; null disables
+
 polling:
   interval_minutes: 10
   daily_digest_hour: 23

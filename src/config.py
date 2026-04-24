@@ -75,6 +75,12 @@ class SynthesisConfig:
 
 
 @dataclass
+class ModelUsageConfig:
+    max_daily_estimated_cost: Optional[float] = None
+    max_monthly_estimated_cost: Optional[float] = None
+
+
+@dataclass
 class PollingConfig:
     interval_minutes: int
     daily_digest_hour: int
@@ -288,6 +294,7 @@ class Config:
     anthropic: AnthropicConfig
     paths: PathsConfig
     synthesis: SynthesisConfig
+    model_usage: ModelUsageConfig
     polling: PollingConfig
     replies: Optional[RepliesConfig]
     embeddings: Optional[EmbeddingsConfig]
@@ -642,6 +649,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
         )
     )
 
+    model_usage_data = data.get("model_usage", {})
+    model_usage_config = ModelUsageConfig(
+        max_daily_estimated_cost=model_usage_data.get("max_daily_estimated_cost"),
+        max_monthly_estimated_cost=model_usage_data.get("max_monthly_estimated_cost"),
+    )
+
     # Parse proactive engagement config if present
     proactive_config = None
     if "proactive" in data:
@@ -764,6 +777,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 "persona_guard_min_recent_posts", 3
             ),
         ),
+        model_usage=model_usage_config,
         polling=PollingConfig(
             interval_minutes=_require(data, "polling", "interval_minutes", section="polling"),
             daily_digest_hour=_require(data, "polling", "daily_digest_hour", section="polling"),
