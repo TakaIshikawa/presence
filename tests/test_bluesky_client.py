@@ -773,6 +773,37 @@ class TestGetPostMetrics:
             uri="at://alice.test/app.bsky.feed.post/rkey123"
         )
 
+    def test_get_post_engagement_by_uri_requires_at_uri(self):
+        client, mock_client = make_bluesky_client()
+
+        with pytest.raises(ValueError):
+            client.get_post_engagement_by_uri("https://bsky.app/profile/alice.test/post/rkey123")
+
+        mock_client.get_post_thread.assert_not_called()
+
+    def test_get_post_engagement_by_uri_fetches_counts_without_posting(self):
+        client, mock_client = make_bluesky_client()
+        mock_post = MagicMock()
+        mock_post.like_count = 7
+        mock_post.repost_count = 2
+        mock_post.reply_count = 1
+        mock_post.quote_count = 0
+        mock_client.get_post_thread.return_value = SimpleNamespace(
+            thread=SimpleNamespace(post=mock_post)
+        )
+
+        result = client.get_post_engagement_by_uri(
+            "at://did:plc:xyz/app.bsky.feed.post/123"
+        )
+
+        assert result == {
+            "like_count": 7,
+            "repost_count": 2,
+            "reply_count": 1,
+            "quote_count": 0,
+        }
+        mock_client.send_post.assert_not_called()
+
     def test_returns_none_when_response_is_none(self):
         client, mock_client = make_bluesky_client()
         mock_client.get_post_thread.return_value = None

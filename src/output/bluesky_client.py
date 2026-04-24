@@ -541,6 +541,12 @@ class BlueskyClient:
         """
         return self.get_post_engagement(uri)
 
+    def get_post_engagement_by_uri(self, at_uri: str) -> Optional[dict]:
+        """Fetch normalized engagement counts for a single AT Protocol URI."""
+        if not at_uri or not at_uri.startswith("at://"):
+            raise ValueError(f"Expected AT Protocol URI, got: {at_uri!r}")
+        return self.get_post_engagement(at_uri)
+
     def get_post_engagement(self, post_ref: str) -> Optional[dict]:
         """Fetch normalized engagement counts for an AT URI or Bluesky post ID.
 
