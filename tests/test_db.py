@@ -135,6 +135,7 @@ class TestSchemaInit:
             "variant_type",
             "content",
             "metadata",
+            "selected",
             "created_at",
         }
         assert expected.issubset(cols)
@@ -813,6 +814,12 @@ class TestInitSchemaMigrations:
                 for row in db.conn.execute("PRAGMA index_list(content_variants)")
             }
             assert "idx_content_variants_content" in indexes
+            assert "idx_content_variants_selected" in indexes
+            cols = {
+                row[1]
+                for row in db.conn.execute("PRAGMA table_info(content_variants)")
+            }
+            assert "selected" in cols
 
     def test_migration_adds_campaign_id_before_schema_indexes(self, schema_path):
         """Old DBs without planned_topics.campaign_id should initialize cleanly."""
@@ -2141,6 +2148,27 @@ class TestGeneratedContent:
         ).fetchone()
         assert json.loads(row["metadata"]) == {"source": "generator", "score": 8.4}
 
+    def test_content_variant_metadata_is_stored_sorted(self, db):
+        content_id = self._insert_content(db)
+
+        variant_id = db.upsert_content_variant(
+            content_id=content_id,
+            platform="x",
+            variant_type="post",
+            content="Sorted metadata copy",
+            metadata={"z": 1, "a": 2},
+        )
+
+        row = db.conn.execute(
+            "SELECT metadata FROM content_variants WHERE id = ?",
+            (variant_id,),
+        ).fetchone()
+        assert row["metadata"] == '{"a": 2, "z": 1}'
+
+    def test_upsert_content_variant_rejects_missing_content(self, db):
+        with pytest.raises(ValueError, match="generated_content id 999 does not exist"):
+            db.upsert_content_variant(999, "x", "post", "Missing content")
+
     def test_update_content_variant_preserves_unique_row(self, db):
         content_id = self._insert_content(db)
         first_id = db.upsert_content_variant(
@@ -2155,6 +2183,7 @@ class TestGeneratedContent:
         variant = db.get_content_variant(content_id, "newsletter", "summary")
         assert variant["content"] == "Updated summary"
         assert variant["metadata"] == {"version": 2}
+        assert variant["selected"] is False
 
     def test_content_variant_uniqueness_is_per_platform_and_type(self, db):
         content_id = self._insert_content(db)
@@ -2216,6 +2245,52 @@ class TestGeneratedContent:
         content_id = self._insert_content(db)
 
         assert db.get_content_variant(content_id, "blog", "draft") is None
+
+    def test_select_content_variant_marks_one_per_platform(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_content_variant(content_id, "x", "post", "X post")
+        db.upsert_content_variant(content_id, "x", "thread", "X thread")
+        db.upsert_content_variant(content_id, "bluesky", "post", "Bluesky post")
+
+        selected = db.select_content_variant(content_id, "x", "thread")
+
+        assert selected["selected"] is True
+        assert selected["variant_type"] == "thread"
+        assert db.get_content_variant(content_id, "x", "post")["selected"] is False
+        assert db.get_selected_content_variant(content_id, "x")["variant_type"] == "thread"
+        assert db.get_selected_content_variant(content_id, "bluesky") is None
+
+    def test_select_content_variant_can_change_selection(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_content_variant(content_id, "x", "post", "X post")
+        db.upsert_content_variant(content_id, "x", "thread", "X thread")
+
+        db.select_content_variant(content_id, "x", "thread")
+        db.select_content_variant(content_id, "x", "post")
+
+        assert db.get_content_variant(content_id, "x", "post")["selected"] is True
+        assert db.get_content_variant(content_id, "x", "thread")["selected"] is False
+
+    def test_selected_content_variants_are_listable(self, db):
+        content_id = self._insert_content(db)
+        db.upsert_content_variant(content_id, "x", "post", "X post")
+        db.upsert_content_variant(content_id, "bluesky", "post", "Bluesky post")
+        db.upsert_content_variant(content_id, "newsletter", "summary", "Newsletter")
+        db.select_content_variant(content_id, "x", "post")
+        db.select_content_variant(content_id, "newsletter", "summary")
+
+        rows = db.list_selected_content_variants(content_id)
+
+        assert [(row["platform"], row["variant_type"]) for row in rows] == [
+            ("newsletter", "summary"),
+            ("x", "post"),
+        ]
+
+    def test_select_content_variant_rejects_missing_variant(self, db):
+        content_id = self._insert_content(db)
+
+        with pytest.raises(ValueError, match="content variant does not exist"):
+            db.select_content_variant(content_id, "x", "post")
 
     def test_content_variant_or_original_returns_variant_when_present(self, db):
         content_id = self._insert_content(db, content="Original copy")

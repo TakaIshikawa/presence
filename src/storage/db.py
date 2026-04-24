@@ -595,11 +595,25 @@ class Database:
                     variant_type TEXT NOT NULL,
                     content TEXT NOT NULL,
                     metadata JSON,
+                    selected INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(content_id, platform, variant_type)
                 )
             """)
+            cv_cols = {
+                row[1]
+                for row in self.conn.execute("PRAGMA table_info(content_variants)")
+            }
+            if "selected" not in cv_cols:
+                self.conn.execute(
+                    "ALTER TABLE content_variants ADD COLUMN selected INTEGER NOT NULL DEFAULT 0"
+                )
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_variants_content ON content_variants(content_id)")
+            self.conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS idx_content_variants_selected
+                   ON content_variants(content_id, platform)
+                   WHERE selected = 1"""
+            )
             # Migrate: create durable per-platform publication status table.
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS content_publications (
@@ -2424,7 +2438,13 @@ class Database:
         variant = dict(row)
         if variant.get("metadata") is not None:
             variant["metadata"] = json.loads(variant["metadata"])
+        if "selected" in variant:
+            variant["selected"] = bool(variant["selected"])
         return variant
+
+    def _require_generated_content(self, content_id: int) -> None:
+        if not self.get_generated_content(content_id):
+            raise ValueError(f"generated_content id {content_id} does not exist")
 
     def upsert_content_variant(
         self,
@@ -2435,7 +2455,8 @@ class Database:
         metadata: Optional[dict] = None,
     ) -> int:
         """Insert or update a durable content variant for one platform/use."""
-        metadata_json = json.dumps(metadata if metadata is not None else {})
+        self._require_generated_content(content_id)
+        metadata_json = json.dumps(metadata if metadata is not None else {}, sort_keys=True)
         self.conn.execute(
             """INSERT INTO content_variants
                (content_id, platform, variant_type, content, metadata)
@@ -2453,6 +2474,37 @@ class Database:
         self.conn.commit()
         return row["id"]
 
+    def select_content_variant(
+        self,
+        content_id: int,
+        platform: str,
+        variant_type: str,
+    ) -> dict:
+        """Mark one variant type as selected for a content/platform pair."""
+        self._require_generated_content(content_id)
+        row = self.conn.execute(
+            """SELECT * FROM content_variants
+               WHERE content_id = ? AND platform = ? AND variant_type = ?""",
+            (content_id, platform, variant_type),
+        ).fetchone()
+        if not row:
+            raise ValueError(
+                "content variant does not exist for "
+                f"content_id={content_id}, platform={platform}, variant_type={variant_type}"
+            )
+        self.conn.execute(
+            "UPDATE content_variants SET selected = 0 WHERE content_id = ? AND platform = ?",
+            (content_id, platform),
+        )
+        self.conn.execute(
+            """UPDATE content_variants
+               SET selected = 1
+               WHERE content_id = ? AND platform = ? AND variant_type = ?""",
+            (content_id, platform, variant_type),
+        )
+        self.conn.commit()
+        return self.get_content_variant(content_id, platform, variant_type)
+
     def get_content_variant(
         self,
         content_id: int,
@@ -2466,6 +2518,29 @@ class Database:
             (content_id, platform, variant_type),
         ).fetchone()
         return self._content_variant_from_row(row) if row else None
+
+    def get_selected_content_variant(
+        self,
+        content_id: int,
+        platform: str,
+    ) -> dict | None:
+        """Fetch the selected variant for one content/platform pair."""
+        row = self.conn.execute(
+            """SELECT * FROM content_variants
+               WHERE content_id = ? AND platform = ? AND selected = 1""",
+            (content_id, platform),
+        ).fetchone()
+        return self._content_variant_from_row(row) if row else None
+
+    def list_selected_content_variants(self, content_id: int) -> list[dict]:
+        """List selected platform variants for a generated content item."""
+        cursor = self.conn.execute(
+            """SELECT * FROM content_variants
+               WHERE content_id = ? AND selected = 1
+               ORDER BY platform, variant_type, id""",
+            (content_id,),
+        )
+        return [self._content_variant_from_row(row) for row in cursor.fetchall()]
 
     def get_content_variant_or_original(
         self,

@@ -123,10 +123,14 @@ CREATE TABLE IF NOT EXISTS content_variants (
     variant_type TEXT NOT NULL,  -- e.g. 'post', 'thread', 'summary', 'seed'
     content TEXT NOT NULL,
     metadata JSON,
+    selected INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(content_id, platform, variant_type)
 );
 CREATE INDEX IF NOT EXISTS idx_content_variants_content ON content_variants(content_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_content_variants_selected
+ON content_variants(content_id, platform)
+WHERE selected = 1;
 
 -- Track engagement metrics for published posts (time-series)
 CREATE TABLE IF NOT EXISTS post_engagement (
