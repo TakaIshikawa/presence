@@ -26,7 +26,12 @@ from output.newsletter import (
 
 
 def _insert_published_content(
-    db, content_type, content, days_ago=1, url=None, published_at=None
+    db,
+    content_type,
+    content,
+    days_ago=1,
+    url=None,
+    published_at=None,
 ):
     """Insert a published post with a recent published_at timestamp."""
     content_id = db.insert_generated_content(
@@ -37,7 +42,9 @@ def _insert_published_content(
         eval_score=8.0,
         eval_feedback="Good",
     )
-    published_at = published_at or (datetime.now(timezone.utc) - timedelta(days=days_ago))
+    published_at = (
+        published_at or (datetime.now(timezone.utc) - timedelta(days=days_ago))
+    )
     db.conn.execute(
         "UPDATE generated_content SET published = 1, published_at = ?, published_url = ? WHERE id = ?",
         (published_at.isoformat(), url or f"https://example.com/{content_id}", content_id),
@@ -314,8 +321,8 @@ class TestNewsletterAssembler:
             db,
             "blog_post",
             "TITLE: Test Post\n\nSome content here.",
-            published_at=now - timedelta(days=1),
             url="https://takaishikawa.com/blog/test.html",
+            published_at=now - timedelta(days=1),
         )
 
         assembler = NewsletterAssembler(
@@ -342,8 +349,8 @@ class TestNewsletterAssembler:
             db,
             "blog_post",
             "TITLE: Test Post\n\nSome content here.",
-            published_at=now - timedelta(days=1),
             url="https://takaishikawa.com/blog/test.html?ref=site#notes",
+            published_at=now - timedelta(days=1),
         )
 
         assembler = NewsletterAssembler(
@@ -370,8 +377,8 @@ class TestNewsletterAssembler:
             db,
             "x_post",
             "External post.",
-            published_at=now - timedelta(days=1),
             url="https://x.com/taka/status/123?ref=feed",
+            published_at=now - timedelta(days=1),
         )
 
         assembler = NewsletterAssembler(

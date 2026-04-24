@@ -105,6 +105,110 @@ TRACKING_QUERY_PARAMS = {
 }
 
 
+def newsletter_subject_candidate_to_dict(
+    candidate: NewsletterSubjectCandidate,
+) -> dict:
+    """Serialize a subject candidate for preview/review output."""
+    return {
+        "subject": candidate.subject,
+        "score": candidate.score,
+        "rationale": candidate.rationale,
+        "source": candidate.source,
+        "metadata": candidate.metadata,
+    }
+
+
+def select_newsletter_subject(content: NewsletterContent) -> str:
+    """Select the subject that would be used for the assembled newsletter."""
+    candidates = content.subject_candidates or []
+    if candidates:
+        return candidates[0].subject
+    return content.subject
+
+
+def newsletter_preview_payload(
+    content: NewsletterContent,
+    week_start: datetime,
+    week_end: datetime,
+    *,
+    subject: str = "",
+    utm_metadata: Optional[dict] = None,
+    message: str = "",
+) -> dict:
+    """Build a JSON-serializable newsletter review payload."""
+    selected_subject = subject or select_newsletter_subject(content)
+    candidates = [
+        newsletter_subject_candidate_to_dict(candidate)
+        for candidate in (content.subject_candidates or [])
+    ]
+    metadata = dict(content.metadata or {})
+    return {
+        "subject": selected_subject,
+        "body_markdown": content.body_markdown,
+        "source_content_ids": list(content.source_content_ids or []),
+        "metadata": metadata,
+        "utm_metadata": dict(utm_metadata or metadata),
+        "subject_candidates": candidates,
+        "week_range": {
+            "start": week_start.isoformat(),
+            "end": week_end.isoformat(),
+        },
+        "message": message,
+    }
+
+
+def format_newsletter_preview_json(payload: dict) -> str:
+    """Format a newsletter preview payload as JSON."""
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def format_newsletter_preview_markdown(payload: dict) -> str:
+    """Format a newsletter preview payload as Markdown."""
+    subject = payload.get("subject") or ""
+    message = payload.get("message") or ""
+    source_ids = ", ".join(
+        str(item) for item in (payload.get("source_content_ids") or [])
+    ) or "None"
+    candidate_lines = [
+        (
+            f"- {candidate['subject']} "
+            f"(score: {candidate['score']}, source: {candidate['source']})"
+            + (f" - {candidate['rationale']}" if candidate.get("rationale") else "")
+        )
+        for candidate in (payload.get("subject_candidates") or [])
+    ] or ["- None"]
+    metadata_json = format_newsletter_preview_json(
+        payload.get("utm_metadata") or {}
+    ).strip()
+    body = payload.get("body_markdown") or ""
+    if not body.strip():
+        body = "_No newsletter content for this date range._"
+
+    parts = [
+        "# Newsletter Preview",
+        "## Week Range",
+        f"- Start: {payload['week_range']['start']}",
+        f"- End: {payload['week_range']['end']}",
+        "## Subject",
+        subject or "None",
+    ]
+    if message:
+        parts.extend(["## Message", message])
+    parts.extend(
+        [
+            "## Source Content IDs",
+            source_ids,
+            "## UTM Metadata",
+            f"```json\n{metadata_json}\n```",
+            "## Subject Candidates",
+            "\n".join(candidate_lines),
+            "## Body",
+            body,
+        ]
+    )
+    return "\n\n".join(parts) + "\n"
+
+
 class NewsletterAssembler:
     """Assembles newsletter content from the week's published posts."""
 
