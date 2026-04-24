@@ -3048,6 +3048,98 @@ class Database:
                 quarantined.append(item)
         return quarantined
 
+    def get_pauseable_curated_sources(self, failure_threshold: int) -> list[dict]:
+        """Return active curated sources that may qualify for auto-pause."""
+        cursor = self.conn.execute(
+            """SELECT * FROM curated_sources
+               WHERE status = 'active'
+                 AND COALESCE(consecutive_failures, 0) >= ?
+                 AND last_failure_at IS NOT NULL
+                 AND (
+                     last_success_at IS NULL
+                     OR datetime(last_failure_at) > datetime(last_success_at)
+                 )
+               ORDER BY datetime(last_failure_at) DESC, id ASC""",
+            (failure_threshold,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def pause_curated_sources_by_ids(self, source_ids: list[int]) -> int:
+        """Pause curated sources by ID and record review time."""
+        if not source_ids:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        placeholders = ",".join("?" for _ in source_ids)
+        cursor = self.conn.execute(
+            f"""UPDATE curated_sources
+                SET status = 'paused', reviewed_at = ?
+                WHERE status = 'active' AND id IN ({placeholders})""",
+            [now, *source_ids],
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_paused_curated_sources(
+        self,
+        *,
+        source_ids: list[int] | None = None,
+        identifiers: list[str] | None = None,
+    ) -> list[dict]:
+        """Return paused curated sources matching IDs or identifiers."""
+        filters = ["status = 'paused'"]
+        params: list[object] = []
+        id_list = source_ids or []
+        identifier_list = identifiers or []
+        lookup_filters = []
+        if id_list:
+            lookup_filters.append(f"id IN ({','.join('?' for _ in id_list)})")
+            params.extend(id_list)
+        if identifier_list:
+            lookup_filters.append(
+                f"identifier IN ({','.join('?' for _ in identifier_list)})"
+            )
+            params.extend(identifier_list)
+        if lookup_filters:
+            filters.append(f"({' OR '.join(lookup_filters)})")
+        cursor = self.conn.execute(
+            f"""SELECT * FROM curated_sources
+                WHERE {' AND '.join(filters)}
+                ORDER BY source_type ASC, identifier ASC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def restore_curated_sources(
+        self,
+        *,
+        source_ids: list[int] | None = None,
+        identifiers: list[str] | None = None,
+    ) -> int:
+        """Restore paused curated sources to active by ID or identifier."""
+        id_list = source_ids or []
+        identifier_list = identifiers or []
+        lookup_filters = []
+        params: list[object] = []
+        if id_list:
+            lookup_filters.append(f"id IN ({','.join('?' for _ in id_list)})")
+            params.extend(id_list)
+        if identifier_list:
+            lookup_filters.append(
+                f"identifier IN ({','.join('?' for _ in identifier_list)})"
+            )
+            params.extend(identifier_list)
+        if not lookup_filters:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            f"""UPDATE curated_sources
+                SET status = 'active', reviewed_at = ?
+                WHERE status = 'paused' AND ({' OR '.join(lookup_filters)})""",
+            [now, *params],
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def insert_candidate_source(
         self,
         source_type: str,
