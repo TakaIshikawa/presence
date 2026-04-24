@@ -1170,6 +1170,56 @@ class Database:
         )
         return [self._github_activity_from_row(row) for row in cursor.fetchall()]
 
+    def get_recent_merged_github_pull_requests(
+        self,
+        days: int = 7,
+        limit: int | None = 10,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return recently merged GitHub pull requests, newest first."""
+        if days <= 0 or (limit is not None and limit <= 0):
+            return []
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+        params: list[object] = [cutoff]
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE updated_at >= ?
+                  AND activity_type = 'pull_request'
+                  AND LOWER(COALESCE(state, '')) = 'closed'
+                ORDER BY COALESCE(merged_at, updated_at) DESC, id DESC""",
+            tuple(params),
+        )
+
+        rows: list[dict] = []
+        for row in cursor.fetchall():
+            item = self._github_activity_from_row(row)
+            metadata = item.get("metadata") or {}
+            if item.get("merged_at") or metadata.get("merged") is True:
+                rows.append(item)
+                if limit is not None and len(rows) >= limit:
+                    break
+        return rows
+
+    def get_github_workflow_runs(
+        self,
+        limit: int | None = 50,
+    ) -> list[dict]:
+        """Return workflow_run GitHub activity, newest first."""
+        if limit is not None and limit <= 0:
+            return []
+        limit_clause = ""
+        params: list[object] = []
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT * FROM github_activity
+                WHERE activity_type = 'workflow_run'
+                ORDER BY updated_at DESC, id DESC{limit_clause}""",
+            tuple(params),
+        )
+        return [self._github_activity_from_row(row) for row in cursor.fetchall()]
     def get_unresolved_github_activity(
         self,
         limit: int = 10,
@@ -5499,6 +5549,10 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def insert_content_idea(self, **kwargs) -> int:
+        """Compatibility wrapper for adding a content idea."""
+        return self.add_content_idea(**kwargs)
 
     def get_content_idea(self, idea_id: int) -> dict | None:
         """Get one content idea by ID."""

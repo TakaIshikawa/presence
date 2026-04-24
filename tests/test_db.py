@@ -1381,6 +1381,132 @@ class TestGitHubActivity:
         assert [row["activity_id"] for row in recent] == ["repo#1:issue"]
         assert [row["activity_id"] for row in unresolved] == ["repo#1:issue"]
 
+    def test_github_workflow_runs_helper_returns_newest_first(self, db):
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="workflow_run",
+            number=1,
+            title="Tests",
+            state="failure",
+            author="github-actions",
+            url="url-1",
+            updated_at="2026-04-01T12:00:00+00:00",
+            metadata={"workflow_name": "Tests", "conclusion": "failure"},
+        )
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="workflow_run",
+            number=2,
+            title="Deploy",
+            state="success",
+            author="github-actions",
+            url="url-2",
+            updated_at="2026-04-02T12:00:00+00:00",
+            metadata={"workflow_name": "Deploy", "conclusion": "success"},
+        )
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="issue",
+            number=3,
+            title="Issue",
+            state="open",
+            author="taka",
+            url="url-3",
+            updated_at="2026-04-03T12:00:00+00:00",
+        )
+
+        rows = db.get_github_workflow_runs(limit=10)
+
+        assert [row["activity_id"] for row in rows] == [
+            "repo#2:workflow_run",
+            "repo#1:workflow_run",
+        ]
+        assert rows[0]["metadata"]["workflow_name"] == "Deploy"
+
+    def test_insert_content_idea_alias(self, db):
+        idea_id = db.insert_content_idea(
+            note="Workflow failed",
+            topic="workflow failure",
+            source="github_workflow_failure_seed",
+            source_metadata={"github_activity_id": "repo#1:workflow_run"},
+        )
+
+        idea = db.get_content_idea(idea_id)
+
+        assert idea["note"] == "Workflow failed"
+        assert idea["source"] == "github_workflow_failure_seed"
+
+    def test_recent_merged_github_pull_requests_filters_before_limit(self, db):
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="pull_request",
+            number=1,
+            title="Unmerged closed PR",
+            state="closed",
+            author="taka",
+            url="url-1",
+            updated_at="2026-04-03T12:00:00+00:00",
+            metadata={"merged": False},
+        )
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="pull_request",
+            number=2,
+            title="Merged PR",
+            state="closed",
+            author="taka",
+            url="url-2",
+            updated_at="2026-04-02T12:00:00+00:00",
+            merged_at="2026-04-02T11:00:00+00:00",
+            metadata={"merged": True},
+        )
+        db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="pull_request",
+            number=3,
+            title="Open PR",
+            state="open",
+            author="taka",
+            url="url-3",
+            updated_at="2026-04-03T13:00:00+00:00",
+            metadata={"merged": False},
+        )
+
+        rows = db.get_recent_merged_github_pull_requests(
+            days=7,
+            limit=1,
+            now=datetime(2026, 4, 4, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert [row["activity_id"] for row in rows] == ["repo#2:pull_request"]
+
+    def test_find_similar_planned_topic_matches_topic_or_source_activity(self, db):
+        topic_id = db.insert_planned_topic(topic="Reliability Workflows")
+        source_id = db.insert_planned_topic(
+            topic="Different topic",
+            source_material=json.dumps(
+                {
+                    "source": "github_pr_topic_seed",
+                    "activity_id": "repo#42:pull_request",
+                }
+            ),
+        )
+        skipped_id = db.insert_planned_topic(
+            topic="Old skipped topic",
+            source_material=json.dumps({"activity_id": "repo#99:pull_request"}),
+            status="skipped",
+        )
+
+        topic_match = db.find_similar_planned_topic(topic=" reliability   workflows ")
+        source_match = db.find_similar_planned_topic(source_activity_id="repo#42:pull_request")
+        skipped_match = db.find_similar_planned_topic(source_activity_id="repo#99:pull_request")
+
+        assert topic_match["id"] == topic_id
+        assert topic_match["duplicate_reason"] == "topic"
+        assert source_match["id"] == source_id
+        assert source_match["duplicate_reason"] == "source_activity_id"
+        assert skipped_match is None
+        assert skipped_id > 0
 
 # --- Commit-prompt correlation ---
 
