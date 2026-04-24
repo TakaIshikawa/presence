@@ -2056,6 +2056,69 @@ class TestGeneratedContent:
 
         assert count == 1
 
+    def test_publication_url_backfill_helpers_skip_existing_urls(self, db):
+        missing_url = self._insert_content(db, content="Missing URL")
+        existing_url = self._insert_content(db, content="Existing URL")
+
+        db.upsert_publication_success(
+            missing_url,
+            "x",
+            platform_post_id="tweet-missing",
+            published_at="2026-04-17T01:00:00+00:00",
+        )
+        db.upsert_publication_success(
+            existing_url,
+            "x",
+            platform_post_id="tweet-existing",
+            platform_url="https://x.com/taka/status/tweet-existing",
+            published_at="2026-04-17T01:00:00+00:00",
+        )
+
+        rows = db.list_publication_url_backfill_candidates(
+            days=7,
+            platform="x",
+            now=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        )
+
+        assert [row["content_id"] for row in rows] == [missing_url]
+        assert db.update_publication_platform_url(
+            rows[0]["publication_id"],
+            "https://x.com/taka/status/tweet-missing",
+        )
+        assert not db.update_publication_platform_url(
+            rows[0]["publication_id"],
+            "https://x.com/taka/status/overwritten",
+        )
+        assert db.get_publication_state(missing_url, "x")["platform_url"] == (
+            "https://x.com/taka/status/tweet-missing"
+        )
+
+    def test_count_platform_queue_items_between_counts_all_platform_target(self, db):
+        start = "2026-04-17T00:00:00+00:00"
+        end = "2026-04-18T00:00:00+00:00"
+        in_window = self._insert_content(db, content="All platform")
+        held = self._insert_content(db, content="Held")
+        out_window = self._insert_content(db, content="Tomorrow")
+
+        db.queue_for_publishing(
+            in_window,
+            "2026-04-17T12:00:00+00:00",
+            platform="all",
+        )
+        held_id = db.queue_for_publishing(
+            held,
+            "2026-04-17T13:00:00+00:00",
+            platform="x",
+        )
+        db.hold_publish_queue_item(held_id, reason="manual")
+        db.queue_for_publishing(
+            out_window,
+            "2026-04-18T12:00:00+00:00",
+            platform="x",
+        )
+
+        assert db.count_platform_queue_items_between("x", start, end) == 1
+        assert db.count_platform_queue_items_between("bluesky", start, end) == 1
     def test_insert_content_variant(self, db):
         content_id = self._insert_content(db)
 

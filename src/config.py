@@ -27,6 +27,7 @@ class XConfig:
     api_secret: str
     access_token: str
     access_token_secret: str
+    username: str = ""
 
 
 @dataclass
@@ -712,7 +713,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
             api_key=_resolve_env_var(_require(data, "x", "api_key", section="x")),
             api_secret=_resolve_env_var(_require(data, "x", "api_secret", section="x")),
             access_token=_resolve_env_var(_require(data, "x", "access_token", section="x")),
-            access_token_secret=_resolve_env_var(_require(data, "x", "access_token_secret", section="x"))
+            access_token_secret=_resolve_env_var(_require(data, "x", "access_token_secret", section="x")),
+            username=_resolve_env_var(
+                data["x"].get("username", data["x"].get("handle", ""))
+            ),
         ),
         bluesky=bluesky_config,
         anthropic=AnthropicConfig(

@@ -179,6 +179,9 @@ def test_publication_ledger_json_output(db):
     published = by_content[ids["published_all"]]
     assert published["bluesky_uri"] == "at://did:plc:ok/app.bsky.feed.post/ok"
     assert published["content_publication"]["status"] == "published"
+    assert published["content_publication"]["platform_url"] == (
+        "https://bsky.app/profile/test/post/ok"
+    )
 
 
 def test_publication_ledger_json_output_optionally_includes_attempt_summary(db):

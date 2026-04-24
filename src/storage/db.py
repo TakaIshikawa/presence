@@ -2085,6 +2085,75 @@ class Database:
             attempts.append(attempt)
         return attempts
 
+    def list_publication_url_backfill_candidates(
+        self,
+        days: int = 30,
+        platform: str | None = None,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return publication rows with missing platform URLs and useful IDs."""
+        if days <= 0:
+            raise ValueError("days must be positive")
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).isoformat()
+
+        filters = [
+            "(cp.platform_url IS NULL OR TRIM(cp.platform_url) = '')",
+            """COALESCE(
+                   cp.published_at,
+                   gc.published_at,
+                   cp.updated_at,
+                   gc.created_at
+               ) >= ?""",
+        ]
+        params: list[object] = [cutoff]
+        if platform and platform != "all":
+            filters.append("cp.platform = ?")
+            params.append(platform)
+
+        cursor = self.conn.execute(
+            f"""SELECT
+                   cp.id AS publication_id,
+                   cp.content_id,
+                   cp.platform,
+                   cp.status,
+                   cp.platform_post_id,
+                   cp.platform_url,
+                   cp.published_at AS platform_published_at,
+                   cp.updated_at AS publication_updated_at,
+                   gc.tweet_id,
+                   gc.bluesky_uri,
+                   gc.published_url,
+                   gc.published_at AS generated_published_at,
+                   gc.created_at AS generated_at,
+                   gc.content
+               FROM content_publications cp
+               INNER JOIN generated_content gc ON gc.id = cp.content_id
+               WHERE {" AND ".join(filters)}
+               ORDER BY
+                   COALESCE(cp.published_at, gc.published_at, cp.updated_at, gc.created_at) DESC,
+                   cp.id DESC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_publication_platform_url(
+        self,
+        publication_id: int,
+        platform_url: str,
+    ) -> bool:
+        """Set a missing publication URL without overwriting an existing URL."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """UPDATE content_publications
+               SET platform_url = ?, updated_at = ?
+               WHERE id = ?
+                 AND (platform_url IS NULL OR TRIM(platform_url) = '')""",
+            (platform_url, now, publication_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     def get_publication_ledger(
         self,
         days: int = 30,
