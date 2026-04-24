@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from engagement.cultivate_bridge import PersonContext, ProactiveAction
 from review_proactive import (
+    DEFAULT_TARGET_COOLDOWN_HOURS,
+    ProactiveCooldownPolicy,
     _normalize_presence_action,
     _normalize_cultivate_action,
     _mark_completed,
@@ -23,7 +25,11 @@ from review_proactive import (
     _publish_text_action,
     _account_cooldown_block_reason,
     _account_cooldown_hours,
+    _configured_author_cooldown_hours,
+    _cooldown_block_reason,
+    _dismiss_cooldown_blocked_actions,
     _parse_platform_metadata,
+    parse_args,
 )
 
 
@@ -325,6 +331,24 @@ class TestDailyCapIntegration:
 
 
 class TestAccountCooldownIntegration:
+    def test_parse_args_supports_cooldown_flags(self):
+        args = parse_args([
+            "--author-cooldown-hours",
+            "12",
+            "--target-cooldown-hours",
+            "24",
+            "--dismiss-cooldown-blocked",
+        ])
+
+        assert args.author_cooldown_hours == 12
+        assert args.target_cooldown_hours == 24
+        assert args.dismiss_cooldown_blocked is True
+
+    def test_parse_args_uses_conservative_target_default(self):
+        args = parse_args([])
+
+        assert args.target_cooldown_hours == DEFAULT_TARGET_COOLDOWN_HOURS
+
     def test_configured_cooldown_hours(self):
         config = SimpleNamespace(
             proactive=SimpleNamespace(enabled=True, account_cooldown_hours=48)
@@ -336,6 +360,12 @@ class TestAccountCooldownIntegration:
             proactive=SimpleNamespace(enabled=False, account_cooldown_hours=48)
         )
         assert _account_cooldown_hours(config) == 0
+
+    def test_cli_override_wins_over_configured_cooldown(self):
+        config = SimpleNamespace(
+            proactive=SimpleNamespace(enabled=True, account_cooldown_hours=48)
+        )
+        assert _configured_author_cooldown_hours(config, override=6) == 6
 
     @pytest.mark.parametrize("action_type", ["reply", "quote_tweet", "like", "retweet"])
     def test_blocks_approval_when_account_contacted_recently(self, db, action_type):
@@ -376,6 +406,93 @@ class TestAccountCooldownIntegration:
         )
 
         assert _account_cooldown_block_reason(action, db, cooldown_hours=72) is None
+
+    def test_block_reason_includes_target_duplicate(self, db):
+        older_id = db.insert_proactive_action(
+            action_type="like",
+            target_tweet_id="same-target",
+            target_tweet_text="test",
+            target_author_handle="alice",
+        )
+        newer_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="same-target",
+            target_tweet_text="test",
+            target_author_handle="bob",
+        )
+        action = _normalize_presence_action(
+            _make_presence_row(
+                id=newer_id,
+                action_type="reply",
+                target_tweet_id="same-target",
+                target_author_handle="bob",
+            )
+        )
+
+        reason = _cooldown_block_reason(
+            action,
+            db,
+            ProactiveCooldownPolicy(author_cooldown_hours=0, target_cooldown_hours=72),
+        )
+
+        assert older_id != newer_id
+        assert "target tweet" in reason
+
+    def test_dismiss_cooldown_blocked_actions_only_dismisses_blocked_presence(self, db):
+        posted_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="posted",
+            target_tweet_text="test",
+            target_author_handle="alice",
+        )
+        blocked_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="blocked",
+            target_tweet_text="test",
+            target_author_handle="alice",
+        )
+        unrelated_id = db.insert_proactive_action(
+            action_type="reply",
+            target_tweet_id="unrelated",
+            target_tweet_text="test",
+            target_author_handle="bob",
+        )
+        db.mark_proactive_posted(posted_id, "posted-result")
+        actions = [
+            _normalize_presence_action(
+                _make_presence_row(
+                    id=blocked_id,
+                    target_tweet_id="blocked",
+                    target_author_handle="alice",
+                )
+            ),
+            _normalize_presence_action(
+                _make_presence_row(
+                    id=unrelated_id,
+                    target_tweet_id="unrelated",
+                    target_author_handle="bob",
+                )
+            ),
+        ]
+
+        dismissed = _dismiss_cooldown_blocked_actions(
+            actions,
+            db,
+            bridge=None,
+            policy=ProactiveCooldownPolicy(
+                author_cooldown_hours=72,
+                target_cooldown_hours=0,
+            ),
+        )
+
+        rows = {
+            row["id"]: row["status"]
+            for row in db.conn.execute("SELECT id, status FROM proactive_actions")
+        }
+        assert dismissed == 1
+        assert rows[blocked_id] == "dismissed"
+        assert rows[unrelated_id] == "pending"
+        assert rows[posted_id] == "posted"
 
 
 # --- Open action URL ---

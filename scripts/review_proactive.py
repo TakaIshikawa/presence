@@ -5,6 +5,7 @@ Primary source: presence's proactive_actions table (from discover_replies.py).
 Fallback source: cultivate's actions table (if enabled).
 """
 
+import argparse
 import json
 import re
 import sys
@@ -16,12 +17,47 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context
 from output.x_client import XClient
+from engagement.proactive_cooldown import (
+    DEFAULT_AUTHOR_COOLDOWN_HOURS,
+    DEFAULT_TARGET_COOLDOWN_HOURS,
+    ProactiveCooldownPolicy,
+    evaluate_proactive_cooldown,
+)
 from engagement.reply_drafter import ReplyDrafter
 from review_helpers import truncate, read_char, format_relationship_context
 
 _EXEC_TAG_RE = re.compile(r"^\[(\w+)\]")
 _VALID_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet", "follow"}
 _COOLDOWN_EXEC_TYPES = {"like", "retweet", "reply", "quote_tweet"}
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse review options."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--author-cooldown-hours",
+        type=int,
+        default=None,
+        help=(
+            "Block actions to authors with recent posted/approved actions "
+            f"(default: config proactive.account_cooldown_hours or {DEFAULT_AUTHOR_COOLDOWN_HOURS})"
+        ),
+    )
+    parser.add_argument(
+        "--target-cooldown-hours",
+        type=int,
+        default=DEFAULT_TARGET_COOLDOWN_HOURS,
+        help=(
+            "Block duplicate actions to the same target tweet "
+            f"(default: {DEFAULT_TARGET_COOLDOWN_HOURS})"
+        ),
+    )
+    parser.add_argument(
+        "--dismiss-cooldown-blocked",
+        action="store_true",
+        help="Dismiss pending presence actions that are blocked by cooldowns and exit.",
+    )
+    return parser.parse_args(argv)
 
 
 def _parse_platform_metadata(platform_metadata: str | dict | None) -> dict:
@@ -161,24 +197,65 @@ def _account_cooldown_hours(config) -> int:
 
 def _account_cooldown_block_reason(action: dict, db, cooldown_hours: int) -> str | None:
     """Return a human-readable reason when approval is blocked by account cooldown."""
-    if action.get("action_type") not in _COOLDOWN_EXEC_TYPES or cooldown_hours <= 0:
-        return None
+    legacy_action = dict(action)
+    legacy_action["id"] = None
+    result = evaluate_proactive_cooldown(
+        db,
+        legacy_action,
+        ProactiveCooldownPolicy(
+            author_cooldown_hours=cooldown_hours,
+            target_cooldown_hours=0,
+        ),
+    )
+    return result.reason
 
-    handle = action.get("target_handle", "")
-    if not handle:
-        return None
 
-    count = db.count_recent_proactive_posts_to_author(handle, cooldown_hours)
-    if count <= 0:
-        return None
+def _configured_author_cooldown_hours(config, override: int | None) -> int:
+    """Return the author cooldown window for this review run."""
+    if override is not None:
+        return max(0, override)
+    if config.proactive and config.proactive.enabled:
+        return _account_cooldown_hours(config)
+    return DEFAULT_AUTHOR_COOLDOWN_HOURS
 
-    return (
-        f"@{handle.lstrip('@')} has {count} posted proactive action"
-        f"{'s' if count != 1 else ''} in the last {cooldown_hours} hours"
+
+def _cooldown_policy(config, args: argparse.Namespace) -> ProactiveCooldownPolicy:
+    """Build cooldown policy from CLI options and config."""
+    return ProactiveCooldownPolicy(
+        author_cooldown_hours=_configured_author_cooldown_hours(
+            config, args.author_cooldown_hours
+        ),
+        target_cooldown_hours=max(0, args.target_cooldown_hours),
     )
 
 
-def main():
+def _cooldown_block_reason(
+    action: dict,
+    db,
+    policy: ProactiveCooldownPolicy,
+) -> str | None:
+    """Return a concise review message if this action is cooldown-blocked."""
+    return evaluate_proactive_cooldown(db, action, policy).reason
+
+
+def _dismiss_cooldown_blocked_actions(
+    actions: list[dict],
+    db,
+    bridge,
+    policy: ProactiveCooldownPolicy,
+) -> int:
+    """Dismiss pending actions blocked by cooldowns without touching others."""
+    dismissed = 0
+    for action in actions:
+        if not evaluate_proactive_cooldown(db, action, policy).blocked:
+            continue
+        _mark_dismissed(action, db, bridge)
+        dismissed += 1
+    return dismissed
+
+
+def main(argv: list[str] | None = None):
+    args = parse_args(argv)
     with script_context() as (config, db):
         # Collect actions from both sources
         actions = []
@@ -204,6 +281,19 @@ def main():
 
         if not actions:
             print("No pending proactive actions.")
+            if bridge:
+                bridge.close()
+            return
+
+        cooldown_policy = _cooldown_policy(config, args)
+        if args.dismiss_cooldown_blocked:
+            dismissed = _dismiss_cooldown_blocked_actions(
+                actions, db, bridge, cooldown_policy
+            )
+            print(
+                f"Dismissed {dismissed} cooldown-blocked proactive action"
+                f"{'s' if dismissed != 1 else ''}."
+            )
             if bridge:
                 bridge.close()
             return
@@ -237,10 +327,8 @@ def main():
 
         # Daily cap enforcement
         max_daily = 999
-        account_cooldown_hours = 0
         if config.proactive and config.proactive.enabled:
             max_daily = config.proactive.max_daily_replies
-            account_cooldown_hours = _account_cooldown_hours(config)
 
         quit_requested = False
         completed = 0
@@ -268,8 +356,8 @@ def main():
                 print()
                 continue
 
-            cooldown_block_reason = _account_cooldown_block_reason(
-                action, db, account_cooldown_hours
+            cooldown_block_reason = _cooldown_block_reason(
+                action, db, cooldown_policy
             )
             if cooldown_block_reason:
                 print(f"\n  Approval blocked: {cooldown_block_reason}.")
