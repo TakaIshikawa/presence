@@ -1,18 +1,66 @@
-"""Newsletter draft preview artifact helpers."""
+"""Local newsletter preview artifact export."""
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from output.attribution_guard import check_publication_attribution_guard
 from output.newsletter import (
     NewsletterAssembler,
     NewsletterContent,
     NewsletterSubjectCandidate,
 )
+
+
+@dataclass(frozen=True)
+class NewsletterPreviewOptions:
+    """Configuration for rendering a newsletter preview."""
+
+    site_url: str = "https://takaishikawa.com"
+    utm_source: str = ""
+    utm_medium: str = ""
+    utm_campaign_template: str = ""
+    manual_subject: str = ""
+    include_metadata: bool = False
+
+
+@dataclass(frozen=True)
+class NewsletterPreview:
+    """Rendered local preview of a newsletter issue."""
+
+    selected_subject: str
+    subject_candidates: list[dict[str, Any]]
+    source_content_ids: list[int]
+    body_markdown: str
+    links: list[dict[str, Any]]
+    warnings: list[str]
+    week_start: str
+    week_end: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self, *, include_metadata: bool = False) -> dict[str, Any]:
+        payload = {
+            "selected_subject": self.selected_subject,
+            "subject": self.selected_subject,
+            "subject_candidates": self.subject_candidates,
+            "source_content_ids": self.source_content_ids,
+            "body_markdown": self.body_markdown,
+            "links": self.links,
+            "outbound_links": self.links,
+            "warnings": self.warnings,
+            "week_range": {
+                "start": self.week_start,
+                "end": self.week_end,
+            },
+        }
+        if include_metadata:
+            payload["metadata"] = self.metadata
+        return payload
 
 
 def config_text(obj: object, *names: str) -> str:
@@ -38,11 +86,216 @@ def manual_subject_override(config: object, cli_subject: str = "") -> str:
     )
 
 
+def make_newsletter_assembler(db: object, config: object) -> NewsletterAssembler:
+    """Create the same assembler configuration used by the send path."""
+    newsletter = getattr(config, "newsletter", None)
+    return NewsletterAssembler(
+        db,
+        site_url=config_text(newsletter, "site_url") or "https://takaishikawa.com",
+        utm_source=config_text(newsletter, "utm_source"),
+        utm_medium=config_text(newsletter, "utm_medium"),
+        utm_campaign_template=config_text(newsletter, "utm_campaign_template"),
+    )
+
+
+def build_newsletter_preview(
+    db: Any,
+    week_start: datetime,
+    week_end: datetime,
+    options: NewsletterPreviewOptions | None = None,
+) -> NewsletterPreview:
+    """Assemble newsletter content and return a local review preview."""
+    options = options or NewsletterPreviewOptions()
+    assembler = NewsletterAssembler(
+        db,
+        site_url=options.site_url,
+        utm_source=options.utm_source,
+        utm_medium=options.utm_medium,
+        utm_campaign_template=options.utm_campaign_template,
+    )
+    content = assembler.assemble(week_start, week_end)
+    selected_subject = select_subject(content, options.manual_subject)
+    warnings = _preview_warnings(db, content)
+    metadata = {
+        "content_metadata": dict(content.metadata or {}),
+        "include_metadata": options.include_metadata,
+    }
+    if options.manual_subject:
+        metadata["manual_subject"] = options.manual_subject
+
+    return NewsletterPreview(
+        selected_subject=selected_subject,
+        subject_candidates=[
+            candidate_to_dict(candidate)
+            for candidate in subject_candidates_for_storage(
+                content,
+                selected_subject=selected_subject,
+                manual_subject=options.manual_subject,
+            )
+        ],
+        source_content_ids=list(content.source_content_ids or []),
+        body_markdown=content.body_markdown,
+        links=extract_outbound_links(content.body_markdown),
+        warnings=warnings,
+        week_start=week_start.isoformat(),
+        week_end=week_end.isoformat(),
+        metadata=metadata,
+    )
+
+
+def assemble_newsletter_preview(
+    db: object,
+    config: object,
+    week_start: datetime,
+    week_end: datetime,
+    manual_subject: str = "",
+) -> dict:
+    """Assemble newsletter content and return a compatibility preview payload."""
+    preview = build_newsletter_preview(
+        db,
+        week_start,
+        week_end,
+        NewsletterPreviewOptions(
+            site_url=config_text(getattr(config, "newsletter", None), "site_url")
+            or "https://takaishikawa.com",
+            utm_source=config_text(getattr(config, "newsletter", None), "utm_source"),
+            utm_medium=config_text(getattr(config, "newsletter", None), "utm_medium"),
+            utm_campaign_template=config_text(
+                getattr(config, "newsletter", None),
+                "utm_campaign_template",
+            ),
+            manual_subject=manual_subject,
+            include_metadata=True,
+        ),
+    )
+    return preview.as_dict(include_metadata=True)
+
+
+def render_newsletter_preview_markdown(
+    preview: NewsletterPreview,
+    *,
+    include_metadata: bool = False,
+) -> str:
+    """Render a human-readable Markdown preview artifact."""
+    payload = preview.as_dict(include_metadata=include_metadata)
+    candidate_lines = [
+        (
+            f"- {candidate['subject']} "
+            f"(score: {candidate['score']}, source: {candidate['source']})"
+            + (f" - {candidate['rationale']}" if candidate["rationale"] else "")
+        )
+        for candidate in payload["subject_candidates"]
+    ] or ["- None"]
+    link_lines = [
+        f"- [{link['label']}]({link['url']})"
+        for link in payload["outbound_links"]
+    ] or ["- None"]
+    warning_lines = [f"- {warning}" for warning in payload["warnings"]] or ["- None"]
+    source_ids = ", ".join(str(item) for item in payload["source_content_ids"]) or "None"
+
+    sections = [
+        "# Newsletter Preview",
+        "## Week Range",
+        f"- Start: {payload['week_range']['start']}",
+        f"- End: {payload['week_range']['end']}",
+        "## Selected Subject",
+        payload["selected_subject"] or "None",
+        "## Subject Candidates",
+        "\n".join(candidate_lines),
+        "## Source Content IDs",
+        source_ids,
+        "## Outbound Links",
+        "\n".join(link_lines),
+        "## Warnings",
+        "\n".join(warning_lines),
+    ]
+    if include_metadata:
+        sections.extend(
+            [
+                "## Metadata",
+                "```json\n"
+                + json.dumps(payload.get("metadata", {}), indent=2, sort_keys=True)
+                + "\n```",
+            ]
+        )
+    sections.extend(["## Body", payload["body_markdown"]])
+    return "\n\n".join(sections).rstrip() + "\n"
+
+
+def render_newsletter_preview_json(
+    preview: NewsletterPreview,
+    *,
+    include_metadata: bool = False,
+) -> str:
+    """Render a deterministic JSON preview artifact."""
+    return json.dumps(
+        preview.as_dict(include_metadata=include_metadata),
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+
+
+def format_preview_markdown(payload: dict) -> str:
+    """Render a compatibility preview payload as Markdown."""
+    preview = NewsletterPreview(
+        selected_subject=payload.get("selected_subject") or payload.get("subject") or "",
+        subject_candidates=list(payload.get("subject_candidates") or []),
+        source_content_ids=list(payload.get("source_content_ids") or []),
+        body_markdown=payload.get("body_markdown") or "",
+        links=list(payload.get("outbound_links") or payload.get("links") or []),
+        warnings=list(payload.get("warnings") or []),
+        week_start=(payload.get("week_range") or {}).get("start", ""),
+        week_end=(payload.get("week_range") or {}).get("end", ""),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+    return render_newsletter_preview_markdown(preview, include_metadata=bool(payload.get("metadata")))
+
+
+def format_preview_json(payload: dict) -> str:
+    """Render a compatibility preview payload as JSON."""
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def write_newsletter_preview(
+    preview: NewsletterPreview,
+    output_path: str | Path,
+    *,
+    json_mode: bool = False,
+    include_metadata: bool = False,
+) -> None:
+    """Write a preview artifact as Markdown or JSON."""
+    path = Path(output_path)
+    rendered = (
+        render_newsletter_preview_json(
+            preview,
+            include_metadata=include_metadata,
+        )
+        if json_mode
+        else render_newsletter_preview_markdown(
+            preview,
+            include_metadata=include_metadata,
+        )
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered, encoding="utf-8")
+
+
+def write_preview_artifact(path: Path, payload: dict) -> None:
+    """Write a newsletter preview as JSON or Markdown based on extension."""
+    suffix = path.suffix.lower()
+    rendered = (
+        format_preview_markdown(payload)
+        if suffix in {".md", ".markdown"}
+        else format_preview_json(payload)
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered, encoding="utf-8")
+
+
 def select_subject(content: NewsletterContent, manual_subject: str = "") -> str:
-    """Pick the outgoing subject while letting manual overrides win."""
     if manual_subject:
         return manual_subject
-    candidates = getattr(content, "subject_candidates", None) or []
+    candidates = content.subject_candidates or []
     if candidates:
         return candidates[0].subject
     return content.subject
@@ -70,10 +323,7 @@ def subject_candidates_for_storage(
     return candidates
 
 
-def candidate_to_dict(candidate: NewsletterSubjectCandidate | None) -> dict:
-    """Serialize a subject candidate for preview output."""
-    if candidate is None:
-        return {}
+def candidate_to_dict(candidate: NewsletterSubjectCandidate) -> dict[str, Any]:
     return {
         "subject": candidate.subject,
         "score": candidate.score,
@@ -83,386 +333,62 @@ def candidate_to_dict(candidate: NewsletterSubjectCandidate | None) -> dict:
     }
 
 
-def selected_candidate(
-    candidates: list[NewsletterSubjectCandidate], selected_subject: str
-) -> NewsletterSubjectCandidate | None:
-    """Return the stored candidate that matches the selected subject."""
-    for candidate in candidates:
-        if candidate.subject == selected_subject:
-            return candidate
-    return None
-
-
-def subject_selection_payload(
-    selected_subject: str,
-    candidates: list[NewsletterSubjectCandidate],
-    manual_subject: str,
-) -> dict:
-    """Build a structured explanation for the selected subject line."""
-    ranked_candidates = [candidate_to_dict(candidate) for candidate in candidates]
-    picked = selected_candidate(candidates, selected_subject)
-    payload = {
-        "selected_subject": selected_subject,
-        "manual_subject": manual_subject,
-        "selected_candidate": candidate_to_dict(picked),
-        "ranked_candidates": ranked_candidates,
-        "alternatives": [
-            candidate
-            for candidate in ranked_candidates
-            if candidate["subject"] != selected_subject
-        ],
-    }
-    if picked and picked.metadata.get("history"):
-        payload["history"] = picked.metadata["history"]
-    return payload
-
-
-def utm_metadata(config: object, content: NewsletterContent) -> dict:
-    """Collect UTM configuration and generated campaign metadata for review."""
-    newsletter = getattr(config, "newsletter", None)
-    metadata = {
-        "utm_source": config_text(newsletter, "utm_source"),
-        "utm_medium": config_text(newsletter, "utm_medium"),
-        "utm_campaign_template": config_text(newsletter, "utm_campaign_template"),
-    }
-    metadata.update(getattr(content, "metadata", None) or {})
-    return metadata
-
-
-def make_newsletter_assembler(db: object, config: object) -> NewsletterAssembler:
-    """Create the same assembler configuration used by the send path."""
-    newsletter = getattr(config, "newsletter", None)
-    return NewsletterAssembler(
-        db,
-        site_url=config_text(newsletter, "site_url") or "https://takaishikawa.com",
-        utm_source=config_text(newsletter, "utm_source"),
-        utm_medium=config_text(newsletter, "utm_medium"),
-        utm_campaign_template=config_text(newsletter, "utm_campaign_template"),
-    )
-
-
-def assemble_newsletter_preview(
-    db: object,
-    config: object,
-    week_start: datetime,
-    week_end: datetime,
-    manual_subject: str = "",
-) -> dict:
-    """Assemble newsletter content and return a complete preview payload."""
-    content = make_newsletter_assembler(db, config).assemble(week_start, week_end)
-    selected_subject = select_subject(content, manual_subject)
-    candidates = subject_candidates_for_storage(
-        content,
-        selected_subject=selected_subject,
-        manual_subject=manual_subject,
-    )
-    return build_preview_payload(
-        db,
-        config,
-        content,
-        selected_subject,
-        candidates,
-        manual_subject,
-        week_start,
-        week_end,
-    )
-
-
-def build_preview_payload(
-    db: object,
-    config: object,
-    content: NewsletterContent,
-    selected_subject: str,
-    candidates: list[NewsletterSubjectCandidate],
-    manual_subject: str,
-    week_start: datetime,
-    week_end: datetime,
-) -> dict:
-    """Build the structured newsletter preview payload."""
-    body = content.body_markdown
-    selected_posts, warnings = selected_post_payloads(db, content.source_content_ids, body)
-    warnings.extend(body_warning_payloads(body))
-    outbound_links = extract_outbound_links(body)
-    return {
-        "subject": selected_subject,
-        "selected_subject": selected_subject,
-        "intro": extract_intro(body),
-        "body_markdown": body,
-        "body_sections": extract_body_sections(body),
-        "selected_posts": selected_posts,
-        "source_content_ids": content.source_content_ids,
-        "outbound_links": outbound_links,
-        "warnings": warnings,
-        "warning_metadata": warning_metadata(warnings),
-        "subject_candidates": [candidate_to_dict(candidate) for candidate in candidates],
-        "subject_selection": subject_selection_payload(
-            selected_subject,
-            candidates,
-            manual_subject,
-        ),
-        "week_range": {
-            "start": week_start.isoformat(),
-            "end": week_end.isoformat(),
-        },
-        "utm_metadata": utm_metadata(config, content),
-    }
-
-
-def selected_post_payloads(
-    db: object,
-    content_ids: list[int],
-    newsletter_body: str,
-) -> tuple[list[dict], list[dict]]:
-    """Return selected source content metadata and source-level warnings."""
-    selected = []
-    warnings = []
-    for content_id in content_ids:
-        item = _get_generated_content(db, content_id)
-        if not item:
-            warnings.append(
-                {
-                    "type": "missing_content",
-                    "content_id": content_id,
-                    "message": f"Selected content {content_id} was not found.",
-                }
-            )
-            continue
-
-        metrics = _engagement_summary(db, content_id)
-        citations = _citation_summary(db, content_id, newsletter_body)
-        selected.append(
-            {
-                "id": item["id"],
-                "content_type": item.get("content_type"),
-                "content_format": item.get("content_format"),
-                "published_url": item.get("published_url") or "",
-                "published_at": item.get("published_at") or "",
-                "content": item.get("content") or "",
-                "metrics": metrics,
-                "citations": citations,
-            }
-        )
-        if not metrics.get("has_metrics"):
-            warnings.append(
-                {
-                    "type": "missing_metrics",
-                    "content_id": content_id,
-                    "message": f"Selected content {content_id} has no engagement metrics.",
-                }
-            )
-        for source in citations["missing"]:
-            warnings.append(
-                {
-                    "type": "missing_citation",
-                    "content_id": content_id,
-                    "knowledge_id": source["knowledge_id"],
-                    "source_type": source.get("source_type") or "",
-                    "message": (
-                        f"Selected content {content_id} is missing citation "
-                        f"metadata for knowledge {source['knowledge_id']}."
-                    ),
-                }
-            )
-    return selected, warnings
-
-
-def extract_intro(markdown: str) -> str:
-    """Return body text before the first second-level section heading."""
-    text = markdown or ""
-    match = re.search(r"^##\s+", text, flags=re.MULTILINE)
-    if match:
-        text = text[: match.start()]
-    return text.strip()
-
-
-def extract_body_sections(markdown: str) -> list[dict]:
-    """Split rendered newsletter Markdown into reviewable section blocks."""
-    sections = []
-    matches = list(re.finditer(r"^##\s+(.+?)\s*$", markdown or "", flags=re.MULTILINE))
-    for index, match in enumerate(matches):
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
-        sections.append(
-            {
-                "title": match.group(1).strip(),
-                "markdown": (markdown[start:end] or "").strip(),
-            }
-        )
-    return sections
-
-
-def extract_outbound_links(markdown: str) -> list[dict]:
-    """Extract unique outbound links from Markdown and bare URLs."""
+def extract_outbound_links(markdown: str) -> list[dict[str, Any]]:
     links = []
     seen = set()
-
-    def add(url: str, label: str = "") -> None:
-        cleaned = (url or "").strip().rstrip(".,)")
-        if not cleaned or cleaned in seen:
-            return
-        seen.add(cleaned)
-        links.append({"url": cleaned, "label": label.strip()})
-
-    for label, url in re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", markdown or ""):
-        add(url, label)
-    for url in re.findall(r"(?<!\()https?://[^\s<>()]+", markdown or ""):
-        add(url)
+    for match in re.finditer(r"\[([^\]]+)\]\(([^)\s]+)\)", markdown or ""):
+        label = re.sub(r"\s+", " ", match.group(1)).strip()
+        url = match.group(2).strip()
+        if not url or url.startswith("#"):
+            continue
+        key = (label, url)
+        if key in seen:
+            continue
+        seen.add(key)
+        links.append({"label": label, "url": url})
     return links
 
 
-def body_warning_payloads(markdown: str) -> list[dict]:
-    """Return body-level warnings for review metadata."""
+def _preview_warnings(db: Any, content: NewsletterContent) -> list[str]:
     warnings = []
-    if not extract_outbound_links(markdown):
-        warnings.append(
-            {
-                "type": "missing_outbound_links",
-                "message": "Newsletter body contains no outbound links.",
-            }
-        )
+    if not (content.body_markdown or "").strip():
+        warnings.append("No source content selected for newsletter preview.")
+
+    for content_id in content.source_content_ids or []:
+        source = _load_generated_content(db, content_id)
+        if source is None:
+            warnings.append(f"Content {content_id}: selected source content not found.")
+            continue
+        if not (source.get("content") or "").strip():
+            warnings.append(f"Content {content_id}: selected source content is empty.")
+        try:
+            guard = check_publication_attribution_guard(
+                db,
+                content_id,
+                content.body_markdown,
+            )
+        except Exception as exc:
+            warnings.append(
+                f"Content {content_id}: attribution check failed: {exc}"
+            )
+            continue
+        for missing in guard.missing_sources:
+            warnings.append(
+                "Content {content_id}: missing attribution for knowledge "
+                "{knowledge_id}".format(
+                    content_id=content_id,
+                    knowledge_id=missing.knowledge_id,
+                )
+            )
     return warnings
 
 
-def warning_metadata(warnings: list[dict]) -> dict:
-    """Summarize warning counts by type."""
-    by_type: dict[str, int] = {}
-    for warning in warnings:
-        key = warning.get("type") or "unknown"
-        by_type[key] = by_type.get(key, 0) + 1
-    return {"count": len(warnings), "by_type": by_type}
-
-
-def format_preview_json(payload: dict) -> str:
-    """Format a newsletter preview as JSON."""
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
-
-
-def format_preview_markdown(payload: dict) -> str:
-    """Format a newsletter preview as Markdown."""
-    candidate_lines = [
-        (
-            f"- {candidate['subject']} "
-            f"(score: {candidate['score']}, source: {candidate['source']})"
-            + (f" - {candidate['rationale']}" if candidate["rationale"] else "")
-        )
-        for candidate in payload.get("subject_candidates", [])
-    ] or ["- None"]
-    source_ids = ", ".join(str(item) for item in payload.get("source_content_ids", [])) or "None"
-    link_lines = [
-        f"- [{link.get('label') or link['url']}]({link['url']})"
-        for link in payload.get("outbound_links", [])
-    ] or ["- None"]
-    warning_lines = [
-        f"- {warning.get('type', 'warning')}: {warning.get('message', '')}"
-        for warning in payload.get("warnings", [])
-    ] or ["- None"]
-    post_lines = [
-        (
-            f"- {post['id']} ({post.get('content_type') or 'unknown'}): "
-            f"{post.get('published_url') or 'no published URL'}"
-        )
-        for post in payload.get("selected_posts", [])
-    ] or ["- None"]
-    utm_block = format_preview_json(payload.get("utm_metadata", {})).strip()
-    warning_block = format_preview_json(payload.get("warning_metadata", {})).strip()
-    selection = payload.get("subject_selection") or {}
-    return (
-        "# Newsletter Preview\n\n"
-        "## Week Range\n\n"
-        f"- Start: {payload['week_range']['start']}\n"
-        f"- End: {payload['week_range']['end']}\n\n"
-        "## Selected Subject\n\n"
-        f"{payload['subject']}\n\n"
-        "## Intro\n\n"
-        f"{payload.get('intro') or 'None'}\n\n"
-        "## Source Content IDs\n\n"
-        f"{source_ids}\n\n"
-        "## Selected Posts\n\n"
-        f"{chr(10).join(post_lines)}\n\n"
-        "## Outbound Links\n\n"
-        f"{chr(10).join(link_lines)}\n\n"
-        "## Warnings\n\n"
-        f"{chr(10).join(warning_lines)}\n\n"
-        "## Warning Metadata\n\n"
-        f"```json\n{warning_block}\n```\n\n"
-        "## UTM Metadata\n\n"
-        f"```json\n{utm_block}\n```\n\n"
-        "## Subject Selection\n\n"
-        f"- Manual subject: {selection.get('manual_subject') or 'None'}\n"
-        f"- Rationale: {selection.get('selected_candidate', {}).get('rationale') or 'None'}\n"
-        f"- History: {json.dumps(selection.get('history', {}), sort_keys=True)}\n\n"
-        "## Subject Candidates\n\n"
-        f"{chr(10).join(candidate_lines)}\n\n"
-        "## Body\n\n"
-        f"{payload['body_markdown']}\n"
-    )
-
-
-def write_preview_artifact(path: Path, payload: dict) -> None:
-    """Write a newsletter preview as JSON or Markdown based on extension."""
-    suffix = path.suffix.lower()
-    if suffix in {".md", ".markdown"}:
-        rendered = format_preview_markdown(payload)
-    else:
-        rendered = format_preview_json(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(rendered, encoding="utf-8")
-
-
-def _get_generated_content(db: object, content_id: int) -> dict | None:
+def _load_generated_content(db: Any, content_id: int) -> dict[str, Any] | None:
     getter = getattr(db, "get_generated_content", None)
     if callable(getter):
-        item = getter(content_id)
-        return item if isinstance(item, dict) else None
-    conn = getattr(db, "conn", None)
-    if conn is None:
-        return None
-    row = conn.execute("SELECT * FROM generated_content WHERE id = ?", (content_id,)).fetchone()
+        return getter(content_id)
+    row = db.conn.execute(
+        "SELECT * FROM generated_content WHERE id = ?",
+        (content_id,),
+    ).fetchone()
     return dict(row) if row else None
-
-
-def _engagement_summary(db: object, content_id: int) -> dict:
-    getter = getattr(db, "get_engagement_snapshots_for_content", None)
-    snapshots = getter(content_id) if callable(getter) else []
-    snapshots = snapshots if isinstance(snapshots, list) else []
-    latest = snapshots[-1] if snapshots else None
-    return {
-        "has_metrics": bool(snapshots),
-        "snapshot_count": len(snapshots),
-        "latest": _jsonable_dict(latest) if latest else {},
-    }
-
-
-def _citation_summary(db: object, content_id: int, newsletter_body: str) -> dict:
-    getter = getattr(db, "get_content_lineage", None)
-    links = getter(content_id) if callable(getter) else []
-    links = links if isinstance(links, list) else []
-    cited = []
-    missing = []
-    for link in links:
-        source_url = (link.get("source_url") or "").strip()
-        source = {
-            "knowledge_id": link.get("id") or link.get("knowledge_id"),
-            "source_type": link.get("source_type") or "",
-            "source_url": source_url,
-            "author": link.get("author") or "",
-        }
-        is_external = source["source_type"] not in {"own_post", "own_conversation"}
-        if not is_external:
-            continue
-        if not source_url or source_url not in newsletter_body:
-            missing.append(source)
-        else:
-            cited.append(source)
-    return {
-        "linked_count": len(links),
-        "cited_count": len(cited),
-        "missing_count": len(missing),
-        "missing": missing,
-    }
-
-
-def _jsonable_dict(value: dict[str, Any] | None) -> dict:
-    if not value:
-        return {}
-    return {key: item for key, item in value.items()}
