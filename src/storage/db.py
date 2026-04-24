@@ -6191,6 +6191,47 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_queued_publish_queue_items_for_audit(self) -> list[dict]:
+        """Return queued publish queue items for collision auditing."""
+        cursor = self.conn.execute(
+            """SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
+                      pq.status, pq.hold_reason,
+                      pq.created_at, gc.content_type, gc.content
+               FROM publish_queue pq
+               INNER JOIN generated_content gc ON gc.id = pq.content_id
+               WHERE pq.status = 'queued'
+               ORDER BY pq.scheduled_at ASC, pq.id ASC"""
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def apply_publish_queue_audit_holds(
+        self,
+        hold_reasons: dict[int, str],
+    ) -> list[dict]:
+        """Hold queued publish queue items flagged by the collision audit."""
+        if not hold_reasons:
+            return []
+
+        updated: list[dict] = []
+        for queue_id, reason in hold_reasons.items():
+            row = self.get_publish_queue_item(queue_id)
+            if row is None:
+                raise ValueError(f"publish queue item not found: {queue_id}")
+            if row["status"] != "queued":
+                continue
+            self.conn.execute(
+                """UPDATE publish_queue
+                   SET status = 'held', hold_reason = ?,
+                       error = NULL, error_category = NULL
+                   WHERE id = ? AND status = 'queued'""",
+                (reason, queue_id),
+            )
+            changed = self.get_publish_queue_item(queue_id)
+            if changed is not None:
+                updated.append(changed)
+        self.conn.commit()
+        return updated
+
     def get_due_queue_items(self, now: str) -> list[dict]:
         """Get queued items that are ready to publish.
 
