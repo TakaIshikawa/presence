@@ -1,4 +1,4 @@
-"""Fetch recently updated GitHub issues, pull requests, releases, and discussions."""
+"""Fetch recently updated GitHub issues, pull requests, releases, discussions, comments, and workflow runs."""
 
 from __future__ import annotations
 
@@ -486,6 +486,45 @@ class GitHubActivityClient:
                     break
             page += 1
 
+    def get_repo_workflow_runs(
+        self,
+        owner: str,
+        repo: str,
+        repo_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Iterator[GitHubActivity]:
+        """Yield recently updated GitHub Actions workflow runs."""
+        yielded = 0
+        page = 1
+        while yielded < limit:
+            per_page = min(100, limit - yielded)
+            data = self._get(
+                f"/repos/{owner}/{repo}/actions/runs",
+                {
+                    "per_page": per_page,
+                    "page": page,
+                },
+            )
+            runs = data.get("workflow_runs", []) if isinstance(data, dict) else []
+            if not runs:
+                break
+            for item in runs:
+                activity_at = (
+                    _parse_github_datetime(item.get("updated_at"))
+                    or _parse_github_datetime(item.get("run_started_at"))
+                    or _parse_github_datetime(item.get("created_at"))
+                )
+                if since and activity_at and activity_at < since:
+                    return
+                yield self._workflow_run_to_activity(item, repo_name or repo)
+                yielded += 1
+                if yielded >= limit:
+                    break
+            if len(runs) < per_page:
+                break
+            page += 1
+
     def get_repo_discussions(
         self,
         owner: str,
@@ -569,8 +608,9 @@ class GitHubActivityClient:
         include_pull_requests: bool = False,
         include_issues: bool = True,
         include_comments: bool = False,
+        include_workflow_runs: bool = False,
     ) -> Iterator[GitHubActivity]:
-        """Yield recent issues, releases, and optional PRs/discussions/comments."""
+        """Yield recent issues, releases, and optional pull requests/discussions/comments/workflow runs."""
         for repo in self.get_configured_repos(repositories, include_forks=include_forks):
             try:
                 if include_issues:
@@ -611,6 +651,14 @@ class GitHubActivityClient:
                     since=since,
                     limit=limit_per_repo,
                 )
+                if include_workflow_runs:
+                    yield from self.get_repo_workflow_runs(
+                        repo["owner"],
+                        repo["name"],
+                        repo_name=repo["repo_name"],
+                        since=since,
+                        limit=limit_per_repo,
+                    )
                 if include_discussions:
                     yield from self.get_repo_discussions(
                         repo["owner"],
@@ -873,6 +921,62 @@ class GitHubActivityClient:
             metadata={key: value for key, value in metadata.items() if value is not None},
         )
 
+    def _workflow_run_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
+        workflow_name = item.get("name") or item.get("workflow_name") or ""
+        display_title = item.get("display_title") or (item.get("head_commit") or {}).get("message") or ""
+        status = item.get("status") or ""
+        conclusion = item.get("conclusion") or ""
+        state = conclusion or status
+        title_parts = [part for part in [workflow_name, display_title] if part]
+        title = " - ".join(title_parts) or f"Workflow run {item.get('id')}"
+        if state:
+            title = f"{title} ({state})"
+
+        updated_at = (
+            _parse_github_datetime(item.get("updated_at"))
+            or _parse_github_datetime(item.get("run_started_at"))
+            or _parse_github_datetime(item.get("created_at"))
+        )
+        created_at = (
+            _parse_github_datetime(item.get("created_at"))
+            or _parse_github_datetime(item.get("run_started_at"))
+            or updated_at
+        )
+        started_at = _parse_github_datetime(item.get("run_started_at"))
+        duration_seconds = None
+        if started_at and updated_at:
+            duration_seconds = max(0, int((updated_at - started_at).total_seconds()))
+
+        metadata = {
+            "workflow_name": self.redactor.redact(workflow_name),
+            "event": item.get("event"),
+            "branch": self.redactor.redact(item.get("head_branch") or ""),
+            "head_sha": item.get("head_sha"),
+            "conclusion": conclusion or None,
+            "duration_seconds": duration_seconds,
+        }
+        metadata = {key: value for key, value in metadata.items() if value not in (None, "")}
+
+        body_parts = [
+            f"event={item.get('event')}" if item.get("event") else "",
+            f"branch={item.get('head_branch')}" if item.get("head_branch") else "",
+            f"head_sha={item.get('head_sha')}" if item.get("head_sha") else "",
+        ]
+
+        return GitHubActivity(
+            repo_name=repo_name,
+            activity_type="workflow_run",
+            number=item["id"],
+            title=self.redactor.redact(title),
+            state=state,
+            author=(item.get("actor") or {}).get("login", ""),
+            url=item.get("html_url", ""),
+            updated_at=updated_at,
+            created_at=created_at,
+            body=_body_excerpt(self.redactor.redact(" ".join(part for part in body_parts if part))),
+            metadata=metadata,
+        )
+
     def _discussion_to_activity(self, item: dict, repo_name: str) -> GitHubActivity:
         category = item.get("category") or {}
         answer = item.get("answer") or {}
@@ -924,6 +1028,7 @@ def poll_new_activity(
     include_pull_requests: bool = False,
     include_issues: bool = True,
     include_comments: bool = False,
+    include_workflow_runs: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: Optional[Iterable[str | dict]] = None,
@@ -945,6 +1050,7 @@ def poll_new_activity(
         include_pull_requests=include_pull_requests,
         include_issues=include_issues,
         include_comments=include_comments,
+        include_workflow_runs=include_workflow_runs,
     ):
         if db.is_github_activity_processed(
             activity.repo_name,

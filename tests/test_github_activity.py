@@ -1,6 +1,6 @@
 """Unit tests for GitHub issue, pull request, release, and discussion ingestion."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -135,6 +135,24 @@ def _discussion_payload(number: int = 4, title: str = "Discussion") -> dict:
             "createdAt": "2026-04-01T12:20:00Z",
             "updatedAt": "2026-04-01T12:25:00Z",
         },
+    }
+
+
+def _workflow_run_payload(run_id: int = 1001, name: str = "CI") -> dict:
+    return {
+        "id": run_id,
+        "name": name,
+        "display_title": "Fix ticket-1234 validation",
+        "status": "completed",
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "feature/ticket-1234",
+        "head_sha": "abc123def456",
+        "html_url": f"https://github.com/taka/repo/actions/runs/{run_id}",
+        "created_at": "2026-04-01T12:00:00Z",
+        "run_started_at": "2026-04-01T12:05:00Z",
+        "updated_at": "2026-04-01T12:08:30Z",
+        "actor": {"login": "taka"},
     }
 
 
@@ -406,6 +424,61 @@ class TestGitHubActivityClient:
             "prerelease": True,
         }
 
+    @patch("requests.get", create=True)
+    def test_get_repo_workflow_runs_paginates_limits_and_normalizes_metadata(self, mock_get):
+        first = _workflow_run_payload(1001)
+        filler = [_workflow_run_payload(2000 + index, f"CI {index}") for index in range(99)]
+        second = _workflow_run_payload(1101, "Deploy")
+        old = _workflow_run_payload(1003, "Old")
+        old["updated_at"] = "2026-03-01T12:00:00Z"
+        mock_get.side_effect = [
+            _mock_response(json_data={"workflow_runs": [first, *filler]}),
+            _mock_response(json_data={"workflow_runs": [second, old]}),
+        ]
+
+        client = GitHubActivityClient(
+            "tok",
+            "taka",
+            redaction_patterns=[
+                {"name": "ticket", "pattern": r"ticket-\d+", "placeholder": "[REDACTED_TICKET]"}
+            ],
+        )
+        runs = list(
+            client.get_repo_workflow_runs(
+                "taka",
+                "repo",
+                repo_name="taka/repo",
+                since=TIMESTAMP,
+                limit=101,
+            )
+        )
+
+        assert len(runs) == 101
+        assert runs[0].number == 1001
+        assert runs[-1].number == 1101
+        run = runs[0]
+        assert run.activity_type == "workflow_run"
+        assert run.repo_name == "taka/repo"
+        assert run.title == "CI - Fix [REDACTED_TICKET] validation (success)"
+        assert run.state == "success"
+        assert run.author == "taka"
+        assert run.url == "https://github.com/taka/repo/actions/runs/1001"
+        assert run.updated_at.isoformat() == "2026-04-01T12:08:30+00:00"
+        assert run.created_at.isoformat() == "2026-04-01T12:00:00+00:00"
+        assert run.body == "event=push branch=feature/[REDACTED_TICKET] head_sha=abc123def456"
+        assert run.metadata == {
+            "workflow_name": "CI",
+            "event": "push",
+            "branch": "feature/[REDACTED_TICKET]",
+            "head_sha": "abc123def456",
+            "conclusion": "success",
+            "duration_seconds": 210,
+        }
+        assert mock_get.call_args_list[0].kwargs["params"]["per_page"] == 100
+        assert mock_get.call_args_list[0].kwargs["params"]["page"] == 1
+        assert mock_get.call_args_list[1].kwargs["params"]["per_page"] == 1
+        assert mock_get.call_args_list[1].kwargs["params"]["page"] == 2
+
     @patch("requests.post", create=True)
     def test_get_repo_discussions_normalizes_graphql_metadata_and_redacts(self, mock_post):
         mock_post.return_value = _mock_response(
@@ -458,6 +531,7 @@ class TestGitHubActivityClient:
         with pytest.raises(GitHubAuthError):
             list(client.get_repo_issues("taka", "repo"))
 
+    @patch.object(GitHubActivityClient, "get_repo_workflow_runs")
     @patch.object(GitHubActivityClient, "get_repo_pull_requests")
     @patch.object(GitHubActivityClient, "get_repo_review_comments")
     @patch.object(GitHubActivityClient, "get_repo_issue_comments")
@@ -474,6 +548,7 @@ class TestGitHubActivityClient:
         mock_issue_comments,
         mock_review_comments,
         mock_pulls,
+        mock_workflows,
     ):
         mock_repos.return_value = [
             {"owner": "taka", "name": "missing", "repo_name": "missing"},
@@ -502,6 +577,7 @@ class TestGitHubActivityClient:
         mock_review_comments.return_value = iter([])
         mock_releases.return_value = iter([])
         mock_discussions.return_value = iter([])
+        mock_workflows.return_value = iter([])
 
         client = GitHubActivityClient("tok", "taka")
         results = list(
@@ -509,6 +585,7 @@ class TestGitHubActivityClient:
                 include_discussions=True,
                 include_pull_requests=True,
                 include_comments=True,
+                include_workflow_runs=True,
             )
         )
 
@@ -517,13 +594,15 @@ class TestGitHubActivityClient:
         assert mock_pulls.call_count == 1
         assert mock_issue_comments.call_count == 1
         assert mock_review_comments.call_count == 1
+        assert mock_workflows.call_count == 1
 
+    @patch.object(GitHubActivityClient, "get_repo_workflow_runs")
     @patch.object(GitHubActivityClient, "get_repo_pull_requests")
     @patch.object(GitHubActivityClient, "get_repo_releases")
     @patch.object(GitHubActivityClient, "get_repo_issues")
     @patch.object(GitHubActivityClient, "get_configured_repos")
     def test_get_all_recent_activity_skips_pull_requests_by_default(
-        self, mock_repos, mock_issues, mock_releases, mock_pulls
+        self, mock_repos, mock_issues, mock_releases, mock_pulls, mock_workflows
     ):
         mock_repos.return_value = [{"owner": "taka", "name": "repo", "repo_name": "repo"}]
         mock_issues.return_value = iter([])
@@ -533,6 +612,7 @@ class TestGitHubActivityClient:
 
         assert list(client.get_all_recent_activity()) == []
         mock_pulls.assert_not_called()
+        mock_workflows.assert_not_called()
 
     @patch.object(GitHubActivityClient, "get_repo_discussions")
     @patch.object(GitHubActivityClient, "get_repo_releases")
@@ -549,12 +629,12 @@ class TestGitHubActivityClient:
 
         assert list(client.get_all_recent_activity(include_discussions=False)) == []
         mock_discussions.assert_not_called()
-
+    @patch.object(GitHubActivityClient, "get_repo_workflow_runs")
     @patch.object(GitHubActivityClient, "get_repo_releases")
     @patch.object(GitHubActivityClient, "get_repo_issues")
     @patch.object(GitHubActivityClient, "get_configured_repos")
     def test_get_all_recent_activity_skips_issues_when_disabled(
-        self, mock_repos, mock_issues, mock_releases
+        self, mock_repos, mock_issues, mock_releases, mock_workflows
     ):
         mock_repos.return_value = [{"owner": "taka", "name": "repo", "repo_name": "repo"}]
         mock_releases.return_value = iter([])
@@ -564,6 +644,35 @@ class TestGitHubActivityClient:
         assert list(client.get_all_recent_activity(include_issues=False)) == []
         mock_issues.assert_not_called()
         mock_releases.assert_called_once()
+        mock_workflows.assert_not_called()
+
+    @patch.object(GitHubActivityClient, "get_repo_workflow_runs")
+    @patch.object(GitHubActivityClient, "get_repo_releases")
+    @patch.object(GitHubActivityClient, "get_repo_issues")
+    @patch.object(GitHubActivityClient, "get_configured_repos")
+    def test_get_all_recent_activity_includes_workflow_runs_only_when_enabled(
+        self, mock_repos, mock_issues, mock_releases, mock_workflows
+    ):
+        activity = GitHubActivity(
+            repo_name="repo",
+            activity_type="workflow_run",
+            number=1001,
+            title="CI (success)",
+            state="success",
+            author="taka",
+            url="url",
+            updated_at=TIMESTAMP,
+            created_at=TIMESTAMP,
+        )
+        mock_repos.return_value = [{"owner": "taka", "name": "repo", "repo_name": "repo"}]
+        mock_issues.return_value = iter([])
+        mock_releases.return_value = iter([])
+        mock_workflows.return_value = iter([activity])
+
+        client = GitHubActivityClient("tok", "taka")
+
+        assert list(client.get_all_recent_activity(include_workflow_runs=True)) == [activity]
+        mock_workflows.assert_called_once()
 
     @patch.object(GitHubActivityClient, "get_repo_review_comments")
     @patch.object(GitHubActivityClient, "get_repo_issue_comments")
@@ -628,6 +737,7 @@ class TestPollNewActivity:
             include_pull_requests=True,
             include_issues=False,
             include_comments=True,
+            include_workflow_runs=True,
         )
 
         assert result == [new]
@@ -637,6 +747,50 @@ class TestPollNewActivity:
         assert mock_activity.call_args.kwargs["include_pull_requests"] is True
         assert mock_activity.call_args.kwargs["include_issues"] is False
         assert mock_activity.call_args.kwargs["include_comments"] is True
+        assert mock_activity.call_args.kwargs["include_workflow_runs"] is True
+
+    @patch.object(GitHubActivityClient, "get_all_recent_activity")
+    def test_persists_workflow_run_fields(self, mock_activity, db):
+        workflow_run = GitHubActivity(
+            repo_name="repo",
+            activity_type="workflow_run",
+            number=1001,
+            title="CI (success)",
+            state="success",
+            author="taka",
+            url="https://github.com/taka/repo/actions/runs/1001",
+            updated_at=TIMESTAMP,
+            created_at=TIMESTAMP,
+            body="event=push branch=main head_sha=abc123",
+            metadata={
+                "workflow_name": "CI",
+                "event": "push",
+                "branch": "main",
+                "head_sha": "abc123",
+                "conclusion": "success",
+                "duration_seconds": 30,
+            },
+        )
+        mock_activity.return_value = iter([workflow_run])
+
+        result = poll_new_activity(
+            "tok",
+            "taka",
+            TIMESTAMP,
+            db,
+            include_workflow_runs=True,
+        )
+        rows = db.get_github_activity_in_range(TIMESTAMP, TIMESTAMP + timedelta(seconds=1))
+
+        assert result == [workflow_run]
+        assert len(rows) == 1
+        assert rows[0]["activity_type"] == "workflow_run"
+        assert rows[0]["number"] == 1001
+        assert rows[0]["title"] == "CI (success)"
+        assert rows[0]["state"] == "success"
+        assert rows[0]["url"] == "https://github.com/taka/repo/actions/runs/1001"
+        assert rows[0]["metadata"]["workflow_name"] == "CI"
+        assert rows[0]["metadata"]["duration_seconds"] == 30
 
     @patch.object(GitHubActivityClient, "get_all_recent_activity")
     def test_dry_run_does_not_persist(self, mock_activity):

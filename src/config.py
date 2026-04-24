@@ -17,6 +17,7 @@ class GitHubConfig:
     include_issues: bool = True
     include_discussions: bool = False
     include_pull_requests: bool = False
+    include_workflow_runs: bool = False
 
 
 @dataclass
@@ -687,6 +688,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             include_issues=data["github"].get("include_issues", True),
             include_discussions=data["github"].get("include_discussions", False),
             include_pull_requests=data["github"].get("include_pull_requests", False),
+            include_workflow_runs=data["github"].get("include_workflow_runs", False),
         ),
         x=XConfig(
             api_key=_resolve_env_var(_require(data, "x", "api_key", section="x")),

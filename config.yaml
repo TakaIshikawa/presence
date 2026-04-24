@@ -8,6 +8,7 @@ github:
   include_issues: true
   include_discussions: false
   include_pull_requests: false
+  include_workflow_runs: false
 
 x:
   api_key: "${X_API_KEY}"

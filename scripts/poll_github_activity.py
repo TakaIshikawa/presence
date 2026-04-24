@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll GitHub issues, pull requests, releases, and comments without publishing."""
+"""Poll GitHub issues, pull requests, releases, comments, and workflow runs."""
 
 from __future__ import annotations
 
@@ -47,6 +47,7 @@ def ingest_github_activity(
     include_discussions: bool = False,
     include_pull_requests: bool = False,
     include_comments: bool = False,
+    include_workflow_runs: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: list[str | dict] | None = None,
@@ -61,6 +62,7 @@ def ingest_github_activity(
         include_discussions=include_discussions,
         include_pull_requests=include_pull_requests,
         include_comments=include_comments,
+        include_workflow_runs=include_workflow_runs,
         dry_run=dry_run,
         timeout=timeout,
         redaction_patterns=redaction_patterns,
@@ -69,7 +71,7 @@ def ingest_github_activity(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Poll recently updated GitHub issues, pull requests, and releases."
+        description="Poll recently updated GitHub issues, pull requests, releases, and workflow runs."
     )
     parser.add_argument(
         "--dry-run",
@@ -106,8 +108,9 @@ def main(argv: list[str] | None = None) -> int:
         include_discussions = getattr(config.github, "include_discussions", False)
         include_pull_requests = getattr(config.github, "include_pull_requests", False)
         include_comments = args.include_comments or getattr(config.github, "include_comments", False)
+        include_workflow_runs = getattr(config.github, "include_workflow_runs", False)
 
-        logger.info("Polling GitHub issues/PRs/releases since %s", since.isoformat())
+        logger.info("Polling GitHub issues/PRs/releases/workflow runs since %s", since.isoformat())
         if repositories:
             logger.info("Using %d configured repositories", len(repositories))
         if not include_issues:
@@ -118,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("Including GitHub Discussions")
         if include_comments:
             logger.info("Including GitHub issue comments and PR review comments")
+        if include_workflow_runs:
+            logger.info("Including GitHub Actions workflow runs")
 
         activity = ingest_github_activity(
             db=db,
@@ -129,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             include_discussions=include_discussions,
             include_pull_requests=include_pull_requests,
             include_comments=include_comments,
+            include_workflow_runs=include_workflow_runs,
             dry_run=args.dry_run,
             timeout=config.timeouts.github_seconds,
             redaction_patterns=config.privacy.redaction_patterns,
