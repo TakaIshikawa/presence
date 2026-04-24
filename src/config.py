@@ -128,7 +128,7 @@ class CuratedSourcesConfig:
     feed_autodiscovery_timeout_seconds: float = 20.0
     source_failure_threshold: int = 3
     source_cooldown_hours: int = 24
-    freshness_half_life_days: Optional[float] = None
+    freshness_half_life_days: Optional[float] = 30.0
     knowledge_context: KnowledgeContextConfig = field(default_factory=KnowledgeContextConfig)
 
 
@@ -441,7 +441,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             ),
             source_failure_threshold=curated_sources_data.get("source_failure_threshold", 3),
             source_cooldown_hours=curated_sources_data.get("source_cooldown_hours", 24),
-            freshness_half_life_days=curated_sources_data.get("freshness_half_life_days"),
+            freshness_half_life_days=curated_sources_data.get("freshness_half_life_days", 30.0),
             knowledge_context=KnowledgeContextConfig(
                 max_per_author=knowledge_context_data.get("max_per_author"),
                 max_per_source_type=knowledge_context_data.get("max_per_source_type"),

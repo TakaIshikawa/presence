@@ -138,7 +138,7 @@ class TestFormatInsights:
         result = KnowledgeSearchResult(
             item=item,
             raw_similarity=0.76,
-            adjusted_score=1.21,
+            combined_score=1.21,
             freshness_score=0.59,
         )
 

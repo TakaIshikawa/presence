@@ -109,6 +109,7 @@ curated_sources:
   feed_autodiscovery_timeout_seconds: 20.0
   source_failure_threshold: 3
   source_cooldown_hours: 24
+  freshness_half_life_days: 30.0  # Down-rank older prompt snippets without excluding them
   knowledge_context:
     max_per_author: 2       # cap prompt snippets from the same author
     max_per_source_type: 3  # cap prompt snippets from the same source type

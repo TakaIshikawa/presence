@@ -54,23 +54,45 @@ class KnowledgeItem:
         }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class KnowledgeSearchResult:
     """Search result with tuple-compatible unpacking.
 
-    Iteration yields (item, adjusted_score) so existing callers that unpack
+    Iteration yields (item, combined_score) so existing callers that unpack
     ``for item, score in results`` keep working while newer callers can inspect
-    both the raw embedding similarity and freshness-adjusted score.
+    both the raw embedding similarity and combined freshness-adjusted score.
     """
 
     item: KnowledgeItem
     raw_similarity: float
-    adjusted_score: float
+    combined_score: float
     freshness_score: float = 0.0
+
+    def __init__(
+        self,
+        item: KnowledgeItem,
+        raw_similarity: float,
+        combined_score: Optional[float] = None,
+        freshness_score: float = 0.0,
+        adjusted_score: Optional[float] = None,
+    ) -> None:
+        if combined_score is None:
+            combined_score = adjusted_score
+        if combined_score is None:
+            combined_score = raw_similarity
+        object.__setattr__(self, "item", item)
+        object.__setattr__(self, "raw_similarity", raw_similarity)
+        object.__setattr__(self, "combined_score", combined_score)
+        object.__setattr__(self, "freshness_score", freshness_score)
+
+    @property
+    def adjusted_score(self) -> float:
+        """Backward-compatible name for the combined ranking score."""
+        return self.combined_score
 
     def __iter__(self):
         yield self.item
-        yield self.adjusted_score
+        yield self.combined_score
 
     def __len__(self) -> int:
         return 2
@@ -79,7 +101,7 @@ class KnowledgeSearchResult:
         if index == 0:
             return self.item
         if index == 1:
-            return self.adjusted_score
+            return self.combined_score
         raise IndexError(index)
 
 
@@ -238,7 +260,7 @@ class KnowledgeStore:
         return math.pow(0.5, age_days / half_life_days)
 
     @staticmethod
-    def _freshness_adjusted_score(
+    def _combined_score(
         similarity: float,
         timestamp: Any,
         half_life_days: Optional[float],
@@ -392,17 +414,17 @@ class KnowledgeStore:
                 freshness_score = self._freshness_score(
                     source_timestamp, effective_half_life_days
                 )
-                adjusted_score = similarity * (1.0 + freshness_score)
+                combined_score = similarity * (1.0 + freshness_score)
                 results.append(KnowledgeSearchResult(
                     item=item,
                     raw_similarity=similarity,
-                    adjusted_score=adjusted_score,
+                    combined_score=combined_score,
                     freshness_score=freshness_score,
                 ))
 
-        # Sort by adjusted score and limit. With freshness disabled, this is
+        # Sort by combined score and limit. With freshness disabled, this is
         # identical to sorting by raw embedding similarity.
-        results.sort(key=lambda x: x.adjusted_score, reverse=True)
+        results.sort(key=lambda x: x.combined_score, reverse=True)
         final_results = self.apply_diversity_caps(
             results,
             limit=limit,

@@ -175,8 +175,9 @@ class EnhancedContentGenerator:
             score_note = ""
             if getattr(result, "freshness_score", 0.0) > 0:
                 raw_similarity = getattr(result, "raw_similarity", score)
+                combined_score = getattr(result, "combined_score", score)
                 score_note = (
-                    f" (freshness-adjusted relevance {score:.2f}; "
+                    f" (freshness-adjusted relevance {combined_score:.2f}; "
                     f"semantic similarity {raw_similarity:.2f})"
                 )
             formatted.append(f"- {source_info} {insight_text}{score_note}")

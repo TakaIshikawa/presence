@@ -356,17 +356,18 @@ class TestSearchSimilar:
         sims = [sim for _, sim in results]
         assert sims == sorted(sims, reverse=True)
 
-    def test_result_exposes_raw_similarity_and_adjusted_score(self, db):
+    def test_result_exposes_raw_similarity_and_combined_score(self, db):
         store = KnowledgeStore(db.conn, FixedQueryEmbedder())
         store.add_item(_make_item(source_id="item", embedding=[0.9, 0.1]))
 
         result = store.search_similar("query", min_similarity=-1.0)[0]
 
         assert result.item.source_id == "item"
-        assert result.raw_similarity == pytest.approx(result.adjusted_score)
+        assert result.raw_similarity == pytest.approx(result.combined_score)
+        assert result.adjusted_score == pytest.approx(result.combined_score)
         item, score = result
         assert item.source_id == "item"
-        assert score == pytest.approx(result.adjusted_score)
+        assert score == pytest.approx(result.combined_score)
 
     def test_order_without_freshness_uses_raw_similarity(self, db):
         store = KnowledgeStore(db.conn, FixedQueryEmbedder())
@@ -388,7 +389,7 @@ class TestSearchSimilar:
         results = store.search_similar("query", min_similarity=-1.0)
 
         assert [result.item.source_id for result in results] == ["old-high", "fresh-lower"]
-        assert results[0].adjusted_score == pytest.approx(results[0].raw_similarity)
+        assert results[0].combined_score == pytest.approx(results[0].raw_similarity)
 
     def test_order_with_freshness_half_life_uses_adjusted_score(self, db):
         store = KnowledgeStore(db.conn, FixedQueryEmbedder())
@@ -415,7 +416,7 @@ class TestSearchSimilar:
 
         assert [result.item.source_id for result in results] == ["fresh-lower", "old-high"]
         old_result = next(result for result in results if result.item.source_id == "old-high")
-        assert old_result.adjusted_score > old_result.raw_similarity
+        assert old_result.combined_score > old_result.raw_similarity
         assert old_result.freshness_score > 0
         assert results[0].raw_similarity < old_result.raw_similarity
 
@@ -460,7 +461,7 @@ class TestSearchSimilar:
         )
 
         assert results[0].item.source_id == "no-timestamp"
-        assert results[0].adjusted_score == pytest.approx(results[0].raw_similarity)
+        assert results[0].combined_score == pytest.approx(results[0].raw_similarity)
         assert results[0].freshness_score == 0.0
 
     def test_min_similarity_filter(self, store):
