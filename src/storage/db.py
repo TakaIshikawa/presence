@@ -7467,6 +7467,136 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_knowledge_retirement_candidates(
+        self,
+        *,
+        older_than_cutoff: str,
+        unused_since_cutoff: str,
+        source_type: str | None = None,
+        license: str | None = None,
+        uncited_threshold: int = 2,
+    ) -> list[dict]:
+        """Analyze approved knowledge rows for retirement eligibility.
+
+        Recent links in either generated content or reply drafts retain an item.
+        Rows are preserved by retirement; callers can pass returned retire IDs to
+        ``retire_knowledge_items`` to flip approval off.
+        """
+        where = ["k.approved = 1"]
+        params: list[object] = []
+        if source_type:
+            where.append("k.source_type = ?")
+            params.append(source_type)
+        if license:
+            where.append("LOWER(COALESCE(k.license, 'attribution_required')) = LOWER(?)")
+            params.append(license)
+
+        query = f"""
+            SELECT k.id,
+                   k.source_type,
+                   k.source_id,
+                   k.source_url,
+                   k.author,
+                   k.content,
+                   k.insight,
+                   COALESCE(k.license, 'attribution_required') AS license,
+                   k.created_at,
+                   MAX(ckl.created_at) AS last_content_used_at,
+                   MAX(rkl.created_at) AS last_reply_used_at,
+                   COUNT(DISTINCT ckl.id) AS content_use_count,
+                   COUNT(DISTINCT rkl.id) AS reply_use_count,
+                   COUNT(DISTINCT CASE
+                       WHEN LOWER(COALESCE(k.license, 'attribution_required')) = 'attribution_required'
+                        AND (
+                            COALESCE(TRIM(k.source_url), '') = ''
+                            OR INSTR(LOWER(gc.content), LOWER(k.source_url)) = 0
+                        )
+                       THEN ckl.id
+                   END) AS uncited_content_use_count
+            FROM knowledge k
+            LEFT JOIN content_knowledge_links ckl ON ckl.knowledge_id = k.id
+            LEFT JOIN generated_content gc ON gc.id = ckl.content_id
+            LEFT JOIN reply_knowledge_links rkl ON rkl.knowledge_id = k.id
+            WHERE {" AND ".join(where)}
+            GROUP BY k.id
+            ORDER BY k.created_at ASC, k.id ASC
+        """
+        rows = [dict(row) for row in self.conn.execute(query, params).fetchall()]
+
+        candidates: list[dict] = []
+        for row in rows:
+            last_used_at = max(
+                (
+                    value
+                    for value in (
+                        row.get("last_content_used_at"),
+                        row.get("last_reply_used_at"),
+                    )
+                    if value
+                ),
+                default=None,
+            )
+            recently_used = bool(last_used_at and last_used_at >= unused_since_cutoff)
+            created_at = row.get("created_at")
+            content_uses = int(row.get("content_use_count") or 0)
+            reply_uses = int(row.get("reply_use_count") or 0)
+            total_uses = content_uses + reply_uses
+
+            reasons: list[str] = []
+            if created_at and created_at < older_than_cutoff:
+                reasons.append("old")
+            if total_uses == 0 or not last_used_at or last_used_at < unused_since_cutoff:
+                reasons.append("unused")
+            if str(row.get("license") or "").lower() == "restricted":
+                reasons.append("restricted")
+            if int(row.get("uncited_content_use_count") or 0) >= uncited_threshold:
+                reasons.append("repeatedly_uncited")
+
+            if recently_used and reasons:
+                action = "retain"
+                retain_reasons = ["recent_usage"]
+            elif reasons:
+                action = "retire"
+                retain_reasons = []
+            else:
+                action = "retain"
+                retain_reasons = ["no_retirement_reason"]
+
+            candidates.append(
+                {
+                    "id": row["id"],
+                    "source_type": row["source_type"],
+                    "source_id": row["source_id"],
+                    "source_url": row["source_url"],
+                    "author": row["author"],
+                    "license": row["license"],
+                    "created_at": row["created_at"],
+                    "last_used_at": last_used_at,
+                    "content_use_count": content_uses,
+                    "reply_use_count": reply_uses,
+                    "uncited_content_use_count": int(
+                        row.get("uncited_content_use_count") or 0
+                    ),
+                    "action": action,
+                    "reasons": reasons,
+                    "retain_reasons": retain_reasons,
+                }
+            )
+        return candidates
+
+    def retire_knowledge_items(self, knowledge_ids: list[int]) -> int:
+        """Mark approved knowledge rows unapproved while preserving content."""
+        ids = [int(knowledge_id) for knowledge_id in knowledge_ids]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        cursor = self.conn.execute(
+            f"UPDATE knowledge SET approved = 0 WHERE approved = 1 AND id IN ({placeholders})",
+            ids,
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     # Platform divergence analysis
     def get_cross_platform_engagement(self, days: int = 60) -> list[dict]:
         """Get engagement data for content published to both X and Bluesky.
