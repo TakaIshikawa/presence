@@ -309,6 +309,9 @@ class TestWriteDraft:
         draft = draft_file.read_text()
         assert draft.startswith("---\n")
         assert 'title: "My Draft Post"' in draft
+        assert "date: " in draft
+        assert 'description: "Draft body."' in draft
+        assert "source_content_ids: [123]" in draft
         assert "source_content_id: 123" in draft
         assert "generated_content_id: 42" in draft
         assert "status: draft" in draft
@@ -336,8 +339,11 @@ class TestWriteDraft:
         assert entry["slug"] == "manifest-draft"
         assert entry["title"] == "Manifest Draft"
         assert entry["source_content_id"] == 123
+        assert entry["source_content_ids"] == [123]
         assert entry["generated_content_id"] == 42
         assert entry["created_at"]
+        assert entry["date"]
+        assert entry["description"] == "Pytest fixtures made this draft easier to review."
         assert entry["tags"] == ["architecture"]
         assert entry["topics"] == [["architecture", "module boundaries", 0.9]]
         assert entry["draft_path"] == "drafts/manifest-draft.md"
@@ -386,6 +392,35 @@ class TestWriteDraft:
         assert "No title" in result.error
         assert not (tmp_path / "drafts").exists()
         assert not (tmp_path / "drafts" / "manifest.json").exists()
+
+    def test_rejects_invalid_draft_frontmatter_before_manifest_update(self, tmp_path):
+        writer = BlogWriter(str(tmp_path))
+
+        result = writer.write_draft(
+            "TITLE: Invalid Draft\n\n## Only heading",
+            source_content_id=123,
+            generated_content_id=42,
+        )
+
+        assert result.success is False
+        assert "Invalid draft frontmatter" in result.error
+        assert "description" in result.error
+        assert not (tmp_path / "drafts").exists()
+        assert not (tmp_path / "drafts" / "manifest.json").exists()
+
+    def test_allow_invalid_writes_draft_and_manifest(self, tmp_path):
+        writer = BlogWriter(str(tmp_path))
+
+        result = writer.write_draft(
+            "TITLE: Allowed Invalid Draft\n\n## Only heading",
+            source_content_id=123,
+            generated_content_id=42,
+            allow_invalid=True,
+        )
+
+        assert result.success is True
+        assert (tmp_path / "drafts" / "allowed-invalid-draft.md").exists()
+        assert (tmp_path / "drafts" / "manifest.json").exists()
 
 
 # ---------------------------------------------------------------------------

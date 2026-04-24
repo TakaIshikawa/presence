@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Optional, Any
 from dataclasses import dataclass
 
+from output.blog_frontmatter_validator import validate_blog_draft_frontmatter
+
 
 @dataclass
 class BlogResult:
@@ -360,6 +362,7 @@ class BlogWriter:
         generated_content_id: int,
         tags: list[str] | None = None,
         topics: list[Any] | None = None,
+        allow_invalid: bool = False,
     ) -> BlogResult:
         """Write generated markdown as a reviewable static-site draft."""
         title, body = self._extract_title_and_body(content)
@@ -369,11 +372,16 @@ class BlogWriter:
         slug = self._slugify(title)
         file_path = self.drafts_path / f"{slug}.md"
         created_at = datetime.now(timezone.utc).isoformat()
+        date_str = created_at[:10]
+        description = self._extract_description(body)
         draft_tags = self._derive_tags(body, tags=tags, topics=topics)
 
         frontmatter = "\n".join([
             "---",
             f"title: {json.dumps(title)}",
+            f"date: {json.dumps(date_str)}",
+            f"description: {json.dumps(description)}",
+            f"source_content_ids: {json.dumps([source_content_id])}",
             f"source_content_id: {source_content_id}",
             f"generated_content_id: {generated_content_id}",
             "status: draft",
@@ -381,15 +389,27 @@ class BlogWriter:
             "---",
             "",
         ])
+        draft_text = frontmatter + body + "\n"
+        validation = validate_blog_draft_frontmatter(draft_text, path=str(file_path))
+        if not allow_invalid and not validation.ok:
+            error_summary = "; ".join(issue.message for issue in validation.errors)
+            return BlogResult(
+                success=False,
+                file_path=str(file_path),
+                error=f"Invalid draft frontmatter: {error_summary}",
+            )
 
         self.drafts_path.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(frontmatter + body + "\n")
+        file_path.write_text(draft_text)
         self._update_draft_manifest({
             "slug": slug,
             "title": title,
             "source_content_id": source_content_id,
+            "source_content_ids": [source_content_id],
             "generated_content_id": generated_content_id,
             "created_at": created_at,
+            "date": date_str,
+            "description": description,
             "tags": draft_tags,
             "topics": self._json_safe(topics or []),
             "draft_path": self._site_relative_path(file_path),
