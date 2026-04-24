@@ -3891,6 +3891,72 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def find_bluesky_engagement_content(
+        self,
+        content_id: int | None = None,
+        bluesky_uri: str | None = None,
+        published_url: str | None = None,
+    ) -> Optional[dict]:
+        """Resolve manual Bluesky engagement identifiers to generated content."""
+        if content_id is not None:
+            row = self.conn.execute(
+                """SELECT gc.id AS content_id,
+                          COALESCE(NULLIF(gc.bluesky_uri, ''),
+                                   NULLIF(cp.platform_post_id, '')) AS bluesky_uri,
+                          gc.published_url
+                   FROM generated_content gc
+                   LEFT JOIN content_publications cp
+                     ON cp.content_id = gc.id AND cp.platform = 'bluesky'
+                   WHERE gc.id = ?
+                   ORDER BY cp.id DESC
+                   LIMIT 1""",
+                (content_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        if bluesky_uri:
+            row = self.conn.execute(
+                """SELECT gc.id AS content_id,
+                          COALESCE(NULLIF(gc.bluesky_uri, ''),
+                                   NULLIF(cp.platform_post_id, ''),
+                                   ?) AS bluesky_uri,
+                          gc.published_url
+                   FROM generated_content gc
+                   LEFT JOIN content_publications cp
+                     ON cp.content_id = gc.id AND cp.platform = 'bluesky'
+                   WHERE gc.bluesky_uri = ?
+                      OR (cp.platform = 'bluesky'
+                          AND (cp.platform_post_id = ? OR cp.platform_url = ?))
+                   ORDER BY CASE WHEN gc.bluesky_uri = ? THEN 0 ELSE 1 END,
+                            cp.id DESC
+                   LIMIT 1""",
+                (bluesky_uri, bluesky_uri, bluesky_uri, bluesky_uri, bluesky_uri),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        if published_url:
+            row = self.conn.execute(
+                """SELECT gc.id AS content_id,
+                          COALESCE(NULLIF(gc.bluesky_uri, ''),
+                                   NULLIF(cp.platform_post_id, '')) AS bluesky_uri,
+                          gc.published_url
+                   FROM generated_content gc
+                   LEFT JOIN content_publications cp
+                     ON cp.content_id = gc.id AND cp.platform = 'bluesky'
+                   WHERE gc.published_url = ?
+                      OR cp.platform_url = ?
+                   ORDER BY CASE WHEN cp.platform_url = ? THEN 0 ELSE 1 END,
+                            cp.id DESC
+                   LIMIT 1""",
+                (published_url, published_url, published_url),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        return None
+
     # Newsletter
     def insert_newsletter_send(
         self,
@@ -6393,6 +6459,64 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def upsert_bluesky_engagement(
+        self,
+        content_id: int,
+        bluesky_uri: str,
+        like_count: int,
+        repost_count: int,
+        reply_count: int,
+        quote_count: int,
+        engagement_score: float
+    ) -> dict:
+        """Insert or update one manual Bluesky engagement snapshot.
+
+        Manual CSV backfills should be idempotent, so this updates the latest
+        row for a content/URI pair instead of adding duplicate snapshots.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        existing = self.conn.execute(
+            """SELECT id FROM bluesky_engagement
+               WHERE content_id = ? AND bluesky_uri = ?
+               ORDER BY fetched_at DESC, id DESC
+               LIMIT 1""",
+            (content_id, bluesky_uri),
+        ).fetchone()
+
+        if existing:
+            self.conn.execute(
+                """UPDATE bluesky_engagement
+                   SET like_count = ?,
+                       repost_count = ?,
+                       reply_count = ?,
+                       quote_count = ?,
+                       engagement_score = ?,
+                       fetched_at = ?
+                   WHERE id = ?""",
+                (
+                    like_count,
+                    repost_count,
+                    reply_count,
+                    quote_count,
+                    engagement_score,
+                    now,
+                    existing["id"],
+                ),
+            )
+            self.conn.commit()
+            return {"id": existing["id"], "action": "updated"}
+
+        engagement_id = self.insert_bluesky_engagement(
+            content_id=content_id,
+            bluesky_uri=bluesky_uri,
+            like_count=like_count,
+            repost_count=repost_count,
+            reply_count=reply_count,
+            quote_count=quote_count,
+            engagement_score=engagement_score,
+        )
+        return {"id": engagement_id, "action": "inserted"}
 
     def get_bluesky_engagement(self, content_id: int) -> list[dict]:
         """Get time-series of Bluesky engagement metrics for a post.

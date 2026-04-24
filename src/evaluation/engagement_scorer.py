@@ -20,14 +20,18 @@ MIN_NEWSLETTER_SCORE_PER_SUBSCRIBER = 0.50
 
 def compute_engagement_score(
     like_count: int,
-    retweet_count: int,
-    reply_count: int,
-    quote_count: int,
+    retweet_count: int | None = None,
+    reply_count: int = 0,
+    quote_count: int = 0,
+    *,
+    repost_count: int | None = None,
 ) -> float:
     """Compute weighted engagement score from raw metric counts.
 
-    Weights: likes=1, retweets=3, replies=4, quotes=5.
+    Weights: likes=1, retweets/reposts=3, replies=4, quotes=5.
     """
+    if retweet_count is None:
+        retweet_count = repost_count or 0
     return (
         like_count * WEIGHT_LIKE
         + retweet_count * WEIGHT_RETWEET
