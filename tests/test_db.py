@@ -2173,6 +2173,7 @@ class TestGeneratedContent:
         assert provenance["source_commits"][1]["matched"] is False
         assert provenance["source_messages"][0]["id"] == message_id
         assert provenance["knowledge_links"][0]["insight"] == "Sharp insight"
+        assert provenance["knowledge_links"][0]["license"] == "attribution_required"
         assert provenance["variants"][0]["content"] == "Variant copy"
         assert provenance["publications"][0]["platform_post_id"] == "tweet-1"
         assert provenance["engagement_snapshots"][0]["platform"] == "x"
@@ -2180,6 +2181,36 @@ class TestGeneratedContent:
 
     def test_get_content_provenance_missing_content_returns_none(self, db):
         assert db.get_content_provenance(9999) is None
+
+    def test_get_planned_topic_for_content_includes_campaign_metadata(self, db):
+        content_id = self._insert_content(db, content="Campaign post")
+        campaign_id = db.create_campaign(
+            "Evidence Campaign",
+            goal="Review content with provenance",
+            start_date="2026-04-20",
+            end_date="2026-04-30",
+            daily_limit=1,
+            weekly_limit=5,
+            status="active",
+        )
+        planned_topic_id = db.insert_planned_topic(
+            topic="publish review",
+            angle="show evidence bundle",
+            target_date="2026-04-24",
+            source_material='{"commits": ["sha1"]}',
+            campaign_id=campaign_id,
+        )
+        db.mark_planned_topic_generated(planned_topic_id, content_id)
+
+        planned_topic = db.get_planned_topic_for_content(content_id)
+
+        assert planned_topic["id"] == planned_topic_id
+        assert planned_topic["topic"] == "publish review"
+        assert planned_topic["campaign_id"] == campaign_id
+        assert planned_topic["campaign_name"] == "Evidence Campaign"
+        assert planned_topic["campaign_goal"] == "Review content with provenance"
+        assert planned_topic["campaign_daily_limit"] == 1
+        assert planned_topic["campaign_weekly_limit"] == 5
 
 
 class TestKnowledgeCitationCoverage:

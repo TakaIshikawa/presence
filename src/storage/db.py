@@ -6840,6 +6840,7 @@ class Database:
         cursor = self.conn.execute(
             """SELECT k.id, k.source_type, k.source_id, k.source_url,
                       k.author, k.content, k.insight, k.attribution_required,
+                      k.license,
                       ckl.relevance_score, ckl.created_at AS linked_at
                FROM content_knowledge_links ckl
                INNER JOIN knowledge k ON k.id = ckl.knowledge_id
@@ -6848,6 +6849,26 @@ class Database:
             (content_id,)
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_planned_topic_for_content(self, content_id: int) -> dict | None:
+        """Return planned topic and campaign metadata for generated content."""
+        row = self.conn.execute(
+            """SELECT pt.*,
+                      cc.name AS campaign_name,
+                      cc.goal AS campaign_goal,
+                      cc.start_date AS campaign_start_date,
+                      cc.end_date AS campaign_end_date,
+                      cc.status AS campaign_status,
+                      cc.daily_limit AS campaign_daily_limit,
+                      cc.weekly_limit AS campaign_weekly_limit
+               FROM planned_topics pt
+               LEFT JOIN content_campaigns cc ON cc.id = pt.campaign_id
+               WHERE pt.content_id = ?
+               ORDER BY pt.created_at DESC, pt.id DESC
+               LIMIT 1""",
+            (content_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
     def get_knowledge_citation_report(
         self, days: int = 30, only_missing: bool = False

@@ -122,7 +122,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print machine-readable JSON instead of the text preview",
+        help="Print machine-readable JSON, including full evidence, instead of the text preview",
     )
     parser.add_argument(
         "--linkedin-out",

@@ -127,6 +127,152 @@ def test_preview_surfaces_passed_alt_text_guard(db):
     assert "Alt text guard: passed" in format_preview(preview)
 
 
+def test_preview_includes_compact_evidence_bundle(db):
+    db.insert_commit(
+        "presence",
+        "sha-evidence",
+        "feat: add preview evidence",
+        "2026-04-22T12:00:00+00:00",
+        "taka",
+    )
+    db.insert_claude_message(
+        "session-evidence",
+        "msg-evidence",
+        "/repo",
+        "2026-04-22T11:58:00+00:00",
+        "Add evidence to preview output",
+    )
+    db.upsert_github_activity(
+        repo_name="presence",
+        activity_type="pull_request",
+        number=42,
+        title="Preview evidence bundle",
+        state="merged",
+        author="taka",
+        url="https://github.com/taka/presence/pull/42",
+        updated_at="2026-04-22T12:30:00+00:00",
+        labels=["preview", "publishing"],
+    )
+    campaign_id = db.create_campaign(
+        "Launch Campaign",
+        goal="Make publish review evidence visible",
+        start_date="2026-04-20",
+        end_date="2026-04-30",
+        daily_limit=2,
+        weekly_limit=8,
+        status="active",
+    )
+    planned_topic_id = db.insert_planned_topic(
+        topic="publishing workflow",
+        angle="review evidence at decision time",
+        target_date="2026-04-24",
+        source_material='{"source_activity_ids": ["presence#42:pull_request"]}',
+        campaign_id=campaign_id,
+    )
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=["sha-evidence", "sha-missing"],
+        source_messages=["msg-evidence"],
+        source_activity_ids=["presence#42:pull_request"],
+        content="Evidence-backed post",
+        eval_score=8.0,
+        eval_feedback="Good",
+        claim_check_summary={
+            "supported_count": 2,
+            "unsupported_count": 1,
+            "annotation_text": "launch metric needs citation",
+        },
+        persona_guard_summary={
+            "checked": True,
+            "passed": False,
+            "status": "warning",
+            "score": 0.67,
+            "reasons": ["too generic"],
+            "metrics": {"specificity": 0.4},
+        },
+    )
+    db.mark_planned_topic_generated(planned_topic_id, content_id)
+    knowledge_id = db.conn.execute(
+        """INSERT INTO knowledge
+           (source_type, source_id, source_url, author, content, insight, license, approved)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "curated_article",
+            "article-evidence",
+            "https://source.example/evidence",
+            "Source Author",
+            "Evidence source context",
+            "Reviewers need provenance near publish controls.",
+            "open",
+            1,
+        ),
+    ).lastrowid
+    db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.94)])
+
+    preview = build_publication_preview(db, content_id=content_id)
+    evidence = preview["evidence"]
+
+    assert evidence["counts"] == {
+        "source_commits": 2,
+        "source_messages": 1,
+        "github_activities": 1,
+        "knowledge_links": 1,
+        "has_planned_topic": True,
+    }
+    assert evidence["source_commits"][0]["commit_sha"] == "sha-evidence"
+    assert evidence["source_commits"][0]["matched"] is True
+    assert evidence["source_commits"][1]["commit_sha"] == "sha-missing"
+    assert evidence["source_commits"][1]["matched"] is False
+    assert evidence["source_messages"][0]["message_uuid"] == "msg-evidence"
+    assert "prompt_text" not in evidence["source_messages"][0]
+    assert evidence["github_activities"][0]["activity_id"] == "presence#42:pull_request"
+    assert evidence["github_activities"][0]["labels"] == ["preview", "publishing"]
+    assert evidence["knowledge_links"][0]["knowledge_id"] == knowledge_id
+    assert evidence["knowledge_links"][0]["license"] == "open"
+    assert evidence["claim_check"]["unsupported_count"] == 1
+    assert evidence["persona_guard"]["reasons"] == ["too generic"]
+    assert evidence["planned_topic"]["topic"] == "publishing workflow"
+    assert evidence["planned_topic"]["campaign"]["name"] == "Launch Campaign"
+
+    payload = json.loads(preview_to_json(preview))
+    assert payload["evidence"]["planned_topic"]["campaign"]["daily_limit"] == 2
+    assert payload["evidence"]["knowledge_links"][0]["knowledge_id"] == knowledge_id
+
+    text = format_preview(preview)
+    assert "Evidence: 2 commits, 1 session, 1 GitHub activity, 1 knowledge link" in text
+    assert "- Commits: sha-evidence, sha-missing" in text
+    assert "- Claude messages: msg-evidence" in text
+    assert "- GitHub activities: presence#42:pull_request" in text
+    assert f"- Knowledge: {knowledge_id}" in text
+    assert (
+        "- Planned topic: publishing workflow "
+        "(review evidence at decision time; target 2026-04-24; campaign Launch Campaign)"
+    ) in text
+
+
+def test_preview_supports_legacy_content_without_evidence(db):
+    content_id = db.insert_generated_content(
+        content_type="x_post",
+        source_commits=[],
+        source_messages=[],
+        content="Legacy post",
+        eval_score=8.0,
+        eval_feedback="Good",
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    assert preview["evidence"]["counts"] == {
+        "source_commits": 0,
+        "source_messages": 0,
+        "github_activities": 0,
+        "knowledge_links": 0,
+        "has_planned_topic": False,
+    }
+    assert preview["evidence"]["planned_topic"] is None
+    assert "Evidence:" not in format_preview(preview)
+
+
 def test_preview_surfaces_restricted_knowledge_license_guard(db):
     content_id = db.insert_generated_content(
         content_type="x_post",

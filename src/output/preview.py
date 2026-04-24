@@ -150,6 +150,202 @@ def _fetch_content_topics(db: Any, content_id: int) -> list[dict]:
     ]
 
 
+def _parse_json_list(value: Any) -> list:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _compact_source_commit(commit: dict) -> dict:
+    return {
+        key: commit.get(key)
+        for key in (
+            "source_index",
+            "matched",
+            "id",
+            "repo_name",
+            "commit_sha",
+            "commit_message",
+            "timestamp",
+            "author",
+        )
+        if key in commit
+    }
+
+
+def _compact_source_message(message: dict) -> dict:
+    return {
+        key: message.get(key)
+        for key in (
+            "source_index",
+            "matched",
+            "id",
+            "session_id",
+            "message_uuid",
+            "project_path",
+            "timestamp",
+        )
+        if key in message
+    }
+
+
+def _compact_github_activity(activity: dict) -> dict:
+    return {
+        key: activity.get(key)
+        for key in (
+            "source_index",
+            "matched",
+            "id",
+            "activity_id",
+            "repo_name",
+            "activity_type",
+            "number",
+            "title",
+            "state",
+            "author",
+            "url",
+            "updated_at",
+            "labels",
+        )
+        if key in activity
+    }
+
+
+def _compact_knowledge_link(link: dict) -> dict:
+    return {
+        "knowledge_id": link.get("id") or link.get("knowledge_id"),
+        "source_type": link.get("source_type"),
+        "source_id": link.get("source_id"),
+        "source_url": link.get("source_url"),
+        "author": link.get("author"),
+        "license": link.get("license"),
+        "attribution_required": bool(link.get("attribution_required")),
+        "relevance_score": link.get("relevance_score"),
+        "insight": link.get("insight"),
+        "linked_at": link.get("linked_at"),
+    }
+
+
+def _compact_planned_topic(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    campaign = None
+    if row.get("campaign_id") is not None:
+        campaign = {
+            "id": row.get("campaign_id"),
+            "name": row.get("campaign_name"),
+            "goal": row.get("campaign_goal"),
+            "start_date": row.get("campaign_start_date"),
+            "end_date": row.get("campaign_end_date"),
+            "status": row.get("campaign_status"),
+            "daily_limit": row.get("campaign_daily_limit"),
+            "weekly_limit": row.get("campaign_weekly_limit"),
+        }
+    return {
+        "id": row.get("id"),
+        "topic": row.get("topic"),
+        "angle": row.get("angle"),
+        "target_date": row.get("target_date"),
+        "status": row.get("status"),
+        "source_material": row.get("source_material"),
+        "created_at": row.get("created_at"),
+        "campaign": campaign,
+    }
+
+
+def _fetch_planned_topic_for_content(db: Any, content_id: int) -> dict | None:
+    getter = getattr(db, "get_planned_topic_for_content", None)
+    if callable(getter):
+        return getter(content_id)
+    try:
+        row = db.conn.execute(
+            """SELECT pt.*,
+                      cc.name AS campaign_name,
+                      cc.goal AS campaign_goal,
+                      cc.start_date AS campaign_start_date,
+                      cc.end_date AS campaign_end_date,
+                      cc.status AS campaign_status,
+                      cc.daily_limit AS campaign_daily_limit,
+                      cc.weekly_limit AS campaign_weekly_limit
+               FROM planned_topics pt
+               LEFT JOIN content_campaigns cc ON cc.id = pt.campaign_id
+               WHERE pt.content_id = ?
+               ORDER BY pt.created_at DESC, pt.id DESC
+               LIMIT 1""",
+            (content_id,),
+        ).fetchone()
+    except Exception:
+        return None
+    return dict(row) if row else None
+
+
+def _build_evidence_bundle(
+    db: Any,
+    content: dict,
+    *,
+    claim_check: dict,
+    persona_guard: dict,
+) -> dict:
+    content_id = content["id"]
+
+    if hasattr(db, "get_source_commits_for_content"):
+        source_commits = db.get_source_commits_for_content(content_id)
+    else:
+        source_commits = [
+            {"source_index": index, "matched": False, "commit_sha": ref}
+            for index, ref in enumerate(_parse_json_list(content.get("source_commits")))
+        ]
+
+    if hasattr(db, "get_source_messages_for_content"):
+        source_messages = db.get_source_messages_for_content(content_id)
+    else:
+        source_messages = [
+            {"source_index": index, "matched": False, "message_uuid": ref}
+            for index, ref in enumerate(_parse_json_list(content.get("source_messages")))
+        ]
+
+    if hasattr(db, "get_source_github_activity_for_content"):
+        github_activities = db.get_source_github_activity_for_content(content_id)
+    else:
+        github_activities = [
+            {"source_index": index, "matched": False, "activity_id": ref}
+            for index, ref in enumerate(_parse_json_list(content.get("source_activity_ids")))
+        ]
+
+    knowledge_links = []
+    if hasattr(db, "get_content_lineage"):
+        knowledge_links = db.get_content_lineage(content_id)
+
+    planned_topic = _compact_planned_topic(
+        _fetch_planned_topic_for_content(db, content_id)
+    )
+
+    return {
+        "source_commits": [_compact_source_commit(row) for row in source_commits],
+        "source_messages": [_compact_source_message(row) for row in source_messages],
+        "github_activities": [
+            _compact_github_activity(row) for row in github_activities
+        ],
+        "knowledge_links": [_compact_knowledge_link(row) for row in knowledge_links],
+        "claim_check": claim_check,
+        "persona_guard": persona_guard,
+        "planned_topic": planned_topic,
+        "counts": {
+            "source_commits": len(source_commits),
+            "source_messages": len(source_messages),
+            "github_activities": len(github_activities),
+            "knowledge_links": len(knowledge_links),
+            "has_planned_topic": planned_topic is not None,
+        },
+    }
+
+
 def _claim_check_status(summary: dict | None) -> dict:
     if not summary:
         return {
@@ -443,6 +639,12 @@ def build_publication_preview(
     persona_guard = _persona_guard_status(
         _fetch_persona_guard_summary(db, content["id"])
     )
+    evidence = _build_evidence_bundle(
+        db,
+        content,
+        claim_check=claim_check,
+        persona_guard=persona_guard,
+    )
     alt_text = validate_alt_text(
         content.get("image_alt_text"),
         image_prompt=content.get("image_prompt"),
@@ -520,6 +722,7 @@ def build_publication_preview(
         "queue": queue,
         "claim_check": claim_check,
         "persona_guard": persona_guard,
+        "evidence": evidence,
         "alt_text": alt_text,
         "license_guard": license_guard,
         "attribution_guard": attribution_guard,
@@ -626,6 +829,99 @@ def write_visual_post_artifact(
     return target
 
 
+def _join_preview_values(values: list[Any], *, limit: int = 5) -> str:
+    rendered = [str(value) for value in values if value not in (None, "")]
+    if not rendered:
+        return "none"
+    if len(rendered) <= limit:
+        return ", ".join(rendered)
+    return ", ".join(rendered[:limit]) + f", +{len(rendered) - limit} more"
+
+
+def _count_label(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{count} {singular if count == 1 else plural or singular + 's'}"
+
+
+def _format_evidence_section(evidence: dict) -> list[str]:
+    counts = evidence.get("counts") or {}
+    total = sum(
+        int(counts.get(key) or 0)
+        for key in (
+            "source_commits",
+            "source_messages",
+            "github_activities",
+            "knowledge_links",
+        )
+    )
+    if not total and not counts.get("has_planned_topic"):
+        return []
+
+    commit_count = int(counts.get("source_commits") or 0)
+    message_count = int(counts.get("source_messages") or 0)
+    activity_count = int(counts.get("github_activities") or 0)
+    knowledge_count = int(counts.get("knowledge_links") or 0)
+    lines = [
+        "Evidence: "
+        + ", ".join(
+            [
+                _count_label(commit_count, "commit"),
+                _count_label(message_count, "session"),
+                _count_label(activity_count, "GitHub activity", "GitHub activities"),
+                _count_label(knowledge_count, "knowledge link"),
+            ]
+        )
+    ]
+
+    commits = [
+        commit.get("commit_sha")
+        for commit in evidence.get("source_commits", [])
+    ]
+    if commits:
+        lines.append(f"- Commits: {_join_preview_values(commits)}")
+
+    messages = [
+        message.get("message_uuid")
+        for message in evidence.get("source_messages", [])
+    ]
+    if messages:
+        lines.append(f"- Claude messages: {_join_preview_values(messages)}")
+
+    activities = [
+        activity.get("activity_id")
+        for activity in evidence.get("github_activities", [])
+    ]
+    if activities:
+        lines.append(f"- GitHub activities: {_join_preview_values(activities)}")
+
+    knowledge_ids = [
+        link.get("knowledge_id")
+        for link in evidence.get("knowledge_links", [])
+    ]
+    if knowledge_ids:
+        lines.append(f"- Knowledge: {_join_preview_values(knowledge_ids)}")
+
+    planned_topic = evidence.get("planned_topic")
+    if planned_topic:
+        topic_label = planned_topic.get("topic") or f"#{planned_topic.get('id')}"
+        angle = planned_topic.get("angle")
+        target = planned_topic.get("target_date")
+        campaign = planned_topic.get("campaign") or {}
+        suffixes = []
+        if angle:
+            suffixes.append(angle)
+        if target:
+            suffixes.append(f"target {target}")
+        if campaign.get("name"):
+            suffixes.append(f"campaign {campaign['name']}")
+        lines.append(
+            "- Planned topic: "
+            + str(topic_label)
+            + (f" ({'; '.join(suffixes)})" if suffixes else "")
+        )
+
+    return lines
+
+
 def format_preview(preview: dict) -> str:
     """Format a preview for terminal review."""
     content = preview["content"]
@@ -645,6 +941,8 @@ def format_preview(preview: dict) -> str:
         lines.append(f"Image: {content['image_path']}")
     if content.get("image_alt_text"):
         lines.append(f"Alt text: {content['image_alt_text']}")
+
+    lines.extend(_format_evidence_section(preview.get("evidence") or {}))
 
     alt_text = preview.get("alt_text")
     if alt_text and alt_text.get("required"):
