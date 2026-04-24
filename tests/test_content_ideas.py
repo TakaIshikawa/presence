@@ -247,7 +247,6 @@ def test_cmd_promote_skips_similar_active_idea_unless_forced(db, capsys):
     assert db.get_content_idea(first_id)["status"] == "promoted"
     assert db.get_content_idea(second_id)["status"] == "open"
 
-
 def test_content_idea_aging_action_merges_source_metadata(db):
     idea_id = db.add_content_idea(
         "Keep existing metadata",
@@ -280,3 +279,30 @@ def test_content_idea_aging_action_merges_source_metadata(db):
             "reason": "old enough to promote",
         }
     ]
+
+
+def test_content_idea_duplicate_detection_matches_source_identity_metadata(db):
+    first_id = db.add_content_idea(
+        "Resurface testing because it has gone dormant",
+        topic="testing",
+        source="stale_topic_resurfacer",
+        source_metadata={
+            "source": "stale_topic_resurfacer",
+            "source_id": "stale-topic:testing",
+            "source_content_ids": [1, 2],
+        },
+    )
+
+    matches = db.find_similar_content_ideas(
+        note="A different note for the same stale topic",
+        topic="testing",
+        source="stale_topic_resurfacer",
+        source_metadata={
+            "source": "stale_topic_resurfacer",
+            "source_id": "stale-topic:testing",
+            "source_content_ids": [2, 3],
+        },
+    )
+
+    assert matches[0]["id"] == first_id
+    assert "source_metadata.source_id" in matches[0]["duplicate_reasons"]
