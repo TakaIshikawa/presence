@@ -168,9 +168,10 @@ class TestPost:
     def test_post_with_media_sends_alt_text(self, tmp_path):
         client, mock_client = make_bluesky_client()
         image_path = tmp_path / "visual.png"
-        image_path.write_bytes(b"png")
+        image_path.write_bytes(b"\x89PNG\r\n\x1a\npng")
         response = mock_send_post(mock_client)
-        mock_client.send_image.return_value = response
+        blob = {"$type": "blob", "mimeType": "image/png", "size": 11, "ref": "bafkrei-test"}
+        mock_client.upload_blob.return_value = SimpleNamespace(blob=blob)
 
         result = client.post_with_media(
             "Hello Bluesky!",
@@ -179,30 +180,61 @@ class TestPost:
         )
 
         assert result.success is True
-        mock_client.send_image.assert_called_once_with(
+        mock_client.upload_blob.assert_called_once_with(b"\x89PNG\r\n\x1a\npng")
+        mock_client.send_post.assert_called_once()
+        assert mock_client.send_post.call_args.kwargs["text"] == "Hello Bluesky!"
+        embed = mock_client.send_post.call_args.kwargs["embed"]
+        if isinstance(embed, dict):
+            assert embed["images"][0]["alt"] == "Text graphic about a launch"
+            assert embed["images"][0]["image"] == blob
+        else:
+            assert embed.images[0].alt == "Text graphic about a launch"
+            assert embed.images[0].image == blob
+
+    def test_post_with_media_missing_file_returns_media_error(self, tmp_path):
+        client, mock_client = make_bluesky_client()
+
+        result = client.post_with_media(
             text="Hello Bluesky!",
-            image=b"png",
-            image_alt="Text graphic about a launch",
+            media_path=str(tmp_path / "missing.png"),
+            alt_text="Text graphic about a launch",
         )
 
-    def test_post_with_media_retries_without_alt_when_unsupported(self, tmp_path):
+        assert result.success is False
+        assert result.error_category == "media"
+        assert "not found" in result.error
+        mock_client.upload_blob.assert_not_called()
+        mock_client.send_post.assert_not_called()
+
+    def test_post_with_media_oversized_file_returns_media_error(self, tmp_path):
         client, mock_client = make_bluesky_client()
         image_path = tmp_path / "visual.png"
-        image_path.write_bytes(b"png")
-        response = mock_send_post(mock_client)
-        mock_client.send_image.side_effect = [TypeError("unexpected image_alt"), response]
+        image_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 1_000_001)
 
         result = client.post_with_media(
-            "Hello Bluesky!",
-            str(image_path),
+            text="Hello Bluesky!",
+            media_path=str(image_path),
             alt_text="Text graphic about a launch",
         )
 
-        assert result.success is True
-        assert mock_client.send_image.call_args_list[-1].kwargs == {
-            "text": "Hello Bluesky!",
-            "image": b"png",
-        }
+        assert result.success is False
+        assert result.error_category == "media"
+        assert "exceeds" in result.error
+        mock_client.upload_blob.assert_not_called()
+        mock_client.send_post.assert_not_called()
+
+    def test_post_with_media_missing_alt_text_returns_media_error(self, tmp_path):
+        client, mock_client = make_bluesky_client()
+        image_path = tmp_path / "visual.png"
+        image_path.write_bytes(b"\x89PNG\r\n\x1a\npng")
+
+        result = client.post_with_media("Hello Bluesky!", str(image_path), alt_text="")
+
+        assert result.success is False
+        assert result.error_category == "media"
+        assert "alt text" in result.error
+        mock_client.upload_blob.assert_not_called()
+        mock_client.send_post.assert_not_called()
 
 
 # --- BlueskyClient.post_thread() ---

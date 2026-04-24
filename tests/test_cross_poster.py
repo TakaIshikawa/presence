@@ -147,6 +147,30 @@ class TestPublish:
         assert "x" not in results
         mock_bsky.post.assert_called_once()
 
+    def test_publish_visual_to_bluesky_with_alt_text(self):
+        mock_bsky = MagicMock()
+        mock_bsky.post_with_media.return_value = BlueskyPostResult(
+            success=True,
+            uri="at://did:plc:xyz/app.bsky.feed.post/abc",
+            url="https://bsky.app/profile/user/post/abc"
+        )
+
+        cross_poster = CrossPoster(x_client=None, bluesky_client=mock_bsky)
+        results = cross_poster.publish(
+            "Visual post",
+            "x_visual",
+            image_path="/tmp/presence-images/visual.png",
+            image_alt_text="Chart showing launch metrics by channel.",
+        )
+
+        assert results["bluesky"].success is True
+        mock_bsky.post_with_media.assert_called_once_with(
+            "Visual post",
+            "/tmp/presence-images/visual.png",
+            alt_text="Chart showing launch metrics by channel.",
+        )
+        mock_bsky.post.assert_not_called()
+
     def test_publish_to_both_platforms(self):
         mock_x = MagicMock()
         mock_x.post.return_value = PostResult(

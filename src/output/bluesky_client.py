@@ -2,6 +2,8 @@
 
 import logging
 import json
+import mimetypes
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -13,12 +15,46 @@ from .publish_errors import classify_publish_error, PublishErrorCategory
 
 logger = logging.getLogger(__name__)
 
+BLUESKY_MAX_IMAGE_BYTES = 1_000_000
+SUPPORTED_IMAGE_MIME_TYPES = {
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+
 
 def _limit_alt_text(alt_text: str, max_chars: int = 1000) -> str:
     alt_text = re.sub(r"\s+", " ", (alt_text or "").strip())
     if len(alt_text) <= max_chars:
         return alt_text
     return alt_text[: max_chars - 3].rstrip(" ,;:.") + "..."
+
+
+def _detect_image_mime_type(path: str, data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+
+    mime_type, _ = mimetypes.guess_type(path)
+    return mime_type
+
+
+def _build_image_embed(blob: object, alt_text: str) -> object:
+    return {
+        "$type": "app.bsky.embed.images",
+        "images": [
+            {
+                "alt": alt_text,
+                "image": blob,
+            }
+        ],
+    }
 
 
 @dataclass
@@ -58,6 +94,13 @@ class BlueskyClient:
             error_category=classify_publish_error(error_text, platform="bluesky"),
         )
 
+    def _media_failure_result(self, error: str) -> BlueskyPostResult:
+        return BlueskyPostResult(
+            success=False,
+            error=error,
+            error_category="media",
+        )
+
     def _success_result(self, response) -> BlueskyPostResult:
         uri = response.uri
         rkey = uri.split('/')[-1]
@@ -91,24 +134,43 @@ class BlueskyClient:
         media_path: str,
         alt_text: str = "",
     ) -> BlueskyPostResult:
-        """Create a Bluesky post with one attached image when supported."""
-        send_image = getattr(self.client, "send_image", None)
-        if not callable(send_image):
-            logger.warning("Bluesky client does not support image upload; posting text only")
-            return self.post(text)
+        """Create a Bluesky post with one attached image.
+
+        Bluesky requires image posts to reference an uploaded ATProto blob. This
+        method validates local image input before upload, uploads the blob, and
+        includes it in the post embed with required alt text.
+        """
+        alt_text = _limit_alt_text(alt_text)
+        if not alt_text:
+            return self._media_failure_result("Bluesky image posts require alt text")
+
+        if not media_path or not os.path.exists(media_path):
+            return self._media_failure_result(f"Bluesky media file not found: {media_path}")
+
+        if not os.path.isfile(media_path):
+            return self._media_failure_result(f"Bluesky media path is not a file: {media_path}")
+
+        file_size = os.path.getsize(media_path)
+        if file_size > BLUESKY_MAX_IMAGE_BYTES:
+            return self._media_failure_result(
+                "Bluesky image exceeds 1000000 byte limit: "
+                f"{file_size} bytes"
+            )
 
         try:
             self._ensure_login()
             with open(media_path, "rb") as fh:
-                image = fh.read()
-            alt_text = _limit_alt_text(alt_text)
+                image_data = fh.read()
 
-            try:
-                response = send_image(text=text, image=image, image_alt=alt_text)
-            except TypeError as e:
-                logger.warning(f"Bluesky image alt text unsupported; retrying without it: {e}")
-                response = send_image(text=text, image=image)
+            mime_type = _detect_image_mime_type(media_path, image_data)
+            if mime_type not in SUPPORTED_IMAGE_MIME_TYPES:
+                return self._media_failure_result(
+                    f"Unsupported Bluesky image MIME type: {mime_type or 'unknown'}"
+                )
 
+            upload_response = self.client.upload_blob(image_data)
+            embed = _build_image_embed(upload_response.blob, alt_text)
+            response = self.client.send_post(text=text, embed=embed)
             return self._success_result(response)
         except (OSError, AtProtocolError) as e:
             return self._failure_result(e)

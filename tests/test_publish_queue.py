@@ -69,6 +69,7 @@ class FakeBlueskyClient:
         self.thread_result = thread_result or post_result
         self.posts = []
         self.threads = []
+        self.media_posts = []
 
     def post(self, content):
         self.posts.append(content)
@@ -77,6 +78,12 @@ class FakeBlueskyClient:
     def post_thread(self, tweets):
         self.threads.append(tweets)
         return self.thread_result
+
+    def post_with_media(self, text, media_path, alt_text=""):
+        self.media_posts.append(
+            {"text": text, "media_path": media_path, "alt_text": alt_text}
+        )
+        return self.post_result
 
 
 class FakeCrossPoster:
@@ -1746,6 +1753,108 @@ def test_main_bluesky_only_publishes_bluesky_variant_without_crossposter(test_db
     assert fake_x.posts == []
     assert fake_bluesky.posts == ["Bluesky durable post"]
     mock_cross_poster_class.assert_not_called()
+
+
+def test_main_bluesky_visual_post_includes_image_and_alt_text(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published, image_path, image_alt_text)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            "Visual launch post",
+            "x_visual",
+            7.0,
+            0,
+            "/tmp/presence-images/launch.png",
+            "Chart showing launch metrics by channel with labeled bars.",
+        ),
+    ).lastrowid
+    test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="bluesky")
+
+    fake_x = FakeXClient(FakePostResult(success=False, error="should not post"))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/visual",
+        url="https://bsky.app/profile/test.bsky.social/post/visual",
+    ))
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (make_config(), test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    assert fake_x.posts == []
+    assert fake_bluesky.posts == []
+    assert fake_bluesky.media_posts == [
+        {
+            "text": "bsky:Visual launch post",
+            "media_path": "/tmp/presence-images/launch.png",
+            "alt_text": "Chart showing launch metrics by channel with labeled bars.",
+        }
+    ]
+
+
+def test_main_strict_alt_text_guard_blocks_bluesky_visual_before_upload(test_db, base_time):
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published, image_path, image_alt_text)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            "Visual launch post",
+            "x_visual",
+            7.0,
+            0,
+            "/tmp/presence-images/launch.png",
+            "",
+        ),
+    ).lastrowid
+    queue_id = test_db.queue_for_publishing(
+        content_id,
+        base_time.isoformat(),
+        platform="bluesky",
+    )
+
+    fake_x = FakeXClient(FakePostResult(success=False, error="should not post"))
+    fake_bluesky = FakeBlueskyClient(FakePostResult(
+        success=True,
+        uri="at://did:plc:test/app.bsky.feed.post/visual",
+    ))
+
+    config = make_config()
+    config.publishing.alt_text_guard_mode = "strict"
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=fake_x), \
+         patch("publish_queue.BlueskyClient", return_value=fake_bluesky), \
+         patch("publish_queue.CrossPoster", FakeCrossPoster), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    row = test_db.conn.execute(
+        "SELECT status, error, error_category FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    assert row["status"] == "failed"
+    assert row["error_category"] == "media"
+    assert "missing_alt_text" in row["error"]
+    assert fake_bluesky.posts == []
+    assert fake_bluesky.media_posts == []
 
 
 def test_main_all_publishes_platform_variants(test_db, base_time):

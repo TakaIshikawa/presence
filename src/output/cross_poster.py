@@ -106,6 +106,8 @@ class CrossPoster:
         content_type: str,
         tweets: list[str] = None,
         content_id: int | None = None,
+        image_path: Optional[str] = None,
+        image_alt_text: Optional[str] = None,
     ) -> dict:
         """Publish to all configured platforms.
 
@@ -113,6 +115,8 @@ class CrossPoster:
             content: Raw content text
             content_type: Type of content (x_post, x_thread, etc.)
             tweets: Pre-split tweets for thread posting
+            image_path: Optional local image path for visual posts
+            image_alt_text: Alt text for the image
 
         Returns:
             Dictionary mapping platform name to PostResult/BlueskyPostResult
@@ -123,6 +127,12 @@ class CrossPoster:
         if self.x_client:
             if content_type == 'x_thread' and tweets:
                 results['x'] = self.x_client.post_thread(tweets)
+            elif image_path and hasattr(self.x_client, "post_with_media"):
+                results['x'] = self.x_client.post_with_media(
+                    content,
+                    image_path,
+                    alt_text=image_alt_text or "",
+                )
             else:
                 results['x'] = self.x_client.post(content)
 
@@ -148,6 +158,13 @@ class CrossPoster:
                     source=content,
                     adapted=adapted,
                 )
-                results['bluesky'] = self.bluesky_client.post(adapted)
+                if image_path and hasattr(self.bluesky_client, "post_with_media"):
+                    results['bluesky'] = self.bluesky_client.post_with_media(
+                        adapted,
+                        image_path,
+                        alt_text=image_alt_text or "",
+                    )
+                else:
+                    results['bluesky'] = self.bluesky_client.post(adapted)
 
         return results
