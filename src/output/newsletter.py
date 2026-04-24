@@ -248,10 +248,11 @@ class NewsletterAssembler:
         if suppressed_content_ids:
             metadata["suppressed_content_ids"] = suppressed_content_ids
             metadata["repeat_lookback_weeks"] = self.repeat_lookback_weeks
+        query_week_end = self._query_week_end(week_end)
 
         # 1. Blog post (if published this week)
         blog_posts = self.db.get_published_content_in_range(
-            "blog_post", week_start, week_end
+            "blog_post", week_start, query_week_end
         )
         blog_posts = self._suppress_recent_content(blog_posts, suppressed_ids)
         blog_posts = self._sort_by_source_preferences(blog_posts, source_preferences)
@@ -274,7 +275,7 @@ class NewsletterAssembler:
 
         # 2. Top threads (up to 2)
         threads = self.db.get_published_content_in_range(
-            "x_thread", week_start, week_end
+            "x_thread", week_start, query_week_end
         )
         threads = self._suppress_recent_content(threads, suppressed_ids)
         threads = self._sort_by_source_preferences(threads, source_preferences)
@@ -295,7 +296,7 @@ class NewsletterAssembler:
 
         # 3. Top posts by engagement (up to 3)
         posts = self.db.get_published_content_in_range(
-            "x_post", week_start, week_end
+            "x_post", week_start, query_week_end
         )
         posts = self._suppress_recent_content(posts, suppressed_ids)
         posts = self._sort_by_source_preferences(posts, source_preferences)
@@ -709,6 +710,16 @@ class NewsletterAssembler:
         except (KeyError, ValueError) as e:
             logger.debug(f"Newsletter UTM campaign template failed: {e}")
             return self.utm_campaign_template
+
+    def _query_week_end(self, week_end: datetime) -> datetime:
+        """Allow near-current delayed sends to include content published since week_end."""
+        now = datetime.now(timezone.utc)
+        normalized_week_end = week_end
+        if normalized_week_end.tzinfo is None:
+            normalized_week_end = normalized_week_end.replace(tzinfo=timezone.utc)
+        if now > normalized_week_end and now - normalized_week_end <= timedelta(days=3):
+            return now
+        return week_end
 
     def _rewrite_internal_link(
         self, url: str, content_id: int, utm_campaign: str
