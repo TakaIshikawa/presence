@@ -60,6 +60,7 @@ class PostingWindowRecommender:
         days: int = 90,
         platform: str = "all",
         limit: int | None = 10,
+        content_type: str | None = None,
     ) -> list[PostingWindow]:
         """Return ranked posting windows for the requested platform.
 
@@ -69,7 +70,7 @@ class PostingWindowRecommender:
         """
         platform = _normalize_platform(platform)
         days = max(1, int(days))
-        rows = self._fetch_rows(days=days, platform=platform)
+        rows = self._fetch_rows(days=days, platform=platform, content_type=content_type)
         if not rows:
             return []
 
@@ -120,11 +121,22 @@ class PostingWindowRecommender:
         days: int = 90,
         platform: str = "all",
         limit: int | None = 10,
+        content_type: str | None = None,
     ) -> list[PostingWindow]:
         """Alias for ``recommend``."""
-        return self.recommend(days=days, platform=platform, limit=limit)
+        return self.recommend(
+            days=days,
+            platform=platform,
+            limit=limit,
+            content_type=content_type,
+        )
 
-    def _fetch_rows(self, days: int, platform: str) -> list[dict]:
+    def _fetch_rows(
+        self,
+        days: int,
+        platform: str,
+        content_type: str | None = None,
+    ) -> list[dict]:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         platforms = ("x", "bluesky") if platform == "all" else (platform,)
         rows: list[dict] = []
@@ -133,6 +145,8 @@ class PostingWindowRecommender:
             for raw_row in self._fetch_platform_rows(platform_name):
                 published_at = _parse_datetime(raw_row["published_at"])
                 if published_at is None or published_at < cutoff:
+                    continue
+                if content_type and raw_row.get("content_type") != content_type:
                     continue
                 engagement_score = raw_row["engagement_score"]
                 if engagement_score is None:
@@ -165,7 +179,8 @@ class PostingWindowRecommender:
                    WHERE engagement_score IS NOT NULL
                )
                SELECT COALESCE(gc.published_at, cp.published_at) AS published_at,
-                      latest.engagement_score AS engagement_score
+                      latest.engagement_score AS engagement_score,
+                      gc.content_type AS content_type
                FROM content_publications cp
                INNER JOIN generated_content gc ON gc.id = cp.content_id
                INNER JOIN latest ON latest.content_id = gc.id AND latest.rn = 1
@@ -174,7 +189,8 @@ class PostingWindowRecommender:
                  AND cp.published_at IS NOT NULL
                UNION ALL
                SELECT gc.published_at AS published_at,
-                      latest.engagement_score AS engagement_score
+                      latest.engagement_score AS engagement_score,
+                      gc.content_type AS content_type
                FROM generated_content gc
                INNER JOIN latest ON latest.content_id = gc.id AND latest.rn = 1
                WHERE gc.published = 1
@@ -200,7 +216,8 @@ class PostingWindowRecommender:
                    WHERE engagement_score IS NOT NULL
                )
                SELECT cp.published_at AS published_at,
-                      latest.engagement_score AS engagement_score
+                      latest.engagement_score AS engagement_score,
+                      gc.content_type AS content_type
                FROM content_publications cp
                INNER JOIN generated_content gc ON gc.id = cp.content_id
                INNER JOIN latest ON latest.content_id = gc.id AND latest.rn = 1
@@ -240,9 +257,15 @@ def recommend_posting_windows(
     days: int = 90,
     platform: str = "all",
     limit: int | None = 10,
+    content_type: str | None = None,
 ) -> list[PostingWindow]:
     """Convenience wrapper for ``PostingWindowRecommender.recommend``."""
-    return PostingWindowRecommender(db).recommend(days=days, platform=platform, limit=limit)
+    return PostingWindowRecommender(db).recommend(
+        days=days,
+        platform=platform,
+        limit=limit,
+        content_type=content_type,
+    )
 
 
 def _normalize_platform(platform: str) -> str:
