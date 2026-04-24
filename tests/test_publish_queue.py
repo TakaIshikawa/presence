@@ -854,11 +854,7 @@ def test_main_holds_attribution_required_knowledge_without_visible_citation(test
         (queue_id,),
     ).fetchone()
     assert row["status"] == "held"
-    assert "Attribution guard blocked missing citations" in row["hold_reason"]
-    assert (
-        f"knowledge {knowledge_id}: attribution_required "
-        "Source Author https://source.example/attribution"
-    ) in row["hold_reason"]
+    assert row["hold_reason"] == "missing_attribution"
     mock_x_client.post.assert_not_called()
 
 
@@ -921,6 +917,141 @@ def test_main_publishes_attribution_required_knowledge_with_visible_citation(tes
     mock_x_client.post.assert_called_once_with(
         "Attribution source post\nSource: https://source.example/attribution"
     )
+
+
+def test_main_holds_content_with_unsupported_claims(test_db, base_time):
+    """Unsupported final claim summaries hold queued content before posting."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("The queue change cut retries by 87%.", "x_post", 7.0, 0),
+    ).lastrowid
+    test_db.save_claim_check_summary(
+        content_id,
+        supported_count=0,
+        unsupported_count=1,
+        annotation_text="metric: The queue change cut retries by 87%.",
+    )
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+
+    mock_config = make_config(bluesky_enabled=False)
+    mock_x_client = MagicMock()
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    row = test_db.conn.execute(
+        "SELECT status, hold_reason FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    assert row["status"] == "held"
+    assert row["hold_reason"] == "unsupported_claims"
+    mock_x_client.post.assert_not_called()
+
+
+def test_main_holds_content_with_failed_persona_guard(test_db, base_time):
+    """Failed persona guard summaries hold queued content before posting."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("Unlock revolutionary momentum with best-in-class systems.", "x_post", 7.0, 0),
+    ).lastrowid
+    test_db.save_claim_check_summary(
+        content_id,
+        supported_count=0,
+        unsupported_count=0,
+    )
+    test_db.save_persona_guard_summary(
+        content_id,
+        {
+            "checked": True,
+            "passed": False,
+            "status": "failed",
+            "score": 0.2,
+            "reasons": ["banned tone markers: unlock"],
+            "metrics": {},
+        },
+    )
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+
+    mock_config = make_config(bluesky_enabled=False)
+    mock_x_client = MagicMock()
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main()
+
+    row = test_db.conn.execute(
+        "SELECT status, hold_reason FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    assert row["status"] == "held"
+    assert row["hold_reason"] == "persona_guard_failed"
+    mock_x_client.post.assert_not_called()
+
+
+def test_main_skip_clearance_publishes_despite_failed_clearance(test_db, base_time):
+    """The manual skip flag preserves direct publishing behavior."""
+    content_id = test_db.conn.execute(
+        """INSERT INTO generated_content
+           (content, content_type, eval_score, published)
+           VALUES (?, ?, ?, ?)""",
+        ("The queue change cut retries by 87%.", "x_post", 7.0, 0),
+    ).lastrowid
+    test_db.save_claim_check_summary(
+        content_id,
+        supported_count=0,
+        unsupported_count=1,
+        annotation_text="metric: The queue change cut retries by 87%.",
+    )
+    queue_id = test_db.queue_for_publishing(content_id, base_time.isoformat(), platform="x")
+
+    mock_config = make_config(bluesky_enabled=False)
+    mock_x_client = MagicMock()
+    mock_x_client.post.return_value = FakePostResult(
+        success=True,
+        url="https://x.com/test/status/123",
+        tweet_id="123",
+    )
+
+    with patch("publish_queue.script_context") as mock_context, \
+         patch("publish_queue.XClient", return_value=mock_x_client), \
+         patch("publish_queue.update_monitoring"), \
+         patch("publish_queue.datetime") as mock_datetime:
+
+        mock_datetime.now.return_value = base_time
+        mock_context.return_value.__enter__.return_value = (mock_config, test_db)
+        mock_context.return_value.__exit__.return_value = False
+
+        from publish_queue import main
+        main(["--skip-clearance"])
+
+    row = test_db.conn.execute(
+        "SELECT status, hold_reason FROM publish_queue WHERE id = ?",
+        (queue_id,),
+    ).fetchone()
+    assert row["status"] == "published"
+    assert row["hold_reason"] is None
+    mock_x_client.post.assert_called_once_with("The queue change cut retries by 87%.")
 
 
 def test_main_handles_x_posting_failure(test_db, base_time):

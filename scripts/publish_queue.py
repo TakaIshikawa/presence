@@ -196,11 +196,11 @@ from evaluation.posting_schedule import (
     next_allowed_slot,
 )
 from output.bluesky_client import BlueskyClient
-from output.attribution_guard import check_publication_attribution_guard
 from output.license_guard import (
     check_publication_license_guard,
     restricted_prompt_behavior_from_config,
 )
+from output.publish_clearance import check_publication_clearance
 from output.publish_errors import classify_publish_error, normalize_error_category
 from output.thread_preflight import (
     summarize_thread_preflight_failures,
@@ -302,8 +302,6 @@ def _alt_text_guard_error(item: dict) -> str | None:
     return "; ".join(
         f"{issue.code}: {issue.message}" for issue in result.issues
     )
-
-
 def _license_guard_summary(license_guard: dict) -> str:
     return "; ".join(
         "knowledge {knowledge_id}: {license} {source_url}".format(
@@ -313,19 +311,6 @@ def _license_guard_summary(license_guard: dict) -> str:
         )
         for source in license_guard.get("restricted_sources", [])
     )
-
-
-def _attribution_guard_summary(attribution_guard: dict) -> str:
-    return "; ".join(
-        "knowledge {knowledge_id}: {license} {author} {source_url}".format(
-            knowledge_id=source["knowledge_id"],
-            license=source["license"],
-            author=source.get("author") or "unknown author",
-            source_url=source.get("source_url") or "no source URL",
-        )
-        for source in attribution_guard.get("missing_sources", [])
-    )
-
 
 def _content_copy_for_platform(
     db,
@@ -346,6 +331,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--allow-restricted-knowledge",
         action="store_true",
         help="Publish content even when it is linked to restricted knowledge",
+    )
+    parser.add_argument(
+        "--skip-clearance",
+        action="store_true",
+        help="Manually bypass deterministic publish clearance checks",
     )
     return parser.parse_args(argv)
 
@@ -513,44 +503,34 @@ def main(argv: list[str] | None = None) -> None:
                         logger.error(f"  {error_text}")
                         continue
 
-                for pending_platform in pending_platforms:
-                    platform_content = _content_copy_for_platform(
+                platform_texts = {
+                    pending_platform: _content_copy_for_platform(
                         db,
                         content_id,
                         pending_platform,
                         variant_type,
                         x_content,
                     )
-                    attribution_guard = check_publication_attribution_guard(
+                    for pending_platform in pending_platforms
+                }
+                if not args.skip_clearance:
+                    clearance = check_publication_clearance(
                         db,
-                        content_id,
-                        platform_content,
-                    ).as_dict()
-                    if attribution_guard["blocked"]:
-                        reason = (
-                            "Attribution guard blocked missing citations: "
-                            f"{_attribution_guard_summary(attribution_guard)}"
-                        )
-                        db.hold_publish_queue_item(queue_id, reason=reason)
-                        logger.error(f"  {reason}")
-                        break
-                else:
-                    attribution_guard = None
-
-                if attribution_guard and attribution_guard["blocked"]:
-                    continue
-
-                alt_text_error = _alt_text_guard_error(item)
-                if alt_text_error:
-                    if _alt_text_guard_mode(config) == "strict":
-                        db.mark_queue_failed(
+                        item,
+                        platform_texts=platform_texts,
+                        alt_text_guard_mode=_alt_text_guard_mode(config),
+                    )
+                    if clearance.blocked:
+                        db.hold_publish_queue_item(
                             queue_id,
-                            f"Alt text guard failed: {alt_text_error}",
-                            error_category="media",
+                            reason=clearance.hold_reason,
                         )
-                        logger.error(f"  Alt text guard failed: {alt_text_error}")
+                        logger.error(
+                            "  Publish clearance held queue item %s: %s",
+                            queue_id,
+                            clearance.hold_reason,
+                        )
                         continue
-                    logger.warning(f"  Alt text guard warning: {alt_text_error}")
 
                 platform_errors = []
                 deferred_platforms = []
