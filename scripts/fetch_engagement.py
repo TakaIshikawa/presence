@@ -16,7 +16,7 @@ from output.x_api_guard import (
     get_x_api_block_reason,
     mark_x_api_blocked_if_needed,
 )
-from output.api_rate_guard import should_skip_optional_api_call
+from output.api_rate_guard import record_snapshot, should_skip_optional_api_call
 
 # Max tweets to fetch per batch (X API limit for GET /2/tweets)
 BATCH_SIZE = 100
@@ -241,6 +241,12 @@ def main() -> None:
                 try:
                     response = client.get_tweets(
                         ids=batch, tweet_fields=["public_metrics"]
+                    )
+                    record_snapshot(
+                        db,
+                        "x",
+                        headers=getattr(response, "headers", None),
+                        endpoint="GET /2/tweets",
                     )
                 except tweepy.TweepyException as e:
                     blocked_until = mark_x_api_blocked_if_needed(db, e)

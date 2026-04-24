@@ -118,6 +118,7 @@ def main() -> None:
             config.github.username,
             timeout=config.timeouts.github_seconds,
             redaction_patterns=config.privacy.redaction_patterns,
+            db=db,
         )
 
         # Initialize embedder for semantic dedup

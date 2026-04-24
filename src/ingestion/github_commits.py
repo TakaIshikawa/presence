@@ -5,6 +5,7 @@ from typing import Iterator, Optional, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from output.api_rate_guard import record_snapshot
 from ingestion.redaction import Redactor
 
 
@@ -58,10 +59,12 @@ class GitHubClient:
         username: str,
         timeout: int = 30,
         redaction_patterns: Optional[Iterable[str | dict]] = None,
+        db=None,
     ):
         self.token = token
         self.username = username
         self.timeout = timeout
+        self.db = db
         self.redactor = Redactor(redaction_patterns)
         self.headers = {
             "Authorization": f"Bearer {token}",
@@ -88,6 +91,7 @@ class GitHubClient:
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
+                self._record_rate_limit(response, endpoint="/user/repos")
             except requests.exceptions.ConnectionError as e:
                 raise GitHubClientError(f"Connection error: {e}") from e
             except requests.exceptions.HTTPError as e:
@@ -140,6 +144,10 @@ class GitHubClient:
                 return
 
             response.raise_for_status()
+            self._record_rate_limit(
+                response,
+                endpoint=f"/repos/{self.username}/{repo_name}/commits",
+            )
         except requests.exceptions.ConnectionError as e:
             raise GitHubClientError(f"Connection error: {e}") from e
         except requests.exceptions.HTTPError as e:
@@ -164,6 +172,17 @@ class GitHubClient:
                 author=commit["author"]["name"],
                 url=commit_data["html_url"]
             )
+
+    def _record_rate_limit(self, response, endpoint: str) -> None:
+        try:
+            record_snapshot(
+                self.db,
+                "github",
+                headers=getattr(response, "headers", None),
+                endpoint=endpoint,
+            )
+        except Exception:
+            pass
 
     def get_all_recent_commits(
         self,
@@ -193,7 +212,7 @@ def poll_new_commits(
 
     Returns list of newly discovered commits.
     """
-    client = GitHubClient(token, username, redaction_patterns=redaction_patterns)
+    client = GitHubClient(token, username, redaction_patterns=redaction_patterns, db=db)
     redactor = Redactor(redaction_patterns)
     new_commits = []
 

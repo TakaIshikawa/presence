@@ -200,6 +200,7 @@ class RateLimitsConfig:
     x_min_remaining: int = 10
     bluesky_min_remaining: int = 10
     anthropic_min_remaining: int = 5
+    github_min_remaining: int = 10
 
 
 @dataclass
@@ -214,6 +215,7 @@ class OperationsHealthConfig:
     max_engagement_fetch_age_hours: int = 36
     max_newsletter_weekly_unsubscribes: int = 5
     max_newsletter_churn_rate: float = 0.05
+    max_api_rate_limit_snapshot_age_hours: int = 24
 
 
 @dataclass
@@ -556,6 +558,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             x_min_remaining=rate_data.get("x_min_remaining", 10),
             bluesky_min_remaining=rate_data.get("bluesky_min_remaining", 10),
             anthropic_min_remaining=rate_data.get("anthropic_min_remaining", 5),
+            github_min_remaining=rate_data.get("github_min_remaining", 10),
         )
 
     default_poll_health_minutes = data["polling"].get("interval_minutes", 10) * 3
@@ -588,6 +591,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
             ),
             max_newsletter_churn_rate=health_data.get(
                 "max_newsletter_churn_rate", 0.05
+            ),
+            max_api_rate_limit_snapshot_age_hours=health_data.get(
+                "max_api_rate_limit_snapshot_age_hours", 24
             ),
         )
 

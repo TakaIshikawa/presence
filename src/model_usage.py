@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from output.api_rate_guard import record_snapshot
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,7 +87,7 @@ def record_anthropic_usage(
     total_tokens = input_tokens + output_tokens
     estimated_cost = estimate_anthropic_cost(model_name, input_tokens, output_tokens)
     try:
-        return db.record_model_usage(
+        usage_id = db.record_model_usage(
             model_name=model_name,
             operation_name=operation_name,
             input_tokens=input_tokens,
@@ -95,6 +97,16 @@ def record_anthropic_usage(
             content_id=content_id,
             pipeline_run_id=pipeline_run_id,
         )
+        try:
+            record_snapshot(
+                db,
+                "anthropic",
+                headers=getattr(response, "headers", None),
+                endpoint=operation_name,
+            )
+        except Exception as exc:
+            logger.warning("Failed to record Anthropic rate-limit snapshot: %s", exc)
+        return usage_id
     except Exception as exc:
         logger.warning("Failed to record model usage: %s", exc)
         return None

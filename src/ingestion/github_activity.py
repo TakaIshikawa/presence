@@ -8,6 +8,7 @@ from typing import Iterable, Iterator, Optional
 
 import requests
 
+from output.api_rate_guard import record_snapshot
 from ingestion.github_commits import (
     GitHubAuthError,
     GitHubClientError,
@@ -93,10 +94,12 @@ class GitHubActivityClient:
         username: str,
         timeout: int = 30,
         redaction_patterns: Optional[Iterable[str | dict]] = None,
+        db=None,
     ):
         self.token = token
         self.username = username
         self.timeout = timeout
+        self.db = db
         self.redactor = Redactor(redaction_patterns)
         self.headers = {
             "Authorization": f"Bearer {token}",
@@ -116,6 +119,7 @@ class GitHubActivityClient:
                 timeout=self.timeout,
             )
             response.raise_for_status()
+            self._record_rate_limit(response, endpoint=path)
         except requests.exceptions.ConnectionError as e:
             raise GitHubClientError(f"Connection error: {e}") from e
         except requests.exceptions.HTTPError as e:
@@ -151,6 +155,7 @@ class GitHubActivityClient:
                 timeout=self.timeout,
             )
             response.raise_for_status()
+            self._record_rate_limit(response, endpoint="/graphql")
         except requests.exceptions.ConnectionError as e:
             raise GitHubClientError(f"Connection error: {e}") from e
         except requests.exceptions.HTTPError as e:
@@ -170,6 +175,17 @@ class GitHubActivityClient:
                 return {"data": {"repository": {"discussions": {"nodes": [], "pageInfo": {}}}}}
             raise GitHubClientError(f"GraphQL error: {messages}")
         return payload
+
+    def _record_rate_limit(self, response, endpoint: str) -> None:
+        try:
+            record_snapshot(
+                self.db,
+                "github",
+                headers=getattr(response, "headers", None),
+                endpoint=endpoint,
+            )
+        except Exception:
+            pass
 
     def get_configured_repos(
         self,
@@ -916,6 +932,7 @@ def poll_new_activity(
         username,
         timeout=timeout,
         redaction_patterns=redaction_patterns,
+        db=db,
     )
     new_activity = []
 

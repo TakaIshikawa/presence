@@ -327,6 +327,23 @@ class Database:
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS api_rate_limit_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    endpoint TEXT NOT NULL DEFAULT 'default',
+                    remaining INTEGER NOT NULL,
+                    limit_value INTEGER,
+                    reset_at TEXT,
+                    raw_metadata JSON,
+                    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS "
+                "idx_api_rate_limit_snapshots_provider_endpoint_fetched "
+                "ON api_rate_limit_snapshots(provider, endpoint, fetched_at DESC, id DESC)"
+            )
             # Migrate: create content calendar campaign support if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS content_campaigns (
@@ -2980,6 +2997,98 @@ class Database:
             (key, value, now)
         )
         self.conn.commit()
+
+    def insert_api_rate_limit_snapshot(
+        self,
+        provider: str,
+        remaining: int,
+        limit: Optional[int] = None,
+        reset_at: Optional[str | datetime] = None,
+        endpoint: str = "default",
+        raw_metadata: Optional[dict] = None,
+        fetched_at: Optional[str | datetime] = None,
+    ) -> int:
+        """Persist an API rate-limit snapshot."""
+        fetched = fetched_at or datetime.now(timezone.utc)
+        cursor = self.conn.execute(
+            """INSERT INTO api_rate_limit_snapshots
+               (provider, endpoint, remaining, limit_value, reset_at, raw_metadata, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                provider,
+                endpoint or "default",
+                remaining,
+                limit,
+                self._datetime_text(reset_at),
+                json.dumps(raw_metadata or {}, sort_keys=True),
+                self._datetime_text(fetched),
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_latest_api_rate_limit_snapshot(
+        self,
+        provider: str,
+        endpoint: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Return the latest API rate-limit snapshot for a provider/endpoint."""
+        params: list = [provider]
+        where = "WHERE provider = ?"
+        if endpoint is not None:
+            where += " AND endpoint = ?"
+            params.append(endpoint)
+        cursor = self.conn.execute(
+            f"""SELECT id, provider, endpoint, remaining, limit_value,
+                       reset_at, raw_metadata, fetched_at
+                FROM api_rate_limit_snapshots
+                {where}
+                ORDER BY fetched_at DESC, id DESC
+                LIMIT 1""",
+            params,
+        )
+        row = cursor.fetchone()
+        return self._api_rate_limit_snapshot_dict(row) if row else None
+
+    def list_latest_api_rate_limit_snapshots(self) -> list[dict]:
+        """Return the latest API rate-limit snapshot for each provider/endpoint."""
+        cursor = self.conn.execute(
+            """SELECT id, provider, endpoint, remaining, limit_value,
+                      reset_at, raw_metadata, fetched_at
+               FROM (
+                   SELECT s.*,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY provider, endpoint
+                              ORDER BY fetched_at DESC, id DESC
+                          ) AS rn
+                   FROM api_rate_limit_snapshots s
+               )
+               WHERE rn = 1
+               ORDER BY provider, endpoint"""
+        )
+        return [
+            self._api_rate_limit_snapshot_dict(row)
+            for row in cursor.fetchall()
+        ]
+
+    @staticmethod
+    def _datetime_text(value: Optional[str | datetime]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
+    @staticmethod
+    def _api_rate_limit_snapshot_dict(row) -> dict:
+        item = dict(row)
+        if "limit_value" in item:
+            item["limit"] = item.pop("limit_value")
+        try:
+            item["raw_metadata"] = json.loads(item.get("raw_metadata") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            item["raw_metadata"] = {}
+        return item
 
     # Reply queue
     def is_reply_processed(self, inbound_tweet_id: str) -> bool:

@@ -169,6 +169,22 @@ class TestSchemaInit:
         }
         assert expected.issubset(cols)
 
+    def test_api_rate_limit_snapshots_table_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(api_rate_limit_snapshots)")
+        }
+        expected = {
+            "provider",
+            "endpoint",
+            "remaining",
+            "limit_value",
+            "reset_at",
+            "raw_metadata",
+            "fetched_at",
+        }
+        assert expected.issubset(cols)
+
     def test_newsletter_subject_candidates_table_exists(self, db):
         cols = {
             row[1]
@@ -317,6 +333,65 @@ class TestModelUsage:
         )
 
         assert db.get_model_usage_cost_for_utc_day() == pytest.approx(0.5)
+
+
+class TestApiRateLimitSnapshots:
+    def test_insert_and_fetch_latest_snapshot(self, db):
+        db.insert_api_rate_limit_snapshot(
+            provider="x",
+            endpoint="GET /2/tweets",
+            remaining=20,
+            limit=100,
+            reset_at="2026-04-23T13:00:00+00:00",
+            raw_metadata={"source": "test"},
+            fetched_at="2026-04-23T12:00:00+00:00",
+        )
+        latest_id = db.insert_api_rate_limit_snapshot(
+            provider="x",
+            endpoint="GET /2/tweets",
+            remaining=8,
+            limit=100,
+            reset_at="2026-04-23T14:00:00+00:00",
+            raw_metadata={"source": "newer"},
+            fetched_at="2026-04-23T12:30:00+00:00",
+        )
+
+        latest = db.get_latest_api_rate_limit_snapshot("x", "GET /2/tweets")
+
+        assert latest["id"] == latest_id
+        assert latest["provider"] == "x"
+        assert latest["endpoint"] == "GET /2/tweets"
+        assert latest["remaining"] == 8
+        assert latest["limit"] == 100
+        assert latest["raw_metadata"] == {"source": "newer"}
+
+    def test_list_latest_snapshots_selects_per_provider_endpoint(self, db):
+        db.insert_api_rate_limit_snapshot(
+            "x",
+            remaining=2,
+            endpoint="GET /2/tweets",
+            fetched_at="2026-04-23T12:00:00+00:00",
+        )
+        db.insert_api_rate_limit_snapshot(
+            "x",
+            remaining=9,
+            endpoint="GET /2/tweets",
+            fetched_at="2026-04-23T12:05:00+00:00",
+        )
+        db.insert_api_rate_limit_snapshot(
+            "github",
+            remaining=42,
+            endpoint="/user/repos",
+            fetched_at="2026-04-23T12:01:00+00:00",
+        )
+
+        latest = {
+            (row["provider"], row["endpoint"]): row
+            for row in db.list_latest_api_rate_limit_snapshots()
+        }
+
+        assert latest[("x", "GET /2/tweets")]["remaining"] == 9
+        assert latest[("github", "/user/repos")]["remaining"] == 42
 
 
 # --- Schema migration logic ---

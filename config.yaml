@@ -160,6 +160,7 @@ rate_limits:
   x_min_remaining: 10
   bluesky_min_remaining: 10
   anthropic_min_remaining: 5
+  github_min_remaining: 10
 
 # Operational health warning thresholds
 operations_health:
@@ -173,6 +174,7 @@ operations_health:
   max_engagement_fetch_age_hours: 36
   max_newsletter_weekly_unsubscribes: 5
   max_newsletter_churn_rate: 0.05
+  max_api_rate_limit_snapshot_age_hours: 24
 
 # Operational state alerts written into .tact/config/operations.yaml
 operations:

@@ -514,6 +514,20 @@ CREATE TABLE IF NOT EXISTS meta (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Durable API rate-limit snapshots for operational diagnosis
+CREATE TABLE IF NOT EXISTS api_rate_limit_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    endpoint TEXT NOT NULL DEFAULT 'default',
+    remaining INTEGER NOT NULL,
+    limit_value INTEGER,
+    reset_at TEXT,
+    raw_metadata JSON,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_api_rate_limit_snapshots_provider_endpoint_fetched
+    ON api_rate_limit_snapshots(provider, endpoint, fetched_at DESC, id DESC);
+
 -- Content topic tracking
 CREATE TABLE IF NOT EXISTS content_topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

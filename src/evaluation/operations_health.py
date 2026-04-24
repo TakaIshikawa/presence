@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,25 +20,45 @@ class OperationsHealthThresholds:
     max_engagement_fetch_age_hours: int = 36
     max_newsletter_weekly_unsubscribes: int = 5
     max_newsletter_churn_rate: float = 0.05
+    max_api_rate_limit_snapshot_age_hours: int = 24
+    api_rate_limit_min_remaining: dict[str, int] = field(default_factory=dict)
 
 
 def thresholds_from_config(config: Any) -> OperationsHealthThresholds:
     """Build health thresholds from the loaded app config."""
     source = getattr(config, "operations_health", None)
     if source is None:
-        return OperationsHealthThresholds()
-    return OperationsHealthThresholds(
-        max_poll_age_minutes=source.max_poll_age_minutes,
-        max_reply_state_age_hours=source.max_reply_state_age_hours,
-        max_platform_reply_state_age_hours=source.max_platform_reply_state_age_hours,
-        max_failed_queue_items=source.max_failed_queue_items,
-        pipeline_window_hours=source.pipeline_window_hours,
-        min_pipeline_runs_for_rejection_rate=source.min_pipeline_runs_for_rejection_rate,
-        max_pipeline_rejection_rate=source.max_pipeline_rejection_rate,
-        max_engagement_fetch_age_hours=source.max_engagement_fetch_age_hours,
-        max_newsletter_weekly_unsubscribes=source.max_newsletter_weekly_unsubscribes,
-        max_newsletter_churn_rate=source.max_newsletter_churn_rate,
-    )
+        health = OperationsHealthThresholds()
+    else:
+        health = OperationsHealthThresholds(
+            max_poll_age_minutes=source.max_poll_age_minutes,
+            max_reply_state_age_hours=source.max_reply_state_age_hours,
+            max_platform_reply_state_age_hours=source.max_platform_reply_state_age_hours,
+            max_failed_queue_items=source.max_failed_queue_items,
+            pipeline_window_hours=source.pipeline_window_hours,
+            min_pipeline_runs_for_rejection_rate=source.min_pipeline_runs_for_rejection_rate,
+            max_pipeline_rejection_rate=source.max_pipeline_rejection_rate,
+            max_engagement_fetch_age_hours=source.max_engagement_fetch_age_hours,
+            max_newsletter_weekly_unsubscribes=source.max_newsletter_weekly_unsubscribes,
+            max_newsletter_churn_rate=source.max_newsletter_churn_rate,
+            max_api_rate_limit_snapshot_age_hours=getattr(
+                source,
+                "max_api_rate_limit_snapshot_age_hours",
+                24,
+            ),
+        )
+    rate_limits = getattr(config, "rate_limits", None)
+    health.api_rate_limit_min_remaining = {
+        provider: threshold
+        for provider, threshold in {
+            "x": _optional_int(getattr(rate_limits, "x_min_remaining", None)),
+            "bluesky": _optional_int(getattr(rate_limits, "bluesky_min_remaining", None)),
+            "anthropic": _optional_int(getattr(rate_limits, "anthropic_min_remaining", None)),
+            "github": _optional_int(getattr(rate_limits, "github_min_remaining", None)),
+        }.items()
+        if threshold is not None and threshold > 0
+    }
+    return health
 
 
 def summarize_operations_health(
@@ -58,6 +78,7 @@ def summarize_operations_health(
         "pipeline_runs": _pipeline_runs(conn, thresholds, now),
         "engagement_fetches": _engagement_fetches(conn, thresholds, now),
         "newsletter_audience": _newsletter_audience(conn, thresholds),
+        "api_rate_limits": _api_rate_limits(conn, thresholds, now),
     }
     warnings = [
         message
@@ -141,6 +162,15 @@ def format_operations_health(summary: dict) -> str:
         churn_rate = newsletter.get("churn_rate")
         churn_text = f"{churn_rate * 100:.2f}%" if churn_rate is not None else "unknown"
         lines.append(f"  Churn rate: {churn_text}")
+
+    api_limits = checks["api_rate_limits"]
+    lines.append(f"API rate limits: {api_limits['status']}")
+    for key, data in sorted(api_limits.get("snapshots", {}).items()):
+        age = data.get("age_hours")
+        age_text = f", age {age:.1f}h" if age is not None else ""
+        limit = data.get("limit")
+        budget = f"{data['remaining']}/{limit}" if limit is not None else str(data["remaining"])
+        lines.append(f"  {key}: remaining {budget}{age_text}")
 
     if summary["warnings"]:
         lines.extend(["", "Warnings:"])
@@ -458,8 +488,73 @@ def _engagement_platform(
     }
 
 
+def _api_rate_limits(
+    conn: sqlite3.Connection,
+    thresholds: OperationsHealthThresholds,
+    now: datetime,
+) -> dict:
+    if not _has_table(conn, "api_rate_limit_snapshots"):
+        return {"status": "ok", "snapshots": {}, "warnings": []}
+
+    rows = _all(
+        conn,
+        """SELECT id, provider, endpoint, remaining, limit_value,
+                  reset_at, fetched_at
+           FROM (
+               SELECT s.*,
+                      ROW_NUMBER() OVER (
+                          PARTITION BY provider, endpoint
+                          ORDER BY fetched_at DESC, id DESC
+                      ) AS rn
+               FROM api_rate_limit_snapshots s
+           )
+           WHERE rn = 1
+           ORDER BY provider, endpoint""",
+    )
+    warnings = []
+    snapshots = {}
+    for row in rows:
+        provider = row["provider"]
+        endpoint = row["endpoint"] or "default"
+        key = f"{provider}:{endpoint}"
+        age_hours = _age(now, row["fetched_at"]).total_seconds() / 3600
+        remaining = row["remaining"]
+        threshold = thresholds.api_rate_limit_min_remaining.get(provider)
+        snapshots[key] = {
+            "provider": provider,
+            "endpoint": endpoint,
+            "remaining": remaining,
+            "limit": row["limit_value"],
+            "reset_at": row["reset_at"],
+            "fetched_at": row["fetched_at"],
+            "age_hours": round(age_hours, 2),
+            "threshold": threshold,
+        }
+        if threshold is not None and remaining <= threshold:
+            warnings.append(
+                f"{provider} API rate limit for {endpoint} is low: "
+                f"{remaining} <= {threshold}"
+            )
+        if age_hours > thresholds.max_api_rate_limit_snapshot_age_hours:
+            warnings.append(
+                f"{provider} API rate limit snapshot for {endpoint} is stale: "
+                f"{age_hours:.1f}h > {thresholds.max_api_rate_limit_snapshot_age_hours}h"
+            )
+
+    return {"status": _status(warnings), "snapshots": snapshots, "warnings": warnings}
+
+
 def _status(warnings: list[str]) -> str:
     return "warning" if warnings else "ok"
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _warning(message: str, **fields: Any) -> dict:

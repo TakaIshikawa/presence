@@ -642,6 +642,7 @@ class TestDefaults:
         assert cfg.rate_limits.x_min_remaining == 10
         assert cfg.rate_limits.bluesky_min_remaining == 10
         assert cfg.rate_limits.anthropic_min_remaining == 5
+        assert cfg.rate_limits.github_min_remaining == 10
 
     def test_rate_limits_overrides(self, tmp_path):
         data = _minimal_config_dict(
@@ -649,12 +650,14 @@ class TestDefaults:
                 "x_min_remaining": 3,
                 "bluesky_min_remaining": 4,
                 "anthropic_min_remaining": 2,
+                "github_min_remaining": 7,
             }
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
         assert cfg.rate_limits.x_min_remaining == 3
         assert cfg.rate_limits.bluesky_min_remaining == 4
         assert cfg.rate_limits.anthropic_min_remaining == 2
+        assert cfg.rate_limits.github_min_remaining == 7
 
     def test_operations_health_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

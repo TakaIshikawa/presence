@@ -82,6 +82,13 @@ def _summary(conn):
             max_engagement_fetch_age_hours=36,
             max_newsletter_weekly_unsubscribes=5,
             max_newsletter_churn_rate=0.05,
+            max_api_rate_limit_snapshot_age_hours=24,
+            api_rate_limit_min_remaining={
+                "x": 10,
+                "bluesky": 10,
+                "anthropic": 5,
+                "github": 10,
+            },
         ),
         now=NOW,
     )
@@ -98,6 +105,7 @@ def test_operations_health_healthy(db):
     assert summary["checks"]["pipeline_runs"]["rejection_rate"] == 0
     assert summary["checks"]["newsletter_audience"]["status"] == "ok"
     assert summary["checks"]["newsletter_audience"]["latest_fetched_at"] is None
+    assert summary["checks"]["api_rate_limits"]["status"] == "ok"
     assert "OPERATIONS HEALTH" in format_operations_health(summary)
 
 
@@ -209,3 +217,42 @@ def test_operations_health_warning_webhook_payload(db):
     assert payload["alerts"][0]["id"] == "poll_state"
     assert payload["alerts"][0]["level"] == "warning"
     assert "poll_state is stale" in payload["alerts"][0]["summary"]
+
+
+def test_operations_health_warns_on_low_api_rate_limit_snapshot(db):
+    _seed_healthy(db.conn)
+    db.insert_api_rate_limit_snapshot(
+        "x",
+        endpoint="GET /2/tweets",
+        remaining=8,
+        limit=100,
+        fetched_at=_ts(1),
+    )
+
+    summary = _summary(db.conn)
+
+    api_limits = summary["checks"]["api_rate_limits"]
+    assert summary["status"] == "warning"
+    assert api_limits["status"] == "warning"
+    assert api_limits["snapshots"]["x:GET /2/tweets"]["remaining"] == 8
+    assert any("x API rate limit for GET /2/tweets is low" in warning for warning in summary["warnings"])
+    assert "API rate limits: warning" in format_operations_health(summary)
+
+
+def test_operations_health_warns_on_stale_api_rate_limit_snapshot(db):
+    _seed_healthy(db.conn)
+    db.insert_api_rate_limit_snapshot(
+        "github",
+        endpoint="/user/repos",
+        remaining=4000,
+        limit=5000,
+        fetched_at=_ts(30),
+    )
+
+    summary = _summary(db.conn)
+
+    assert summary["checks"]["api_rate_limits"]["status"] == "warning"
+    assert any(
+        "github API rate limit snapshot for /user/repos is stale" in warning
+        for warning in summary["warnings"]
+    )
