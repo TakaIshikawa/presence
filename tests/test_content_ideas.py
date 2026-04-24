@@ -246,3 +246,37 @@ def test_cmd_promote_skips_similar_active_idea_unless_forced(db, capsys):
     assert "Warning: promoting despite similar content idea" in output
     assert db.get_content_idea(first_id)["status"] == "promoted"
     assert db.get_content_idea(second_id)["status"] == "open"
+
+
+def test_content_idea_aging_action_merges_source_metadata(db):
+    idea_id = db.add_content_idea(
+        "Keep existing metadata",
+        topic="testing",
+        source_metadata={"source": "manual", "nested": {"keep": True}},
+    )
+
+    db.apply_content_idea_aging_action(
+        idea_id,
+        action={
+            "source": "content_idea_aging",
+            "action": "promote_priority",
+            "reason": "old enough to promote",
+        },
+        priority="high",
+        updated_at="2026-05-01T12:00:00+00:00",
+    )
+
+    idea = db.get_content_idea(idea_id)
+    metadata = json.loads(idea["source_metadata"])
+
+    assert idea["priority"] == "high"
+    assert idea["updated_at"] == "2026-05-01T12:00:00+00:00"
+    assert metadata["source"] == "manual"
+    assert metadata["nested"] == {"keep": True}
+    assert metadata["aging_actions"] == [
+        {
+            "source": "content_idea_aging",
+            "action": "promote_priority",
+            "reason": "old enough to promote",
+        }
+    ]

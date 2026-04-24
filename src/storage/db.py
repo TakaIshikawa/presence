@@ -6657,6 +6657,58 @@ class Database:
             raise ValueError(f"Content idea {idea_id} does not exist")
         self.conn.commit()
 
+    def apply_content_idea_aging_action(
+        self,
+        idea_id: int,
+        *,
+        action: dict,
+        priority: str | None = None,
+        status: str | None = None,
+        updated_at: str | None = None,
+    ) -> None:
+        """Apply an aging action while preserving existing source metadata."""
+        if priority is None and status is None:
+            return
+        if priority is not None:
+            priority = self._normalize_content_idea_priority(priority)
+        if status is not None:
+            status = self._normalize_content_idea_status(status)
+        now = updated_at or datetime.now(timezone.utc).isoformat()
+
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT source_metadata FROM content_ideas WHERE id = ?",
+                (idea_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Content idea {idea_id} does not exist")
+
+            metadata = self._decode_content_idea_source_metadata(
+                row["source_metadata"],
+            )
+            actions = metadata.get("aging_actions")
+            if not isinstance(actions, list):
+                actions = []
+            actions.append(action)
+            metadata["aging_actions"] = actions
+
+            assignments = ["source_metadata = ?", "updated_at = ?"]
+            params: list[object] = [json.dumps(metadata, sort_keys=True), now]
+            if priority is not None:
+                assignments.append("priority = ?")
+                params.append(priority)
+            if status is not None:
+                assignments.append("status = ?")
+                params.append(status)
+            params.append(idea_id)
+
+            self.conn.execute(
+                f"""UPDATE content_ideas
+                    SET {', '.join(assignments)}
+                    WHERE id = ?""",
+                params,
+            )
+
     def _set_content_idea_status(self, idea_id: int, status: str) -> None:
         status = self._normalize_content_idea_status(status)
         now = datetime.now(timezone.utc).isoformat()
@@ -6683,6 +6735,18 @@ class Database:
         if value not in {"open", "promoted", "dismissed"}:
             raise ValueError("status must be one of: open, promoted, dismissed")
         return value
+
+    @staticmethod
+    def _decode_content_idea_source_metadata(source_metadata: object | None) -> dict:
+        if not source_metadata:
+            return {}
+        if isinstance(source_metadata, dict):
+            return dict(source_metadata)
+        try:
+            decoded = json.loads(str(source_metadata))
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
 
     @staticmethod
     def _normalize_content_idea_text(value: object | None) -> str:
