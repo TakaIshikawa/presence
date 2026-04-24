@@ -145,7 +145,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     repo_name TEXT NOT NULL,
                     activity_type TEXT NOT NULL,
-                    number INTEGER NOT NULL,
+                    number TEXT NOT NULL,
                     title TEXT NOT NULL,
                     body TEXT,
                     state TEXT,
@@ -1032,7 +1032,7 @@ class Database:
         self,
         repo_name: str,
         activity_type: str,
-        number: int,
+        number: int | str,
         updated_at: str | None = None,
     ) -> bool:
         """Return True when a GitHub activity version has already been ingested."""
@@ -1052,7 +1052,7 @@ class Database:
         self,
         repo_name: str,
         activity_type: str,
-        number: int,
+        number: int | str,
         title: str,
         state: str,
         author: str,
@@ -1119,6 +1119,48 @@ class Database:
     def insert_github_activity(self, **kwargs) -> int:
         """Compatibility wrapper for inserting/updating GitHub activity."""
         return self.upsert_github_activity(**kwargs)
+
+    def is_github_release_processed(
+        self,
+        repo_name: str,
+        tag: str,
+        published_at: str | None = None,
+    ) -> bool:
+        """Return True when a release tag has already been ingested."""
+        return self.is_github_activity_processed(
+            repo_name,
+            "release",
+            tag,
+            published_at,
+        )
+
+    def upsert_github_release(self, release: dict) -> int:
+        """Insert or update a GitHub release activity record."""
+        payload = dict(release)
+        payload["activity_type"] = "release"
+        if "number" not in payload:
+            metadata = payload.get("metadata") or {}
+            payload["number"] = payload.get("tag") or metadata.get("tag_name")
+        if "number" not in payload or payload["number"] in {None, ""}:
+            raise ValueError("GitHub release requires a tag/number")
+        allowed = {
+            "repo_name",
+            "activity_type",
+            "number",
+            "title",
+            "state",
+            "author",
+            "url",
+            "updated_at",
+            "created_at",
+            "body",
+            "closed_at",
+            "merged_at",
+            "labels",
+            "metadata",
+        }
+        payload = {key: value for key, value in payload.items() if key in allowed}
+        return self.upsert_github_activity(**payload)
 
     def get_github_activity_in_range(
         self,
@@ -2373,6 +2415,17 @@ class Database:
     def set_last_github_activity_poll_time(self, poll_time: datetime) -> None:
         """Update the last successful GitHub activity poll time."""
         self.set_meta("github_activity:last_poll_time", poll_time.isoformat())
+
+    def get_last_github_release_poll_time(self) -> Optional[datetime]:
+        """Get the last successful GitHub release poll time."""
+        value = self.get_meta("github_releases:last_poll_time")
+        if not value:
+            return None
+        return datetime.fromisoformat(value)
+
+    def set_last_github_release_poll_time(self, poll_time: datetime) -> None:
+        """Update the last successful GitHub release poll time."""
+        self.set_meta("github_releases:last_poll_time", poll_time.isoformat())
 
     # Engagement tracking
     def get_posts_needing_metrics(self, max_age_days: int = 30) -> list[dict]:

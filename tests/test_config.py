@@ -116,6 +116,7 @@ class TestDataclassParsing:
         assert cfg.github.include_discussions is False
         assert cfg.github.include_pull_requests is False
         assert cfg.github.include_workflow_runs is False
+        assert cfg.github.include_releases is False
 
     def test_github_config_include_issues_can_be_disabled(self, tmp_path):
         data = _minimal_config_dict()
@@ -148,6 +149,14 @@ class TestDataclassParsing:
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
 
         assert cfg.github.include_workflow_runs is True
+
+    def test_github_config_include_releases(self, tmp_path):
+        data = _minimal_config_dict()
+        data["github"]["include_releases"] = True
+
+        cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
+
+        assert cfg.github.include_releases is True
 
     def test_x_config(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))

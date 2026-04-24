@@ -22,13 +22,13 @@ CREATE TABLE IF NOT EXISTS github_commits (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
-<<<<<<< HEAD
 -- Track processed GitHub issues, pull requests, releases, and discussions
 CREATE TABLE IF NOT EXISTS github_activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo_name TEXT NOT NULL,
     activity_type TEXT NOT NULL,  -- 'issue', 'pull_request', 'release', 'discussion', 'issue_comment', etc.
-    number INTEGER NOT NULL,
+    number TEXT NOT NULL,
+    activity_type TEXT NOT NULL,  -- 'issue', 'pull_request', 'release', 'discussion', 'issue_comment', etc.
     title TEXT NOT NULL,
     body TEXT,
     state TEXT,

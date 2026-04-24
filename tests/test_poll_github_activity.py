@@ -44,6 +44,7 @@ def test_ingest_github_activity_passes_dry_run(mock_poll, db):
         include_pull_requests=True,
         include_comments=True,
         include_workflow_runs=True,
+        include_releases=True,
         dry_run=True,
         timeout=10,
         redaction_patterns=[{"name": "ticket", "pattern": "ticket-\\d+"}],
@@ -60,6 +61,7 @@ def test_ingest_github_activity_passes_dry_run(mock_poll, db):
         include_pull_requests=True,
         include_comments=True,
         include_workflow_runs=True,
+        include_releases=True,
         dry_run=True,
         timeout=10,
         redaction_patterns=[{"name": "ticket", "pattern": "ticket-\\d+"}],
@@ -79,6 +81,7 @@ def test_main_dry_run_does_not_update_watermark(mock_context, mock_ingest, mock_
     config.github.include_pull_requests = True
     config.github.include_comments = False
     config.github.include_workflow_runs = True
+    config.github.include_releases = True
     config.privacy.redaction_patterns = []
     config.timeouts.github_seconds = 10
     mock_context.return_value.__enter__.return_value = (config, db)
@@ -93,6 +96,9 @@ def test_main_dry_run_does_not_update_watermark(mock_context, mock_ingest, mock_
     assert mock_ingest.call_args.kwargs["include_issues"] is False
     assert mock_ingest.call_args.kwargs["include_discussions"] is True
     assert mock_ingest.call_args.kwargs["include_pull_requests"] is True
+    assert mock_ingest.call_args.kwargs["include_comments"] is False
+    assert mock_ingest.call_args.kwargs["include_workflow_runs"] is True
+    assert mock_ingest.call_args.kwargs["include_releases"] is True
     assert mock_ingest.call_args.kwargs["include_comments"] is False
     assert mock_ingest.call_args.kwargs["include_workflow_runs"] is True
 
@@ -110,6 +116,7 @@ def test_main_persists_watermark_after_success(mock_context, mock_ingest, mock_u
     config.github.include_pull_requests = False
     config.github.include_comments = True
     config.github.include_workflow_runs = False
+    config.github.include_releases = False
     config.privacy.redaction_patterns = []
     config.timeouts.github_seconds = 10
     mock_context.return_value.__enter__.return_value = (config, db)
@@ -152,3 +159,4 @@ def test_main_include_comments_cli_overrides_default(mock_context, mock_ingest, 
     mock_update.assert_not_called()
     assert mock_ingest.call_args.kwargs["include_comments"] is True
     assert mock_ingest.call_args.kwargs["include_workflow_runs"] is False
+    assert mock_ingest.call_args.kwargs["include_releases"] is False

@@ -586,6 +586,7 @@ class TestGitHubActivityClient:
                 include_pull_requests=True,
                 include_comments=True,
                 include_workflow_runs=True,
+                include_releases=True,
             )
         )
 
@@ -613,6 +614,9 @@ class TestGitHubActivityClient:
         assert list(client.get_all_recent_activity()) == []
         mock_pulls.assert_not_called()
         mock_workflows.assert_not_called()
+        mock_releases.assert_not_called()
+        mock_workflows.assert_not_called()
+        mock_releases.assert_not_called()
 
     @patch.object(GitHubActivityClient, "get_repo_discussions")
     @patch.object(GitHubActivityClient, "get_repo_releases")
@@ -633,7 +637,7 @@ class TestGitHubActivityClient:
     @patch.object(GitHubActivityClient, "get_repo_releases")
     @patch.object(GitHubActivityClient, "get_repo_issues")
     @patch.object(GitHubActivityClient, "get_configured_repos")
-    def test_get_all_recent_activity_skips_issues_when_disabled(
+    def test_get_all_recent_activity_includes_releases_when_enabled(
         self, mock_repos, mock_issues, mock_releases, mock_workflows
     ):
         mock_repos.return_value = [{"owner": "taka", "name": "repo", "repo_name": "repo"}]
@@ -641,7 +645,12 @@ class TestGitHubActivityClient:
 
         client = GitHubActivityClient("tok", "taka")
 
-        assert list(client.get_all_recent_activity(include_issues=False)) == []
+        assert list(
+            client.get_all_recent_activity(
+                include_issues=False,
+                include_releases=True,
+            )
+        ) == []
         mock_issues.assert_not_called()
         mock_releases.assert_called_once()
         mock_workflows.assert_not_called()
@@ -738,6 +747,7 @@ class TestPollNewActivity:
             include_issues=False,
             include_comments=True,
             include_workflow_runs=True,
+            include_releases=True,
         )
 
         assert result == [new]
@@ -748,6 +758,7 @@ class TestPollNewActivity:
         assert mock_activity.call_args.kwargs["include_issues"] is False
         assert mock_activity.call_args.kwargs["include_comments"] is True
         assert mock_activity.call_args.kwargs["include_workflow_runs"] is True
+        assert mock_activity.call_args.kwargs["include_releases"] is True
 
     @patch.object(GitHubActivityClient, "get_all_recent_activity")
     def test_persists_workflow_run_fields(self, mock_activity, db):

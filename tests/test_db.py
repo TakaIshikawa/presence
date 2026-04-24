@@ -1319,6 +1319,38 @@ class TestGitHubActivity:
         assert rows[0]["metadata"]["answer_state"] == "answered"
         assert rows[0]["metadata"]["category"]["slug"] == "q-a"
 
+    def test_github_release_helpers_use_stable_tag_activity_id(self, db):
+        release_id = db.upsert_github_release(
+            {
+                "repo_name": "owner/repo",
+                "tag": "v1.2.3",
+                "title": "Release 1.2.3",
+                "body": "Release notes",
+                "state": "published",
+                "author": "taka",
+                "url": "https://github.com/owner/repo/releases/tag/v1.2.3",
+                "updated_at": "2026-04-01T12:00:00+00:00",
+                "created_at": "2026-04-01T10:00:00+00:00",
+                "metadata": {"tag_name": "v1.2.3", "release_id": 123},
+            }
+        )
+
+        assert release_id
+        assert db.is_github_release_processed("owner/repo", "v1.2.3") is True
+        assert db.is_github_release_processed(
+            "owner/repo",
+            "v1.2.3",
+            "2026-04-01T13:00:00+00:00",
+        ) is False
+
+        rows = db.get_github_activity_in_range(
+            datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc),
+            activity_type="release",
+        )
+        assert rows[0]["activity_id"] == "owner/repo#v1.2.3:release"
+        assert rows[0]["number"] == "v1.2.3"
+
     def test_recent_github_releases_filters_repo_and_activity_type(self, db):
         db.upsert_github_activity(
             repo_name="repo-a",

@@ -609,6 +609,7 @@ class GitHubActivityClient:
         include_issues: bool = True,
         include_comments: bool = False,
         include_workflow_runs: bool = False,
+        include_releases: bool = False,
     ) -> Iterator[GitHubActivity]:
         """Yield recent issues, releases, and optional pull requests/discussions/comments/workflow runs."""
         for repo in self.get_configured_repos(repositories, include_forks=include_forks):
@@ -644,13 +645,14 @@ class GitHubActivityClient:
                         since=since,
                         limit=limit_per_repo,
                     )
-                yield from self.get_repo_releases(
-                    repo["owner"],
-                    repo["name"],
-                    repo_name=repo["repo_name"],
-                    since=since,
-                    limit=limit_per_repo,
-                )
+                if include_releases:
+                    yield from self.get_repo_releases(
+                        repo["owner"],
+                        repo["name"],
+                        repo_name=repo["repo_name"],
+                        since=since,
+                        limit=limit_per_repo,
+                    )
                 if include_workflow_runs:
                     yield from self.get_repo_workflow_runs(
                         repo["owner"],
@@ -1029,6 +1031,7 @@ def poll_new_activity(
     include_issues: bool = True,
     include_comments: bool = False,
     include_workflow_runs: bool = False,
+    include_releases: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: Optional[Iterable[str | dict]] = None,
@@ -1051,6 +1054,7 @@ def poll_new_activity(
         include_issues=include_issues,
         include_comments=include_comments,
         include_workflow_runs=include_workflow_runs,
+        include_releases=include_releases,
     ):
         if db.is_github_activity_processed(
             activity.repo_name,

@@ -48,6 +48,7 @@ def ingest_github_activity(
     include_pull_requests: bool = False,
     include_comments: bool = False,
     include_workflow_runs: bool = False,
+    include_releases: bool = False,
     dry_run: bool = False,
     timeout: int = 30,
     redaction_patterns: list[str | dict] | None = None,
@@ -63,6 +64,7 @@ def ingest_github_activity(
         include_pull_requests=include_pull_requests,
         include_comments=include_comments,
         include_workflow_runs=include_workflow_runs,
+        include_releases=include_releases,
         dry_run=dry_run,
         timeout=timeout,
         redaction_patterns=redaction_patterns,
@@ -109,14 +111,19 @@ def main(argv: list[str] | None = None) -> int:
         include_pull_requests = getattr(config.github, "include_pull_requests", False)
         include_comments = args.include_comments or getattr(config.github, "include_comments", False)
         include_workflow_runs = getattr(config.github, "include_workflow_runs", False)
+        include_releases = getattr(config.github, "include_releases", False)
 
-        logger.info("Polling GitHub issues/PRs/releases/workflow runs since %s", since.isoformat())
+        logger.info("Polling GitHub activity since %s", since.isoformat())
+        include_comments = args.include_comments or getattr(config.github, "include_comments", False)
+        include_workflow_runs = getattr(config.github, "include_workflow_runs", False)
         if repositories:
             logger.info("Using %d configured repositories", len(repositories))
         if not include_issues:
             logger.info("Skipping GitHub issues")
         if include_pull_requests:
             logger.info("Including GitHub pull requests")
+        if include_releases:
+            logger.info("Including GitHub releases")
         if include_discussions:
             logger.info("Including GitHub Discussions")
         if include_comments:
@@ -135,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             include_pull_requests=include_pull_requests,
             include_comments=include_comments,
             include_workflow_runs=include_workflow_runs,
+            include_releases=include_releases,
             dry_run=args.dry_run,
             timeout=config.timeouts.github_seconds,
             redaction_patterns=config.privacy.redaction_patterns,
