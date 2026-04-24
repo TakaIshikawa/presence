@@ -31,6 +31,7 @@ def _make_config(historical_enabled=False):
     config.paths.database = ":memory:"
     config.paths.claude_logs = "/tmp/fake_logs"
     config.paths.static_site = "/tmp/fake_site"
+    config.blog.manifest_path = None
     config.anthropic.api_key = "test-key"
     config.synthesis.model = "gen-model"
     config.synthesis.eval_model = "eval-model"
@@ -92,6 +93,12 @@ def _make_prompt_message():
     msg.timestamp = PROMPT_TS
     msg.prompt_text = "Worked on error handling"
     msg.message_uuid = "uuid-456"
+    return msg
+
+
+def _make_prompt_message_at(timestamp):
+    msg = _make_prompt_message()
+    msg.timestamp = timestamp
     return msg
 
 
@@ -205,6 +212,7 @@ class TestMainPublishesWhenPassesThreshold:
 
         MockPipeline.return_value.run.assert_called_once()
         assert MockPipeline.return_value.run.call_args[1]["content_type"] == "blog_post"
+        MockBlogWriter.assert_called_once_with("/tmp/fake_site", manifest_path=None)
         MockBlogWriter.return_value.write_post.assert_called_once_with(
             result.final_content,
             source_commits=["def456"],
@@ -214,6 +222,103 @@ class TestMainPublishesWhenPassesThreshold:
         )
         MockBlogWriter.return_value.commit_and_push.assert_called_once_with("Weekly Recap")
         db.mark_published.assert_called_once_with(42, "https://blog.example.com/weekly")
+
+    @_weekly_patches
+    def test_draft_mode_writes_draft_and_records_review_outcome(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockBlogWriter, mock_monitoring,
+    ):
+        config = _make_config()
+        config.blog.manifest_path = "data/blog-drafts.json"
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = []
+        db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        prompt_ts = datetime(2026, 4, 15, 12, 0, 0, tzinfo=timezone.utc)
+        MockParser.return_value.parse_global_history.return_value = [
+            _make_prompt_message_at(prompt_ts),
+        ]
+
+        result = _make_pipeline_result(final_score=8.0)
+        result.claim_check_summary = {
+            "supported_count": 1,
+            "unsupported_count": 0,
+            "annotation_text": None,
+        }
+        result.persona_guard_summary = {"passed": True}
+        MockPipeline.return_value.run.return_value = result
+        MockBlogWriter.return_value.write_draft.return_value = MagicMock(
+            success=True,
+            file_path="/tmp/fake_site/drafts/weekly-recap.md",
+        )
+
+        import weekly_digest
+        weekly_digest.main(["--draft", "--week-start", "2026-04-13"])
+
+        week_start = datetime(2026, 4, 13, tzinfo=timezone.utc)
+        week_end = datetime(2026, 4, 20, tzinfo=timezone.utc)
+        db.get_commits_in_range.assert_called_once_with(week_start, week_end)
+        db.get_github_activity_in_range.assert_called_once_with(week_start, week_end)
+        MockBlogWriter.assert_called_once_with(
+            "/tmp/fake_site",
+            manifest_path="data/blog-drafts.json",
+        )
+        db.insert_generated_content.assert_called_once()
+        db.save_claim_check_summary.assert_called_once_with(
+            42,
+            supported_count=1,
+            unsupported_count=0,
+            annotation_text=None,
+        )
+        db.save_persona_guard_summary.assert_called_once_with(42, {"passed": True})
+        MockBlogWriter.return_value.write_draft.assert_called_once_with(
+            result.final_content,
+            source_content_id=42,
+            generated_content_id=42,
+        )
+        MockBlogWriter.return_value.write_post.assert_not_called()
+        MockBlogWriter.return_value.commit_and_push.assert_not_called()
+        db.mark_published.assert_not_called()
+
+        run_kwargs = db.insert_pipeline_run.call_args.kwargs
+        assert run_kwargs["content_id"] == 42
+        assert run_kwargs["outcome"] == "draft"
+        assert run_kwargs["rejection_reason"] == "Draft mode enabled"
+
+    @_weekly_patches
+    def test_no_push_writes_post_without_commit_or_publish_mark(
+        self, *, mock_ctx, MockPipeline, MockParser,
+        MockBlogWriter, mock_monitoring,
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_commits_in_range.return_value = [_make_commit_row()]
+        db.get_github_activity_in_range.return_value = []
+        db.insert_generated_content.return_value = 42
+        mock_ctx.return_value = _mock_script_context(config, db)()
+
+        MockParser.return_value.parse_global_history.return_value = [_make_prompt_message()]
+
+        result = _make_pipeline_result(final_score=8.0)
+        MockPipeline.return_value.run.return_value = result
+        MockBlogWriter.return_value.write_post.return_value = MagicMock(
+            success=True,
+            file_path="/tmp/fake_site/blog/weekly-recap.html",
+            url="https://blog.example.com/weekly",
+        )
+
+        import weekly_digest
+        weekly_digest.main(["--no-push"])
+
+        MockBlogWriter.return_value.write_post.assert_called_once()
+        MockBlogWriter.return_value.write_draft.assert_not_called()
+        MockBlogWriter.return_value.commit_and_push.assert_not_called()
+        db.mark_published.assert_not_called()
+        run_kwargs = db.insert_pipeline_run.call_args.kwargs
+        assert run_kwargs["outcome"] == "draft"
+        assert run_kwargs["rejection_reason"] == "No-push mode enabled"
 
 
 class TestMainDoesNotPublishBelowThreshold:

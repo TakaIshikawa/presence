@@ -2,6 +2,7 @@
 """Generate and publish weekly blog post via multi-stage pipeline."""
 
 import sys
+import argparse
 import logging
 import sqlite3
 from pathlib import Path
@@ -18,6 +19,46 @@ from knowledge.embeddings import VoyageEmbeddings, serialize_embedding, Embeddin
 from knowledge.store import KnowledgeStore
 
 logger = logging.getLogger(__name__)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate the weekly blog digest from recent commits and Claude prompts.",
+    )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help="Write a reviewable static-site draft instead of publishing.",
+    )
+    parser.add_argument(
+        "--no-push",
+        action="store_true",
+        help="Write the blog post artifact but skip git commit and push.",
+    )
+    parser.add_argument(
+        "--week-start",
+        help="UTC week start date in YYYY-MM-DD format. Defaults to the last 7 days.",
+    )
+    if argv is None:
+        args, _unknown = parser.parse_known_args(argv)
+        return args
+    return parser.parse_args(argv)
+
+
+def _configured_blog_manifest_path(config) -> str | None:
+    blog_config = getattr(config, "blog", None)
+    manifest_path = getattr(blog_config, "manifest_path", None)
+    return manifest_path if isinstance(manifest_path, str) and manifest_path else None
+
+
+def _date_range(args: argparse.Namespace) -> tuple[datetime, datetime]:
+    if args.week_start:
+        start_date = datetime.strptime(args.week_start, "%Y-%m-%d").date()
+        start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+        return start, start + timedelta(days=7)
+
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    return end - timedelta(days=7), end
 
 
 def _github_activity_id(row: dict) -> str:
@@ -41,8 +82,9 @@ def _get_activity_ids_in_range(db, start: datetime, end: datetime) -> list[str]:
     return [activity_id for row in activity if (activity_id := _github_activity_id(row))]
 
 
-def main():
+def main(argv: list[str] | None = None):
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    args = parse_args(argv)
 
     with script_context() as (config, db):
         # Initialize embedder for semantic dedup
@@ -95,16 +137,16 @@ def main():
             default_social_image_path=getattr(
                 config.blog, "default_social_image_path", None
             ),
+            manifest_path=_configured_blog_manifest_path(config),
         )
 
-        # Get this week's date range (last 7 days, UTC)
-        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        week_ago = today - timedelta(days=7)
+        # Get this week's date range (last 7 days by default, UTC)
+        week_start, week_end = _date_range(args)
 
-        logger.info(f"Generating weekly digest for {week_ago.date()} to {today.date()}")
+        logger.info(f"Generating weekly digest for {week_start.date()} to {week_end.date()}")
 
         # Get this week's commits
-        commits = db.get_commits_in_range(week_ago, today)
+        commits = db.get_commits_in_range(week_start, week_end)
         if not commits:
             logger.info("No commits this week, skipping digest")
             return
@@ -119,7 +161,7 @@ def main():
         )
         prompts = [
             msg for msg in parser.parse_global_history()
-            if week_ago <= msg.timestamp < today
+            if week_start <= msg.timestamp < week_end
         ]
         parser.log_skipped_project_counts("weekly_digest")
         prompt_texts = [p.prompt_text for p in prompts]
@@ -130,7 +172,7 @@ def main():
             logger.info("No prompts found, skipping digest")
             return
 
-        activity_ids = _get_activity_ids_in_range(db, week_ago, today)
+        activity_ids = _get_activity_ids_in_range(db, week_start, week_end)
         if activity_ids:
             logger.info(f"Found {len(activity_ids)} GitHub issues/PRs updated this week")
 
@@ -232,6 +274,21 @@ def main():
             outcome = "budget_exceeded"
             rejection_reason = result.budget_rejection_reason
             logger.warning("Budget gate blocked publishing: %s", rejection_reason)
+        elif args.draft:
+            logger.info("Writing weekly blog draft...")
+            draft_result = blog_writer.write_draft(
+                result.final_content,
+                source_content_id=content_id,
+                generated_content_id=content_id,
+            )
+            if draft_result.success:
+                logger.info(f"Blog draft written: {draft_result.file_path}")
+                outcome = "draft"
+                rejection_reason = "Draft mode enabled"
+            else:
+                logger.error(f"Draft write failed: {draft_result.error}")
+                outcome = "below_threshold"
+                rejection_reason = f"Draft write failed: {draft_result.error}"
         else:
             logger.info("Writing blog post...")
             write_result = blog_writer.write_post(
@@ -244,18 +301,21 @@ def main():
 
             if write_result.success:
                 logger.info(f"Blog post written: {write_result.file_path}")
-
-                # Commit and push
-                logger.info("Committing and pushing...")
                 title = result.final_content.split("\n")[0].replace("TITLE:", "").strip()
-                if blog_writer.commit_and_push(title):
-                    db.mark_published(content_id, write_result.url)
-                    logger.info(f"Published: {write_result.url}")
-                    outcome = "published"
+                if args.no_push:
+                    logger.info("Skipping commit and push because --no-push was set")
+                    outcome = "draft"
+                    rejection_reason = "No-push mode enabled"
                 else:
-                    logger.error("Git push failed")
-                    outcome = "below_threshold"
-                    rejection_reason = "Git push failed"
+                    logger.info("Committing and pushing...")
+                    if blog_writer.commit_and_push(title):
+                        db.mark_published(content_id, write_result.url)
+                        logger.info(f"Published: {write_result.url}")
+                        outcome = "published"
+                    else:
+                        logger.error("Git push failed")
+                        outcome = "below_threshold"
+                        rejection_reason = "Git push failed"
             else:
                 logger.error(f"Write failed: {write_result.error}")
                 outcome = "below_threshold"
