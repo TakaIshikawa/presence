@@ -22,6 +22,7 @@ from output.newsletter_preview import (
     build_preview_payload as _build_shared_preview_payload,
     write_preview_artifact as _write_shared_preview_artifact,
 )
+from output.link_health import LinkHealthChecker, LinkHealthReport
 
 
 def _arg_value(name: str) -> str:
@@ -129,6 +130,52 @@ def _subject_selection_payload(
     return payload
 
 
+def _link_check_mode() -> str:
+    """Resolve link-check failure behavior from CLI flags."""
+    mode = _arg_value("--link-check-mode") or "warn"
+    return mode if mode in {"warn", "block"} else ""
+
+
+def _log_link_health_report(report: LinkHealthReport, mode: str) -> None:
+    """Log a compact human-readable link health report."""
+    if report.ok:
+        logger.info(
+            "Newsletter link check passed: %s checked, %s skipped",
+            len(report.checked),
+            len(report.skipped),
+        )
+        return
+
+    logger.warning(
+        "Newsletter link check found %s failing link(s) in %s mode",
+        len(report.failures),
+        mode,
+    )
+    for failure in report.failures:
+        locations = ", ".join(
+            f"line {occurrence.line}, column {occurrence.column}"
+            for occurrence in failure.occurrences
+        )
+        reason = failure.error or f"HTTP {failure.status_code}"
+        logger.warning("- %s failed (%s) at %s", failure.url, reason, locations)
+
+
+def _run_link_health_check(config, body_markdown: str) -> tuple[LinkHealthReport | None, str]:
+    """Run newsletter link checks when requested by CLI flags."""
+    if "--check-links" not in sys.argv:
+        return None, ""
+
+    mode = _link_check_mode()
+    if not mode:
+        logger.error("--link-check-mode must be one of: warn, block")
+        return None, "invalid"
+
+    timeout = getattr(config.timeouts, "http_seconds", 30)
+    report = LinkHealthChecker(timeout=timeout).check_markdown(body_markdown)
+    _log_link_health_report(report, mode)
+    return report, mode
+
+
 def _utm_metadata(config, content) -> dict:
     """Collect UTM configuration and generated campaign metadata for review."""
     newsletter = config.newsletter
@@ -150,6 +197,7 @@ def _preview_payload(
     manual_subject: str,
     week_start: datetime,
     week_end: datetime,
+    link_health: dict | None = None,
 ) -> dict:
     """Build the structured newsletter preview payload."""
     return _build_shared_preview_payload(
@@ -161,6 +209,7 @@ def _preview_payload(
         manual_subject,
         week_start,
         week_end,
+        link_health=link_health,
     )
 
 
@@ -298,6 +347,24 @@ def main():
             manual_subject=manual_subject,
         )
 
+        link_health_report, link_check_mode = _run_link_health_check(
+            config,
+            content.body_markdown,
+        )
+        if link_check_mode == "invalid":
+            return
+        link_health_payload = (
+            link_health_report.to_dict() if link_health_report is not None else None
+        )
+        if (
+            not preview_mode
+            and link_check_mode == "block"
+            and link_health_report is not None
+            and not link_health_report.ok
+        ):
+            logger.error("Newsletter delivery blocked by failing link check")
+            return
+
         if preview_mode:
             payload = _preview_payload(
                 db,
@@ -308,6 +375,7 @@ def main():
                 manual_subject,
                 week_start,
                 week_end,
+                link_health=link_health_payload,
             )
             _write_preview_artifact(Path(preview_out), payload)
             logger.info(f"Newsletter preview written to {preview_out}")
@@ -352,6 +420,8 @@ def main():
             )
             send_metadata = dict(getattr(content, "metadata", None) or {})
             send_metadata["subject_selection"] = subject_selection
+            if link_health_payload is not None:
+                send_metadata["link_health"] = link_health_payload
             send_kwargs = {
                 "issue_id": result.issue_id or "",
                 "subject": selected_subject,

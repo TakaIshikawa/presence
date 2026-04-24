@@ -21,6 +21,7 @@ from output.newsletter import (
     NewsletterResult,
     NewsletterSubjectCandidate,
 )
+from output.link_health import LinkCheckResult, LinkHealthReport, LinkOccurrence
 
 
 def _make_config(enabled=True, api_key="test-key"):
@@ -657,3 +658,131 @@ class TestSendFailure:
         assert "Send failed" in out
         assert "API rate limit exceeded" in out
         db.insert_newsletter_send.assert_not_called()
+
+
+class TestLinkChecks:
+    """--check-links validates newsletter links before Buttondown delivery."""
+
+    @pytest.fixture(autouse=True)
+    def _set_log_level(self, caplog):
+        caplog.set_level(logging.INFO)
+
+    def _failing_report(self):
+        return LinkHealthReport(
+            checked=[
+                LinkCheckResult(
+                    url="https://example.com/broken",
+                    ok=False,
+                    status_code=500,
+                    error="HTTP 500",
+                    occurrences=[
+                        LinkOccurrence(
+                            url="https://example.com/broken",
+                            normalized_url="https://example.com/broken",
+                            label="broken",
+                            line=1,
+                            column=1,
+                        )
+                    ],
+                )
+            ]
+        )
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.LinkHealthChecker")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_check_links_warn_mode_reports_failures_and_still_sends(
+        self,
+        mock_ctx,
+        MockAssembler,
+        MockClient,
+        MockChecker,
+        mock_monitoring,
+        caplog,
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = None
+        mock_ctx.return_value = _mock_script_context(config, db)()
+        MockAssembler.return_value.assemble.return_value = NewsletterContent(
+            subject="Update",
+            body_markdown="[broken](https://example.com/broken)",
+            source_content_ids=[1],
+        )
+        MockChecker.return_value.check_markdown.return_value = self._failing_report()
+        MockClient.return_value.get_subscriber_count.return_value = 10
+        MockClient.return_value.send.return_value = NewsletterResult(
+            success=True,
+            issue_id="issue-1",
+            url="https://buttondown.com/issue/1",
+        )
+
+        original_argv = sys.argv
+        try:
+            sys.argv = [
+                "send_newsletter.py",
+                "--check-links",
+                "--link-check-mode",
+                "warn",
+            ]
+            main()
+        finally:
+            sys.argv = original_argv
+
+        MockChecker.assert_called_once_with(timeout=30)
+        MockChecker.return_value.check_markdown.assert_called_once_with(
+            "[broken](https://example.com/broken)"
+        )
+        MockClient.return_value.send.assert_called_once_with(
+            "Update",
+            "[broken](https://example.com/broken)",
+        )
+        assert "link check found 1 failing link" in caplog.text
+        send_metadata = db.insert_newsletter_send.call_args.kwargs["metadata"]
+        assert send_metadata["link_health"]["ok"] is False
+        assert send_metadata["link_health"]["failures"][0]["url"] == (
+            "https://example.com/broken"
+        )
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.LinkHealthChecker")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_check_links_block_mode_aborts_before_buttondown_delivery(
+        self,
+        mock_ctx,
+        MockAssembler,
+        MockClient,
+        MockChecker,
+        mock_monitoring,
+        caplog,
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = None
+        mock_ctx.return_value = _mock_script_context(config, db)()
+        MockAssembler.return_value.assemble.return_value = NewsletterContent(
+            subject="Update",
+            body_markdown="[broken](https://example.com/broken)",
+            source_content_ids=[1],
+        )
+        MockChecker.return_value.check_markdown.return_value = self._failing_report()
+
+        original_argv = sys.argv
+        try:
+            sys.argv = [
+                "send_newsletter.py",
+                "--check-links",
+                "--link-check-mode",
+                "block",
+            ]
+            main()
+        finally:
+            sys.argv = original_argv
+
+        MockClient.assert_not_called()
+        db.insert_newsletter_send.assert_not_called()
+        assert "delivery blocked" in caplog.text
