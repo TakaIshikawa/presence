@@ -317,6 +317,7 @@ class TestNewsletterAssembler:
         """Internal content links are rewritten with newsletter attribution."""
         now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
+        expected_campaign = f"weekly-{now.strftime('%Y%m%d')}"
         content_id = _insert_published_content(
             db,
             "blog_post",
@@ -337,14 +338,18 @@ class TestNewsletterAssembler:
         query = parse_qs(urlparse(url).query)
         assert query["utm_source"] == ["newsletter"]
         assert query["utm_medium"] == ["email"]
-        assert query["utm_campaign"] == [f"weekly-{now.strftime('%Y%m%d')}"]
+        assert query["utm_campaign"] == [expected_campaign]
         assert query["content_id"] == [str(content_id)]
-        assert content.metadata == {"utm_campaign": f"weekly-{now.strftime('%Y%m%d')}"}
+        assert normalize_newsletter_link_url(url) == (
+            "https://takaishikawa.com/blog/test.html"
+        )
+        assert content.metadata == {"utm_campaign": expected_campaign}
 
     def test_internal_links_preserve_existing_query_strings(self, db):
         """UTM parameters are appended without dropping existing query params."""
         now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
+        expected_campaign = f"weekly-{week_start.strftime('%Y-%m-%d')}"
         content_id = _insert_published_content(
             db,
             "blog_post",
@@ -365,7 +370,7 @@ class TestNewsletterAssembler:
         parsed = urlparse(url)
         query = parse_qs(parsed.query)
         assert query["ref"] == ["site"]
-        assert query["utm_campaign"] == [f"weekly-{week_start.strftime('%Y-%m-%d')}"]
+        assert query["utm_campaign"] == [expected_campaign]
         assert query["content_id"] == [str(content_id)]
         assert parsed.fragment == "notes"
 
@@ -373,6 +378,7 @@ class TestNewsletterAssembler:
         """External published URLs are not modified for attribution."""
         now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
+        expected_campaign = f"weekly-{now.strftime('%Y-%m-%d')}"
         _insert_published_content(
             db,
             "x_post",
@@ -391,7 +397,7 @@ class TestNewsletterAssembler:
 
         assert "https://x.com/taka/status/123?ref=feed" in content.body_markdown
         assert "utm_campaign" not in content.body_markdown
-        assert content.metadata == {"utm_campaign": f"weekly-{now.strftime('%Y-%m-%d')}"}
+        assert content.metadata == {"utm_campaign": expected_campaign}
 
     def test_utm_rewrite_disabled_by_default(self, db):
         """Default assembler behavior leaves existing links untouched."""
