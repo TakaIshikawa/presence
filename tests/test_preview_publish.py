@@ -52,9 +52,73 @@ def test_preview_single_post_for_content_id(db):
     )
     assert preview["platforms"]["x"]["posts"][0]["counts"]["graphemes"] == 25
     assert preview["platforms"]["bluesky"]["posts"][0]["text"] == "Posting this with 👩‍💻"
+    assert preview["platforms"]["bluesky"]["posts"][0]["source"] == "fresh_adapted"
     assert preview["platforms"]["bluesky"]["status"]["status"] == "generated"
     assert preview["platforms"]["x"]["status"]["requested"] is True
     assert preview["platforms"]["bluesky"]["status"]["requested"] is True
+
+
+def test_preview_prefers_stored_platform_variant(db):
+    content_id = _insert_content(db, "Tweeting this on X")
+    variant_id = db.upsert_content_variant(
+        content_id,
+        "bluesky",
+        "post",
+        "Stored Bluesky review copy",
+        {"source": "manual"},
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    post = preview["platforms"]["bluesky"]["posts"][0]
+    assert post["text"] == "Stored Bluesky review copy"
+    assert post["source"] == "stored_variant"
+    assert post["variant_id"] == variant_id
+
+
+def test_preview_does_not_overwrite_stored_variant_without_refresh(db):
+    content_id = _insert_content(db, "Tweeting this on X")
+    db.upsert_content_variant(
+        content_id,
+        "bluesky",
+        "post",
+        "Manual reviewed copy",
+        {"source": "manual"},
+    )
+
+    preview = build_publication_preview(db, content_id=content_id)
+
+    variant = db.get_content_variant(content_id, "bluesky", "post")
+    assert preview["platforms"]["bluesky"]["posts"][0]["text"] == "Manual reviewed copy"
+    assert variant["content"] == "Manual reviewed copy"
+    assert variant["metadata"] == {"source": "manual"}
+
+
+def test_preview_refresh_variants_replaces_deterministic_variants(db):
+    content_id = _insert_content(db, "Tweeting this on X")
+    original_id = db.upsert_content_variant(
+        content_id,
+        "bluesky",
+        "post",
+        "Stale deterministic copy",
+        {"source": "old"},
+    )
+
+    preview = build_publication_preview(db, content_id=content_id, refresh_variants=True)
+
+    variant = db.get_content_variant(content_id, "bluesky", "post")
+    linkedin = db.get_content_variant(content_id, "linkedin", "post")
+    assert variant["id"] == original_id
+    assert variant["content"] == "Posting this"
+    assert variant["metadata"]["adapter"] == "BlueskyPlatformAdapter"
+    assert variant["metadata"]["deterministic"] is True
+    assert "refreshed_at" in variant["metadata"]
+    assert linkedin["metadata"]["adapter"] == "LinkedInPlatformAdapter"
+    assert preview["platforms"]["bluesky"]["posts"][0]["source"] == "stored_variant"
+    assert {item["platform"] for item in preview["refreshed_variants"]} == {
+        "bluesky",
+        "linkedin",
+    }
 
 
 def test_preview_queue_thread_splits_and_adapts(db):
@@ -148,6 +212,31 @@ def test_preview_publish_cli_outputs_json(db, capsys):
     payload = json.loads(captured.out)
     assert payload["content"]["id"] == content_id
     assert payload["platforms"]["x"]["posts"][0]["text"] == "CLI preview post"
+
+
+def test_preview_publish_cli_refreshes_variants(db, capsys):
+    content_id = _insert_content(db, "Tweeting from X")
+
+    import preview_publish
+
+    class Context:
+        def __enter__(self):
+            return None, db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("preview_publish.script_context", return_value=Context()):
+        exit_code = preview_publish.main(
+            ["--content-id", str(content_id), "--json", "--refresh-variants"]
+        )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["platforms"]["bluesky"]["posts"][0]["source"] == "stored_variant"
+    assert db.get_content_variant(content_id, "bluesky", "post")["content"] == "Posting from Bluesky"
+    assert db.get_content_variant(content_id, "linkedin", "post") is not None
 
 
 def test_preview_publish_cli_blocks_failed_alt_text_in_strict_mode(db, capsys):

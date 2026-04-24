@@ -314,6 +314,21 @@ def test_main_release_accepts_multiple_ids(db, capsys):
     assert db.get_publish_queue_item(second_id)["status"] == "queued"
 
 
+def test_main_prepare_variants_does_not_publish_queue_item(db, capsys):
+    queue_id = _queue_item(db, platform="all", status="queued")
+    row = db.get_publish_queue_item(queue_id)
+
+    with patch("manage_publish_queue.script_context", return_value=_script_context(db)):
+        result = main(["prepare-variants", str(queue_id)])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert f"Prepared variants for publish queue item {queue_id}" in output
+    assert db.get_publish_queue_item(queue_id)["status"] == "queued"
+    assert db.get_content_variant(row["content_id"], "bluesky", "post") is not None
+    assert db.get_content_variant(row["content_id"], "linkedin", "post") is not None
+
+
 def test_main_returns_error_for_invalid_restore(db, capsys):
     queue_id = _queue_item(db, status="queued")
 

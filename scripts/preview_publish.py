@@ -141,6 +141,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Show deterministic hashtag suggestions in the preview without saving them",
     )
     parser.add_argument(
+        "--refresh-variants",
+        action="store_true",
+        help="Regenerate and store deterministic Bluesky and LinkedIn variants before previewing",
+    )
+    parser.add_argument(
         "--allow-restricted-knowledge",
         action="store_true",
         help="Allow publication preview for content linked to restricted knowledge",
@@ -161,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_hashtag_suggestions=args.suggest_hashtags,
                 restricted_prompt_behavior=restricted_prompt_behavior_from_config(config),
                 allow_restricted_knowledge=args.allow_restricted_knowledge,
+                refresh_variants=args.refresh_variants,
             )
         except PreviewRecordNotFound as exc:
             print(str(exc), file=sys.stderr)

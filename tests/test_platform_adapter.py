@@ -6,7 +6,11 @@ from output.platform_adapter import (
     LINKEDIN_MAX_HASHTAGS,
     BlueskyPlatformAdapter,
     LinkedInPlatformAdapter,
+    build_bluesky_variant,
+    build_linkedin_variant,
     count_graphemes,
+    split_x_posts,
+    variant_type_for_content_type,
 )
 
 
@@ -155,3 +159,32 @@ class TestLinkedInPlatformAdapter:
         assert count_graphemes(result) <= LINKEDIN_GRAPHEME_LIMIT
         assert result.endswith("https://example.com/details")
         assert "\u200d..." not in result
+
+
+class TestPlatformVariantHelpers:
+    def test_variant_type_matches_publish_queue_conventions(self):
+        assert variant_type_for_content_type("x_thread") == "thread"
+        assert variant_type_for_content_type("x_post") == "post"
+        assert variant_type_for_content_type("x_visual") == "post"
+
+    def test_bluesky_thread_variant_keeps_thread_markers_for_later_parsing(self):
+        content = "TWEET 1:\nTweeting on X\nTWEET 2:\nRetweet this Twitter thread"
+
+        variant = build_bluesky_variant(content, "x_thread")
+
+        assert split_x_posts(variant, "x_thread") == [
+            "Posting",
+            "Repost this Bluesky thread",
+        ]
+        assert variant.startswith("TWEET 1:\n")
+
+    def test_linkedin_variant_is_stable_manual_post_copy(self):
+        content = "TWEET 1:\nTweeting this on X\nTWEET 2:\nRetweet if useful"
+
+        first = build_linkedin_variant(content, "x_thread")
+        second = build_linkedin_variant(content, "x_thread")
+
+        assert first == second
+        assert "Posting this" in first
+        assert "Share if useful" in first
+        assert "tweet" not in first.lower()

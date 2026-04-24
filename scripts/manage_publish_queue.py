@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from output.queue_scheduler import QueueScheduler
 from runner import script_context
+from output.preview import refresh_deterministic_variants
 
 
 def _parse_iso_timestamp(value: str) -> str:
@@ -68,6 +69,14 @@ def format_queue_rows(rows: list[dict]) -> str:
 def _print_changed(action: str, row: dict) -> None:
     print(f"{action} publish queue item {row['id']}:")
     print(format_queue_rows([row]))
+
+
+def _print_prepared_variants(queue_id: int, variants: list[dict]) -> None:
+    prepared = ", ".join(
+        f"{variant['platform']}/{variant['variant_type']}#{variant['id']}"
+        for variant in variants
+    )
+    print(f"Prepared variants for publish queue item {queue_id}: {prepared}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -176,6 +185,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional replacement ISO scheduled time",
     )
 
+    prepare_parser = subparsers.add_parser(
+        "prepare-variants",
+        help="Generate deterministic platform variants for queued items without publishing",
+    )
+    prepare_parser.add_argument(
+        "queue_ids",
+        nargs="+",
+        type=int,
+        help="Publish queue item IDs",
+    )
+    prepare_parser.add_argument(
+        "--suggest-hashtags",
+        action="store_true",
+        help="Include deterministic hashtag suggestions in refreshed variants",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -240,6 +265,21 @@ def main(argv: list[str] | None = None) -> int:
                     scheduled_at=args.scheduled_at,
                 )
                 _print_changed("Restored", row)
+            elif args.command == "prepare-variants":
+                for queue_id in args.queue_ids:
+                    row = db.get_publish_queue_item(queue_id)
+                    if row is None:
+                        raise ValueError(f"publish queue item not found: {queue_id}")
+                    variants = refresh_deterministic_variants(
+                        db,
+                        {
+                            "id": row["content_id"],
+                            "content": row["content"],
+                            "content_type": row["content_type"],
+                        },
+                        include_hashtag_suggestions=args.suggest_hashtags,
+                    )
+                    _print_prepared_variants(queue_id, variants)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

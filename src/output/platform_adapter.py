@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 BLUESKY_GRAPHEME_LIMIT = 300
@@ -21,6 +21,7 @@ _HASHTAG_RE = re.compile(r"(?<!\w)#[A-Za-z][A-Za-z0-9_]*")
 _THREAD_MARKER_RE = re.compile(
     r"(?im)^\s*(?:(?:tweet|post)\s*\d+|thread)\s*[:.)-]\s*|^\s*\d+\s*[/.)-]\s*"
 )
+_TWEET_MARKER_LINE_RE = re.compile(r"^TWEET \d+:\s*$", re.IGNORECASE)
 
 _X_PHRASE_REPLACEMENTS = (
     (re.compile(r"\bTwitter/X\b", re.IGNORECASE), "Bluesky"),
@@ -104,6 +105,102 @@ def slice_graphemes(text: str, limit: int) -> str:
     if limit <= 0:
         return ""
     return "".join(grapheme_clusters(text)[:limit])
+
+
+def variant_type_for_content_type(content_type: str) -> str:
+    """Return the durable variant type used for a generated content type."""
+    if content_type == "x_thread":
+        return "thread"
+    return "post"
+
+
+def split_x_posts(content: str, content_type: str) -> list[str]:
+    """Split generated X copy into the platform-neutral post units."""
+    if content_type != "x_thread":
+        return [content] if content else []
+
+    posts: list[list[str]] = []
+    current: list[str] = []
+    for line in content.splitlines():
+        if _TWEET_MARKER_LINE_RE.match(line):
+            if current:
+                posts.append(current)
+            current = []
+        else:
+            current.append(line)
+    if current:
+        posts.append(current)
+    return ["\n".join(post).strip() for post in posts if "\n".join(post).strip()]
+
+
+def format_variant_posts(posts: list[str], content_type: str) -> str:
+    """Format post units as durable variant text for later preview/publish parsing."""
+    if content_type == "x_thread":
+        return "\n\n".join(
+            f"TWEET {index}:\n{post}" for index, post in enumerate(posts, start=1)
+        )
+    return posts[0] if posts else ""
+
+
+def deterministic_variant_metadata(
+    *,
+    platform: str,
+    content_type: str,
+    adapter: str,
+    content: str,
+    refreshed_at: str | None = None,
+) -> dict[str, Any]:
+    """Build stable metadata for deterministic platform variants."""
+    metadata: dict[str, Any] = {
+        "source_content_type": content_type,
+        "adapter": adapter,
+        "graphemes": count_graphemes(content),
+        "deterministic": True,
+        "platform": platform,
+    }
+    if refreshed_at:
+        metadata["refreshed_at"] = refreshed_at
+    return metadata
+
+
+def build_bluesky_variant(
+    text: str,
+    content_type: str,
+    *,
+    adapter: "BlueskyPlatformAdapter | None" = None,
+    suggested_hashtags: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    """Generate durable Bluesky copy without publishing."""
+    platform_adapter = adapter or BlueskyPlatformAdapter()
+    posts = split_x_posts(text, content_type)
+    adapted = [
+        platform_adapter.adapt(
+            post,
+            content_type,
+            suggested_hashtags=(
+                suggested_hashtags if index == len(posts) - 1 else None
+            ),
+        )
+        for index, post in enumerate(posts)
+    ]
+    return format_variant_posts(adapted, content_type)
+
+
+def build_linkedin_variant(
+    text: str,
+    content_type: str,
+    *,
+    adapter: "LinkedInPlatformAdapter | None" = None,
+    suggested_hashtags: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    """Generate durable manual LinkedIn copy without publishing."""
+    platform_adapter = adapter or LinkedInPlatformAdapter()
+    source = "\n\n".join(split_x_posts(text, content_type))
+    return platform_adapter.adapt(
+        source,
+        content_type=content_type,
+        suggested_hashtags=suggested_hashtags,
+    )
 
 
 class BlueskyPlatformAdapter:

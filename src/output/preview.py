@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 from synthesis.alt_text_guard import validate_alt_text
@@ -14,8 +15,15 @@ from .license_guard import (
     STRICT_RESTRICTED_BEHAVIOR,
     check_publication_license_guard,
 )
-from .platform_adapter import BlueskyPlatformAdapter, count_graphemes
-from .x_client import parse_thread_content
+from .platform_adapter import (
+    BlueskyPlatformAdapter,
+    build_bluesky_variant,
+    build_linkedin_variant,
+    count_graphemes,
+    deterministic_variant_metadata,
+    split_x_posts,
+    variant_type_for_content_type,
+)
 
 
 class PreviewRecordNotFound(LookupError):
@@ -192,9 +200,7 @@ def _persona_guard_status(summary: dict | None) -> dict:
 
 
 def _split_x_posts(content: str, content_type: str) -> list[str]:
-    if content_type == "x_thread":
-        return parse_thread_content(content)
-    return [content] if content else []
+    return split_x_posts(content, content_type)
 
 
 def _post_counts(text: str) -> dict:
@@ -242,13 +248,27 @@ def _platform_status(
 
 
 def _render_platform_posts(
+    db: Any,
+    content_id: int,
     platform: str,
     x_posts: list[str],
     content_type: str,
     adapter: BlueskyPlatformAdapter,
     suggestions: HashtagSuggestions | None = None,
 ) -> list[dict]:
-    if platform == "bluesky":
+    variant_type = variant_type_for_content_type(content_type)
+    variant_getter = getattr(db, "get_content_variant", None)
+    variant = (
+        variant_getter(content_id, platform, variant_type)
+        if callable(variant_getter)
+        else None
+    )
+
+    if variant:
+        texts = _split_x_posts(variant["content"], content_type)
+        source = "stored_variant"
+        variant_id = variant["id"]
+    elif platform == "bluesky":
         texts = [
             adapter.adapt(
                 post,
@@ -261,8 +281,12 @@ def _render_platform_posts(
             )
             for index, post in enumerate(x_posts)
         ]
+        source = "fresh_adapted"
+        variant_id = None
     else:
         texts = x_posts
+        source = "original"
+        variant_id = None
 
     total = len(texts)
     return [
@@ -271,9 +295,88 @@ def _render_platform_posts(
             "total": total,
             "text": text,
             "counts": _post_counts(text),
+            "source": source,
+            "variant_id": variant_id,
         }
         for index, text in enumerate(texts, start=1)
     ]
+
+
+def refresh_deterministic_variants(
+    db: Any,
+    content: dict,
+    *,
+    bluesky_adapter: BlueskyPlatformAdapter | None = None,
+    include_hashtag_suggestions: bool = False,
+) -> list[dict]:
+    """Refresh deterministic stored variants for preview and manual publishing."""
+    content_id = content["id"]
+    content_type = content.get("content_type") or "x_post"
+    source_text = content.get("content") or ""
+    variant_type = variant_type_for_content_type(content_type)
+    refreshed_at = datetime.now(timezone.utc).isoformat()
+    suggestions = (
+        suggest_hashtags(source_text, topics=_fetch_content_topics(db, content_id))
+        if include_hashtag_suggestions
+        else None
+    )
+
+    bluesky_content = build_bluesky_variant(
+        source_text,
+        content_type,
+        adapter=bluesky_adapter,
+        suggested_hashtags=suggestions.bluesky if suggestions else None,
+    )
+    linkedin_content = build_linkedin_variant(
+        source_text,
+        content_type,
+        suggested_hashtags=suggestions.linkedin if suggestions else None,
+    )
+    variants = [
+        (
+            "bluesky",
+            variant_type,
+            bluesky_content,
+            deterministic_variant_metadata(
+                platform="bluesky",
+                content_type=content_type,
+                adapter="BlueskyPlatformAdapter",
+                content=bluesky_content,
+                refreshed_at=refreshed_at,
+            ),
+        ),
+        (
+            "linkedin",
+            "post",
+            linkedin_content,
+            deterministic_variant_metadata(
+                platform="linkedin",
+                content_type=content_type,
+                adapter="LinkedInPlatformAdapter",
+                content=linkedin_content,
+                refreshed_at=refreshed_at,
+            ),
+        ),
+    ]
+
+    refreshed: list[dict] = []
+    for platform, stored_variant_type, variant_content, metadata in variants:
+        variant_id = db.upsert_content_variant(
+            content_id=content_id,
+            platform=platform,
+            variant_type=stored_variant_type,
+            content=variant_content,
+            metadata=metadata,
+        )
+        refreshed.append(
+            {
+                "id": variant_id,
+                "platform": platform,
+                "variant_type": stored_variant_type,
+                "metadata": metadata,
+            }
+        )
+    return refreshed
 
 
 def build_publication_preview(
@@ -285,6 +388,7 @@ def build_publication_preview(
     include_hashtag_suggestions: bool = False,
     restricted_prompt_behavior: str = STRICT_RESTRICTED_BEHAVIOR,
     allow_restricted_knowledge: bool = False,
+    refresh_variants: bool = False,
 ) -> dict:
     """Build a platform preview for one generated content or queue row."""
     if (content_id is None) == (queue_id is None):
@@ -315,6 +419,16 @@ def build_publication_preview(
         queue = _fetch_latest_queue_for_content(db, content_id)
 
     adapter = bluesky_adapter or BlueskyPlatformAdapter()
+    refreshed_variants = (
+        refresh_deterministic_variants(
+            db,
+            content,
+            bluesky_adapter=adapter,
+            include_hashtag_suggestions=include_hashtag_suggestions,
+        )
+        if refresh_variants
+        else []
+    )
     requested = set(_requested_platforms(queue.get("queue_platform") if queue else None))
     x_posts = _split_x_posts(content.get("content") or "", content["content_type"])
     hashtag_suggestions = (
@@ -353,6 +467,8 @@ def build_publication_preview(
     for platform in ("x", "bluesky"):
         state = _fetch_publication_state(db, content["id"], platform)
         posts = _render_platform_posts(
+            db,
+            content["id"],
             platform,
             x_posts,
             content["content_type"],
@@ -406,6 +522,7 @@ def build_publication_preview(
         "hashtag_suggestions": (
             hashtag_suggestions.as_dict() if hashtag_suggestions else None
         ),
+        "refreshed_variants": refreshed_variants,
         "platforms": platforms,
     }
 
@@ -618,12 +735,14 @@ def format_preview(preview: dict) -> str:
 
         for post in rendered["posts"]:
             counts = post["counts"]
+            source = post.get("source") or "unknown"
             lines.append(
-                "Post {index}/{total} ({characters} chars, {graphemes} graphemes):".format(
+                "Post {index}/{total} ({characters} chars, {graphemes} graphemes, {source}):".format(
                     index=post["index"],
                     total=post["total"],
                     characters=counts["characters"],
                     graphemes=counts["graphemes"],
+                    source=source,
                 )
             )
             lines.append(post["text"])
