@@ -218,6 +218,8 @@ class OperationsHealthConfig:
     max_newsletter_weekly_unsubscribes: int = 5
     max_newsletter_churn_rate: float = 0.05
     max_api_rate_limit_snapshot_age_hours: int = 24
+    max_model_cost_24h: float = 5.0
+    max_single_run_model_cost: float = 1.0
 
 
 @dataclass
@@ -596,6 +598,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
             ),
             max_api_rate_limit_snapshot_age_hours=health_data.get(
                 "max_api_rate_limit_snapshot_age_hours", 24
+            ),
+            max_model_cost_24h=health_data.get("max_model_cost_24h", 5.0),
+            max_single_run_model_cost=health_data.get(
+                "max_single_run_model_cost", 1.0
             ),
         )
 

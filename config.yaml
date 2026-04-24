@@ -177,6 +177,8 @@ operations_health:
   max_newsletter_weekly_unsubscribes: 5
   max_newsletter_churn_rate: 0.05
   max_api_rate_limit_snapshot_age_hours: 24
+  max_model_cost_24h: 5.0
+  max_single_run_model_cost: 1.0
 
 # Operational state alerts written into .tact/config/operations.yaml
 operations:

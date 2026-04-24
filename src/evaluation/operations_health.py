@@ -22,6 +22,8 @@ class OperationsHealthThresholds:
     max_newsletter_churn_rate: float = 0.05
     max_api_rate_limit_snapshot_age_hours: int = 24
     api_rate_limit_min_remaining: dict[str, int] = field(default_factory=dict)
+    max_model_cost_24h: float = 5.0
+    max_single_run_model_cost: float = 1.0
 
 
 def thresholds_from_config(config: Any) -> OperationsHealthThresholds:
@@ -45,6 +47,12 @@ def thresholds_from_config(config: Any) -> OperationsHealthThresholds:
                 source,
                 "max_api_rate_limit_snapshot_age_hours",
                 24,
+            ),
+            max_model_cost_24h=getattr(source, "max_model_cost_24h", 5.0),
+            max_single_run_model_cost=getattr(
+                source,
+                "max_single_run_model_cost",
+                1.0,
             ),
         )
     rate_limits = getattr(config, "rate_limits", None)
@@ -76,6 +84,7 @@ def summarize_operations_health(
         "platform_reply_state": _platform_reply_state(conn, thresholds, now),
         "publish_queue": _publish_queue(conn, thresholds),
         "pipeline_runs": _pipeline_runs(conn, thresholds, now),
+        "model_usage": _model_usage(conn, thresholds, now),
         "engagement_fetches": _engagement_fetches(conn, thresholds, now),
         "newsletter_audience": _newsletter_audience(conn, thresholds),
         "api_rate_limits": _api_rate_limits(conn, thresholds, now),
@@ -135,6 +144,22 @@ def format_operations_health(summary: dict) -> str:
         f"(rejected {pipeline['rejected_runs']}, "
         f"rate {pipeline['rejection_rate'] * 100:.1f}%)"
     )
+
+    model_usage = checks["model_usage"]
+    lines.append(f"Model usage: {model_usage['status']}")
+    lines.append(f"  24h cost: ${model_usage['total_cost_24h']:.4f}")
+    max_run = model_usage.get("max_run") or {}
+    lines.append(
+        f"  Max run cost: ${model_usage['max_run_cost']:.4f}"
+        + (f" ({max_run.get('batch_id')})" if max_run.get("batch_id") else "")
+    )
+    if model_usage.get("top_operations"):
+        lines.append("  Top operations:")
+        for operation in model_usage["top_operations"]:
+            lines.append(
+                f"    {operation['operation_name']}: "
+                f"${operation['estimated_cost']:.4f}"
+            )
 
     engagement = checks["engagement_fetches"]
     lines.append(f"Engagement fetches: {engagement['status']}")
@@ -330,6 +355,118 @@ def _pipeline_runs(
         "rejection_rate": round(rejection_rate, 4),
         "outcomes": outcomes,
         "warnings": warnings,
+    }
+
+
+def _model_usage(
+    conn: sqlite3.Connection,
+    thresholds: OperationsHealthThresholds,
+    now: datetime,
+) -> dict:
+    if not _has_table(conn, "model_usage"):
+        return _model_usage_empty()
+
+    since = (now - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    total_row = _one(
+        conn,
+        """SELECT COALESCE(SUM(estimated_cost), 0) AS total_cost,
+                  COUNT(*) AS usage_events
+           FROM model_usage
+           WHERE datetime(created_at) >= datetime(?)""",
+        (since,),
+    )
+    total_cost = float(total_row["total_cost"] or 0.0)
+    usage_events = int(total_row["usage_events"] or 0)
+
+    max_run_row = _one(
+        conn,
+        """SELECT m.pipeline_run_id, pr.batch_id, pr.content_type, pr.outcome,
+                  COALESCE(SUM(m.estimated_cost), 0) AS estimated_cost
+           FROM model_usage m
+           JOIN pipeline_runs pr ON pr.id = m.pipeline_run_id
+           WHERE datetime(m.created_at) >= datetime(?)
+           GROUP BY m.pipeline_run_id, pr.batch_id, pr.content_type, pr.outcome
+           ORDER BY estimated_cost DESC
+           LIMIT 1""",
+        (since,),
+    )
+    max_run_cost = float(max_run_row["estimated_cost"] or 0.0) if max_run_row else 0.0
+    max_run = (
+        {
+            "pipeline_run_id": max_run_row["pipeline_run_id"],
+            "batch_id": max_run_row["batch_id"],
+            "content_type": max_run_row["content_type"],
+            "outcome": max_run_row["outcome"],
+            "estimated_cost": round(max_run_cost, 6),
+        }
+        if max_run_row
+        else None
+    )
+
+    operation_rows = _all(
+        conn,
+        """SELECT operation_name,
+                  COALESCE(SUM(estimated_cost), 0) AS estimated_cost,
+                  COUNT(*) AS usage_events
+           FROM model_usage
+           WHERE datetime(created_at) >= datetime(?)
+           GROUP BY operation_name
+           ORDER BY estimated_cost DESC, operation_name
+           LIMIT 5""",
+        (since,),
+    )
+    top_operations = [
+        {
+            "operation_name": row["operation_name"],
+            "estimated_cost": round(float(row["estimated_cost"] or 0.0), 6),
+            "usage_events": row["usage_events"],
+        }
+        for row in operation_rows
+    ]
+
+    warnings = []
+    if total_cost > thresholds.max_model_cost_24h:
+        warnings.append(
+            f"model usage cost is high: ${total_cost:.4f} "
+            f"> ${thresholds.max_model_cost_24h:.4f} in 24h"
+        )
+    if max_run_cost > thresholds.max_single_run_model_cost:
+        run_label = (
+            max_run["batch_id"] if max_run and max_run.get("batch_id") else "unknown"
+        )
+        warnings.append(
+            f"single pipeline run model cost is high for {run_label}: "
+            f"${max_run_cost:.4f} > ${thresholds.max_single_run_model_cost:.4f}"
+        )
+
+    return {
+        "status": _status(warnings),
+        "window_hours": 24,
+        "total_cost_24h": round(total_cost, 6),
+        "total_estimated_cost_24h": round(total_cost, 6),
+        "usage_events": usage_events,
+        "max_run_cost": round(max_run_cost, 6),
+        "max_run_estimated_cost": round(max_run_cost, 6),
+        "max_run": max_run,
+        "top_operations": top_operations,
+        "top_operation_costs": top_operations,
+        "warnings": warnings,
+    }
+
+
+def _model_usage_empty() -> dict:
+    return {
+        "status": "ok",
+        "window_hours": 24,
+        "total_cost_24h": 0.0,
+        "total_estimated_cost_24h": 0.0,
+        "usage_events": 0,
+        "max_run_cost": 0.0,
+        "max_run_estimated_cost": 0.0,
+        "max_run": None,
+        "top_operations": [],
+        "top_operation_costs": [],
+        "warnings": [],
     }
 
 

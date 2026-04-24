@@ -678,6 +678,8 @@ class TestDefaults:
         assert cfg.operations_health.max_pipeline_rejection_rate == 0.5
         assert cfg.operations_health.max_newsletter_weekly_unsubscribes == 5
         assert cfg.operations_health.max_newsletter_churn_rate == 0.05
+        assert cfg.operations_health.max_model_cost_24h == 5.0
+        assert cfg.operations_health.max_single_run_model_cost == 1.0
 
     def test_operations_health_overrides(self, tmp_path):
         data = _minimal_config_dict(
@@ -687,6 +689,8 @@ class TestDefaults:
                 "max_pipeline_rejection_rate": 0.25,
                 "max_newsletter_weekly_unsubscribes": 3,
                 "max_newsletter_churn_rate": 0.02,
+                "max_model_cost_24h": 2.5,
+                "max_single_run_model_cost": 0.75,
             }
         )
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", data))
@@ -695,6 +699,8 @@ class TestDefaults:
         assert cfg.operations_health.max_pipeline_rejection_rate == 0.25
         assert cfg.operations_health.max_newsletter_weekly_unsubscribes == 3
         assert cfg.operations_health.max_newsletter_churn_rate == 0.02
+        assert cfg.operations_health.max_model_cost_24h == 2.5
+        assert cfg.operations_health.max_single_run_model_cost == 0.75
 
     def test_operations_alerts_defaults(self, tmp_path):
         cfg = load_config(_write_yaml(tmp_path / "c.yaml", _minimal_config_dict()))
