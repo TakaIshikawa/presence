@@ -143,6 +143,29 @@ CREATE TABLE IF NOT EXISTS post_engagement (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Track LinkedIn engagement metrics imported from manual exports (time-series)
+CREATE TABLE IF NOT EXISTS linkedin_engagement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    linkedin_url TEXT,
+    post_id TEXT,
+    impression_count INTEGER DEFAULT 0,
+    like_count INTEGER DEFAULT 0,
+    comment_count INTEGER DEFAULT 0,
+    share_count INTEGER DEFAULT 0,
+    engagement_score REAL,
+    fetched_at TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_content
+    ON linkedin_engagement(content_id);
+CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_url
+    ON linkedin_engagement(linkedin_url);
+CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_post_id
+    ON linkedin_engagement(post_id);
+CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_fetched
+    ON linkedin_engagement(fetched_at);
+
 -- Track Bluesky engagement metrics (time-series)
 CREATE TABLE IF NOT EXISTS bluesky_engagement (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

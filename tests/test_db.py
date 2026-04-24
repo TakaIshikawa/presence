@@ -27,6 +27,7 @@ class TestSchemaInit:
             "commit_prompt_links",
             "generated_content",
             "post_engagement",
+            "linkedin_engagement",
             "prompt_versions",
             "poll_state",
             "knowledge",
@@ -230,6 +231,25 @@ class TestSchemaInit:
             "week_start",
             "week_end",
             "metadata",
+        }
+        assert expected.issubset(cols)
+
+    def test_linkedin_engagement_table_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(linkedin_engagement)")
+        }
+        expected = {
+            "content_id",
+            "linkedin_url",
+            "post_id",
+            "impression_count",
+            "like_count",
+            "comment_count",
+            "share_count",
+            "engagement_score",
+            "fetched_at",
+            "created_at",
         }
         assert expected.issubset(cols)
 
@@ -668,6 +688,7 @@ class TestInitSchemaMigrations:
 
     def test_migration_creates_publication_attempts_for_existing_schema(self, schema_path):
         """Test that publication_attempts is added to an existing in-memory schema."""
+
         with Database(":memory:") as db:
             db.conn.execute("""
                 CREATE TABLE generated_content (
@@ -696,6 +717,37 @@ class TestInitSchemaMigrations:
             }
             assert "idx_publication_attempts_queue" in indexes
             assert "idx_publication_attempts_content_platform" in indexes
+
+    def test_migration_creates_linkedin_engagement_for_existing_schema(self, schema_path):
+        """Test that linkedin_engagement is added to an existing schema."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {
+                row[1]
+                for row in db.conn.execute("PRAGMA table_info(linkedin_engagement)")
+            }
+            assert {
+                "content_id",
+                "linkedin_url",
+                "post_id",
+                "impression_count",
+                "like_count",
+                "comment_count",
+                "share_count",
+                "engagement_score",
+                "fetched_at",
+            }.issubset(cols)
 
     def test_migration_adds_publication_retry_columns_before_schema_indexes(self, schema_path):
         """Old content_publications tables should initialize before retry index creation."""

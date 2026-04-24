@@ -504,6 +504,26 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_curated_sources_health "
                 "ON curated_sources(status, consecutive_failures, last_failure_at)"
             )
+            # Migrate: create LinkedIn engagement table if missing
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS linkedin_engagement (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                    linkedin_url TEXT,
+                    post_id TEXT,
+                    impression_count INTEGER DEFAULT 0,
+                    like_count INTEGER DEFAULT 0,
+                    comment_count INTEGER DEFAULT 0,
+                    share_count INTEGER DEFAULT 0,
+                    engagement_score REAL,
+                    fetched_at TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_content ON linkedin_engagement(content_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_url ON linkedin_engagement(linkedin_url)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_post_id ON linkedin_engagement(post_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_fetched ON linkedin_engagement(fetched_at)")
             # Migrate: create bluesky_engagement table if missing
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS bluesky_engagement (
@@ -2398,6 +2418,50 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def insert_linkedin_engagement(
+        self,
+        content_id: int,
+        linkedin_url: str | None = None,
+        post_id: str | None = None,
+        impression_count: int = 0,
+        like_count: int = 0,
+        comment_count: int = 0,
+        share_count: int = 0,
+        engagement_score: float = 0.0,
+        fetched_at: str | None = None,
+    ) -> int:
+        """Insert a LinkedIn engagement metrics snapshot."""
+        fetched_at = fetched_at or datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO linkedin_engagement
+               (content_id, linkedin_url, post_id, impression_count, like_count,
+                comment_count, share_count, engagement_score, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                content_id,
+                linkedin_url,
+                post_id,
+                int(impression_count or 0),
+                int(like_count or 0),
+                int(comment_count or 0),
+                int(share_count or 0),
+                float(engagement_score or 0.0),
+                fetched_at,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_linkedin_engagement(self, content_id: int) -> list[dict]:
+        """Get time-series of LinkedIn engagement metrics for a post."""
+        cursor = self.conn.execute(
+            """SELECT * FROM linkedin_engagement
+               WHERE content_id = ?
+               ORDER BY fetched_at ASC""",
+            (content_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def insert_profile_metrics(
         self,
