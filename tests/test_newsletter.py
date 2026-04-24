@@ -179,7 +179,7 @@ class TestNewsletterAssembler:
 
     def test_generates_ranked_subject_candidates(self, db):
         """Assembled newsletters include scored subject alternatives."""
-        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
 
         _insert_published_content(
@@ -308,7 +308,7 @@ class TestNewsletterAssembler:
 
     def test_internal_links_get_utm_and_content_id(self, db):
         """Internal content links are rewritten with newsletter attribution."""
-        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
         content_id = _insert_published_content(
             db,
@@ -330,13 +330,13 @@ class TestNewsletterAssembler:
         query = parse_qs(urlparse(url).query)
         assert query["utm_source"] == ["newsletter"]
         assert query["utm_medium"] == ["email"]
-        assert query["utm_campaign"] == ["weekly-20260423"]
+        assert query["utm_campaign"] == [f"weekly-{now.strftime('%Y%m%d')}"]
         assert query["content_id"] == [str(content_id)]
-        assert content.metadata == {"utm_campaign": "weekly-20260423"}
+        assert content.metadata == {"utm_campaign": f"weekly-{now.strftime('%Y%m%d')}"}
 
     def test_internal_links_preserve_existing_query_strings(self, db):
         """UTM parameters are appended without dropping existing query params."""
-        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
         content_id = _insert_published_content(
             db,
@@ -358,13 +358,13 @@ class TestNewsletterAssembler:
         parsed = urlparse(url)
         query = parse_qs(parsed.query)
         assert query["ref"] == ["site"]
-        assert query["utm_campaign"] == ["weekly-2026-04-16"]
+        assert query["utm_campaign"] == [f"weekly-{week_start.strftime('%Y-%m-%d')}"]
         assert query["content_id"] == [str(content_id)]
         assert parsed.fragment == "notes"
 
     def test_utm_rewrite_skips_external_links(self, db):
         """External published URLs are not modified for attribution."""
-        now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
         _insert_published_content(
             db,
@@ -384,7 +384,7 @@ class TestNewsletterAssembler:
 
         assert "https://x.com/taka/status/123?ref=feed" in content.body_markdown
         assert "utm_campaign" not in content.body_markdown
-        assert content.metadata == {"utm_campaign": "weekly-2026-04-23"}
+        assert content.metadata == {"utm_campaign": f"weekly-{now.strftime('%Y-%m-%d')}"}
 
     def test_utm_rewrite_disabled_by_default(self, db):
         """Default assembler behavior leaves existing links untouched."""
@@ -461,6 +461,113 @@ class TestNewsletterAssembler:
         assert blog_id in content.source_content_ids
         assert thread_id in content.source_content_ids
         assert post_id in content.source_content_ids
+
+    def test_suppresses_recently_featured_content_across_types(self, db):
+        """Recent newsletter source IDs are filtered before section selection."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        repeated_blog_id = _insert_published_content(
+            db,
+            "blog_post",
+            "TITLE: Repeated Blog\n\nOld top blog.",
+            days_ago=1,
+        )
+        fresh_blog_id = _insert_published_content(
+            db,
+            "blog_post",
+            "TITLE: Fresh Blog\n\nNew blog.",
+            days_ago=2,
+        )
+        repeated_thread_id = _insert_published_content(
+            db,
+            "x_thread",
+            "TWEET 1:\nRepeated thread hook\n\nTWEET 2:\nMore",
+            days_ago=1,
+        )
+        fresh_thread_id = _insert_published_content(
+            db,
+            "x_thread",
+            "TWEET 1:\nFresh thread hook\n\nTWEET 2:\nMore",
+            days_ago=2,
+        )
+        repeated_post_id = _insert_published_content(
+            db,
+            "x_post",
+            "Repeated post.",
+            days_ago=1,
+        )
+        fresh_post_id = _insert_published_content(
+            db,
+            "x_post",
+            "Fresh post.",
+            days_ago=2,
+        )
+        send_id = db.insert_newsletter_send(
+            issue_id="issue-previous",
+            subject="Previous",
+            content_ids=[repeated_blog_id, repeated_thread_id, repeated_post_id],
+            subscriber_count=100,
+        )
+        db.conn.execute(
+            "UPDATE newsletter_sends SET sent_at = ? WHERE id = ?",
+            ((now - timedelta(days=7)).isoformat(), send_id),
+        )
+        db.conn.commit()
+
+        content = NewsletterAssembler(db).assemble(week_start, now)
+
+        assert repeated_blog_id not in content.source_content_ids
+        assert repeated_thread_id not in content.source_content_ids
+        assert repeated_post_id not in content.source_content_ids
+        assert fresh_blog_id in content.source_content_ids
+        assert fresh_thread_id in content.source_content_ids
+        assert fresh_post_id in content.source_content_ids
+        assert "Repeated Blog" not in content.body_markdown
+        assert "Repeated thread hook" not in content.body_markdown
+        assert "Repeated post." not in content.body_markdown
+        assert "Fresh Blog" in content.body_markdown
+        assert "Fresh thread hook" in content.body_markdown
+        assert "Fresh post." in content.body_markdown
+        assert content.metadata["suppressed_content_ids"] == [
+            repeated_blog_id,
+            repeated_thread_id,
+            repeated_post_id,
+        ]
+        assert content.metadata["repeat_lookback_weeks"] == 8
+
+    def test_repeat_lookback_zero_disables_suppression(self, db):
+        """A zero lookback preserves previous section selection behavior."""
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        repeated_post_id = _insert_published_content(
+            db,
+            "x_post",
+            "Repeated post remains eligible.",
+            days_ago=1,
+        )
+        fresh_post_id = _insert_published_content(
+            db,
+            "x_post",
+            "Fresh post.",
+            days_ago=2,
+        )
+        db.insert_newsletter_send(
+            issue_id="issue-previous",
+            subject="Previous",
+            content_ids=[repeated_post_id],
+            subscriber_count=100,
+        )
+
+        content = NewsletterAssembler(db, repeat_lookback_weeks=0).assemble(
+            week_start,
+            now,
+        )
+
+        assert content.source_content_ids[:2] == [repeated_post_id, fresh_post_id]
+        assert "Repeated post remains eligible." in content.body_markdown
+        assert "suppressed_content_ids" not in content.metadata
 
     def test_prefers_formats_from_prior_resonant_sends(self, db):
         """Current posts matching resonant source patterns are selected first."""

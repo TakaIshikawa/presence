@@ -35,6 +35,18 @@ def _arg_value(name: str) -> str:
     return sys.argv[index + 1].strip()
 
 
+def _arg_int(name: str, default: int) -> int:
+    """Read a simple integer CLI option."""
+    value = _arg_value(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid %s value %r, using %s", name, value, default)
+        return default
+
+
 def _config_text(obj, *names: str) -> str:
     """Return the first configured string value from a possibly mocked config."""
     for name in names:
@@ -329,10 +341,13 @@ def main():
             utm_campaign_template=getattr(
                 config.newsletter, "utm_campaign_template", ""
             ),
+            repeat_lookback_weeks=_arg_int("--repeat-lookback-weeks", 8),
         )
         content = assembler.assemble(week_start, week_end)
 
         if not content.body_markdown.strip():
+            if "--dry-run" in sys.argv and content.metadata:
+                logger.info("Metadata: %s", _format_preview_json(content.metadata).strip())
             logger.info("No content published this week, skipping newsletter")
             return
 
@@ -393,6 +408,8 @@ def main():
         # Check for --dry-run flag
         if "--dry-run" in sys.argv:
             logger.info("\n--- DRY RUN (not sending) ---\n")
+            if content.metadata:
+                logger.info("Metadata: %s", _format_preview_json(content.metadata).strip())
             logger.info(content.body_markdown)
             return
 

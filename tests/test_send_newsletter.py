@@ -240,8 +240,47 @@ class TestDryRun:
             subject="Weekly Update",
             body_markdown="# Newsletter\nGreat content this week.",
             source_content_ids=[1, 2],
+            metadata={"suppressed_content_ids": [9, 10], "repeat_lookback_weeks": 4},
         )
         MockAssembler.return_value.assemble.return_value = content
+
+        original_argv = sys.argv
+        try:
+            sys.argv = [
+                "send_newsletter.py",
+                "--dry-run",
+                "--repeat-lookback-weeks",
+                "4",
+            ]
+            main()
+        finally:
+            sys.argv = original_argv
+
+        out = caplog.text
+        assert "DRY RUN" in out
+        assert "suppressed_content_ids" in out
+        assert "9" in out
+        assert "10" in out
+        assert "Great content this week." in out
+        assert MockAssembler.call_args.kwargs["repeat_lookback_weeks"] == 4
+        MockClient.assert_not_called()
+
+    @patch("send_newsletter.update_monitoring")
+    @patch("send_newsletter.ButtondownClient")
+    @patch("send_newsletter.NewsletterAssembler")
+    @patch("send_newsletter.script_context")
+    def test_repeat_lookback_weeks_defaults_to_eight(
+        self, mock_ctx, MockAssembler, MockClient, mock_monitoring
+    ):
+        config = _make_config()
+        db = MagicMock()
+        db.get_last_newsletter_send.return_value = None
+        mock_ctx.return_value = _mock_script_context(config, db)()
+        MockAssembler.return_value.assemble.return_value = NewsletterContent(
+            subject="Weekly Update",
+            body_markdown="Content.",
+            source_content_ids=[1],
+        )
 
         original_argv = sys.argv
         try:
@@ -250,9 +289,7 @@ class TestDryRun:
         finally:
             sys.argv = original_argv
 
-        out = caplog.text
-        assert "DRY RUN" in out
-        assert "Great content this week." in out
+        assert MockAssembler.call_args.kwargs["repeat_lookback_weeks"] == 8
         MockClient.assert_not_called()
 
 

@@ -1,11 +1,12 @@
 """Newsletter assembly and Buttondown delivery."""
 
+import json
 import logging
 import re
 import requests
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import median
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -114,12 +115,14 @@ class NewsletterAssembler:
         utm_source: str = "",
         utm_medium: str = "",
         utm_campaign_template: str = "",
+        repeat_lookback_weeks: int = 8,
     ):
         self.db = db
         self.site_url = site_url.rstrip("/")
         self.utm_source = utm_source
         self.utm_medium = utm_medium
         self.utm_campaign_template = utm_campaign_template
+        self.repeat_lookback_weeks = max(int(repeat_lookback_weeks or 0), 0)
 
     def assemble(
         self, week_start: datetime, week_end: datetime
@@ -135,11 +138,18 @@ class NewsletterAssembler:
         }
         source_preferences = self._load_resonant_source_preferences()
         utm_campaign = self._build_utm_campaign(week_start, week_end)
+        suppressed_content_ids = self._load_recent_newsletter_content_ids(week_end)
+        suppressed_ids = set(suppressed_content_ids)
+        metadata = {}
+        if suppressed_content_ids:
+            metadata["suppressed_content_ids"] = suppressed_content_ids
+            metadata["repeat_lookback_weeks"] = self.repeat_lookback_weeks
 
         # 1. Blog post (if published this week)
         blog_posts = self.db.get_published_content_in_range(
             "blog_post", week_start, week_end
         )
+        blog_posts = self._suppress_recent_content(blog_posts, suppressed_ids)
         blog_posts = self._sort_by_source_preferences(blog_posts, source_preferences)
         if blog_posts:
             post = blog_posts[0]
@@ -162,6 +172,7 @@ class NewsletterAssembler:
         threads = self.db.get_published_content_in_range(
             "x_thread", week_start, week_end
         )
+        threads = self._suppress_recent_content(threads, suppressed_ids)
         threads = self._sort_by_source_preferences(threads, source_preferences)
         if threads:
             thread_items = []
@@ -182,6 +193,7 @@ class NewsletterAssembler:
         posts = self.db.get_published_content_in_range(
             "x_post", week_start, week_end
         )
+        posts = self._suppress_recent_content(posts, suppressed_ids)
         posts = self._sort_by_source_preferences(posts, source_preferences)
         if posts:
             post_items = []
@@ -199,7 +211,10 @@ class NewsletterAssembler:
 
         if not sections:
             return NewsletterContent(
-                subject="", body_markdown="", source_content_ids=[]
+                subject="",
+                body_markdown="",
+                source_content_ids=[],
+                metadata=metadata,
             )
 
         # Compose the full newsletter
@@ -220,11 +235,14 @@ class NewsletterAssembler:
             f"*Shipped from [takaishikawa.com]({self.site_url})*"
         )
 
+        if utm_campaign:
+            metadata["utm_campaign"] = utm_campaign
+
         return NewsletterContent(
             subject=subject,
             body_markdown=body,
             source_content_ids=content_ids,
-            metadata={"utm_campaign": utm_campaign} if utm_campaign else {},
+            metadata=metadata,
             subject_candidates=subject_candidates,
         )
 
@@ -621,6 +639,59 @@ class NewsletterAssembler:
         except Exception as e:
             logger.debug(f"Newsletter source preference lookup failed: {e}")
             return []
+
+    def _load_recent_newsletter_content_ids(self, week_end: datetime) -> list[int]:
+        """Load content IDs featured in recent newsletter sends."""
+        if self.repeat_lookback_weeks <= 0:
+            return []
+
+        getter = getattr(self.db, "get_recent_newsletter_source_content_ids", None)
+        try:
+            if callable(getter):
+                return getter(weeks=self.repeat_lookback_weeks, before=week_end)
+
+            conn = getattr(self.db, "conn", None)
+            if conn is None:
+                return []
+            cutoff = week_end - timedelta(weeks=self.repeat_lookback_weeks)
+            cursor = conn.execute(
+                """SELECT source_content_ids
+                   FROM newsletter_sends
+                   WHERE source_content_ids IS NOT NULL
+                     AND datetime(sent_at) >= datetime(?)
+                     AND datetime(sent_at) < datetime(?)
+                   ORDER BY sent_at DESC""",
+                (cutoff.isoformat(), week_end.isoformat()),
+            )
+        except Exception as e:
+            logger.debug("Newsletter repeat suppression lookup failed: %s", e)
+            return []
+
+        content_ids = []
+        seen = set()
+        for row in cursor.fetchall():
+            try:
+                raw_ids = json.loads(row["source_content_ids"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            for raw_id in raw_ids:
+                try:
+                    content_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if content_id not in seen:
+                    seen.add(content_id)
+                    content_ids.append(content_id)
+        return content_ids
+
+    @staticmethod
+    def _suppress_recent_content(
+        items: list[dict], suppressed_ids: set[int]
+    ) -> list[dict]:
+        """Remove items already featured in recent newsletters."""
+        if not suppressed_ids:
+            return items
+        return [item for item in items if int(item.get("id", 0)) not in suppressed_ids]
 
     @staticmethod
     def _sort_by_source_preferences(
