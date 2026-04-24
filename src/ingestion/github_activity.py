@@ -1,4 +1,4 @@
-"""Fetch recently updated GitHub issues, pull requests, releases, and comments."""
+"""Fetch recently updated GitHub issues, pull requests, releases, and discussions."""
 
 from __future__ import annotations
 
@@ -880,6 +880,8 @@ class GitHubActivityClient:
         answer_created_at = _parse_github_datetime(answer.get("createdAt"))
         answer_updated_at = _parse_github_datetime(answer.get("updatedAt"))
         metadata = {
+            "discussion_url": item.get("url"),
+            "answer_state": "answered" if answer_chosen_at else "open",
             "category": {
                 "name": category.get("name"),
                 "slug": category.get("slug"),

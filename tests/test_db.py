@@ -1134,6 +1134,59 @@ class TestGitHubActivity:
         assert rows[0]["metadata"]["draft"] is False
         assert [row["activity_id"] for row in recent] == ["repo#101:release"]
 
+    def test_discussion_activity_upsert_is_idempotent_and_preserves_metadata(self, db):
+        first_id = db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="discussion",
+            number=4,
+            title="Old discussion title",
+            state="open",
+            author="octo",
+            url="https://github.com/taka/repo/discussions/4",
+            updated_at="2026-04-01T12:00:00+00:00",
+            created_at="2026-04-01T10:00:00+00:00",
+            body="Initial body",
+            metadata={
+                "discussion_url": "https://github.com/taka/repo/discussions/4",
+                "answer_state": "open",
+                "category": {"name": "Q&A", "slug": "q-a", "emoji": ":bulb:"},
+            },
+        )
+        second_id = db.upsert_github_activity(
+            repo_name="repo",
+            activity_type="discussion",
+            number=4,
+            title="Updated discussion title",
+            state="answered",
+            author="octo",
+            url="https://github.com/taka/repo/discussions/4",
+            updated_at="2026-04-01T12:30:00+00:00",
+            created_at="2026-04-01T10:00:00+00:00",
+            body="Updated body",
+            metadata={
+                "discussion_url": "https://github.com/taka/repo/discussions/4",
+                "answer_state": "answered",
+                "category": {"name": "Q&A", "slug": "q-a", "emoji": ":bulb:"},
+                "answer": {
+                    "chosen_by": "taka",
+                    "url": "https://github.com/taka/repo/discussions/4#discussioncomment-1",
+                },
+            },
+        )
+
+        rows = db.get_github_activity_in_range(
+            datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc),
+            activity_type="discussion",
+        )
+
+        assert second_id == first_id
+        assert len(rows) == 1
+        assert rows[0]["activity_id"] == "repo#4:discussion"
+        assert rows[0]["title"] == "Updated discussion title"
+        assert rows[0]["metadata"]["answer_state"] == "answered"
+        assert rows[0]["metadata"]["category"]["slug"] == "q-a"
+
     def test_recent_github_releases_filters_repo_and_activity_type(self, db):
         db.upsert_github_activity(
             repo_name="repo-a",

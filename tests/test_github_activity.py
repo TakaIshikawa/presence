@@ -1,4 +1,4 @@
-"""Unit tests for GitHub issue, pull request, and release ingestion."""
+"""Unit tests for GitHub issue, pull request, release, and discussion ingestion."""
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -443,6 +443,8 @@ class TestGitHubActivityClient:
             "slug": "q-a",
             "emoji": ":bulb:",
         }
+        assert discussion.metadata["discussion_url"] == "https://github.com/taka/repo/discussions/4"
+        assert discussion.metadata["answer_state"] == "answered"
         assert discussion.metadata["comments_count"] == 3
         assert discussion.metadata["answer"]["chosen_by"] == "taka"
         assert discussion.metadata["answer"]["body"] == "Answer body with [REDACTED_TICKET]"
@@ -531,6 +533,22 @@ class TestGitHubActivityClient:
 
         assert list(client.get_all_recent_activity()) == []
         mock_pulls.assert_not_called()
+
+    @patch.object(GitHubActivityClient, "get_repo_discussions")
+    @patch.object(GitHubActivityClient, "get_repo_releases")
+    @patch.object(GitHubActivityClient, "get_repo_issues")
+    @patch.object(GitHubActivityClient, "get_configured_repos")
+    def test_get_all_recent_activity_skips_discussions_when_disabled(
+        self, mock_repos, mock_issues, mock_releases, mock_discussions
+    ):
+        mock_repos.return_value = [{"owner": "taka", "name": "repo", "repo_name": "repo"}]
+        mock_issues.return_value = iter([])
+        mock_releases.return_value = iter([])
+
+        client = GitHubActivityClient("tok", "taka")
+
+        assert list(client.get_all_recent_activity(include_discussions=False)) == []
+        mock_discussions.assert_not_called()
 
     @patch.object(GitHubActivityClient, "get_repo_releases")
     @patch.object(GitHubActivityClient, "get_repo_issues")
