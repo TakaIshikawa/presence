@@ -12,6 +12,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from output.queue_scheduler import QueueScheduler
 from runner import script_context
 
 
@@ -91,6 +92,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum rows to show (default: 50)",
     )
 
+    schedule_parser = subparsers.add_parser(
+        "schedule",
+        help="Schedule generated content for publishing",
+    )
+    schedule_parser.add_argument("content_id", type=int, help="Generated content ID")
+    schedule_parser.add_argument(
+        "--platform",
+        choices=["x", "bluesky", "all"],
+        default="all",
+        help="Target platform (default: all)",
+    )
+    schedule_time = schedule_parser.add_mutually_exclusive_group(required=True)
+    schedule_time.add_argument(
+        "--scheduled-at",
+        type=_parse_iso_timestamp,
+        help="ISO timestamp to schedule, for example 2026-04-23T12:00:00+00:00",
+    )
+    schedule_time.add_argument(
+        "--next-recommended",
+        action="store_true",
+        help="Schedule at the next recommended platform slot",
+    )
+    schedule_parser.add_argument(
+        "--recommendation-days",
+        type=int,
+        default=90,
+        help="Days of engagement history for recommendations (default: 90)",
+    )
+    schedule_parser.add_argument(
+        "--recommendation-limit",
+        type=int,
+        default=3,
+        help="Top recommended windows to consider (default: 3)",
+    )
+
     reschedule_parser = subparsers.add_parser(
         "reschedule",
         help="Move an unpublished queue item to a new scheduled time",
@@ -160,6 +196,27 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.limit,
                 )
                 print(format_queue_rows(rows))
+            elif args.command == "schedule":
+                if args.next_recommended:
+                    scheduler = QueueScheduler(
+                        db,
+                        _config,
+                        recommendation_days=args.recommendation_days,
+                        recommendation_limit=args.recommendation_limit,
+                    )
+                    result = scheduler.schedule_content(
+                        args.content_id,
+                        args.platform,
+                    )
+                    row = db.get_publish_queue_item(result.queue_id)
+                else:
+                    queue_id = db.queue_for_publishing(
+                        args.content_id,
+                        args.scheduled_at,
+                        platform=args.platform,
+                    )
+                    row = db.get_publish_queue_item(queue_id)
+                _print_changed("Scheduled", row)
             elif args.command == "reschedule":
                 row = db.reschedule_publish_queue_item(
                     args.queue_id,

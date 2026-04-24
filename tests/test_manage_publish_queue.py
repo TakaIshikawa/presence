@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -212,6 +213,66 @@ def test_main_cancel_reports_changed_row(db, capsys):
     assert "Cancelled publish queue item" in output
     assert row["status"] == "cancelled"
     assert row["error"] is None
+
+
+def test_main_schedule_accepts_manual_timestamp(db, capsys):
+    content_id = _insert_content(db, "Manual schedule")
+
+    with patch("manage_publish_queue.script_context", return_value=_script_context(db)):
+        result = main([
+            "schedule",
+            str(content_id),
+            "--platform",
+            "x",
+            "--scheduled-at",
+            "2026-04-24T09:30:00+00:00",
+        ])
+
+    output = capsys.readouterr().out
+    rows = db.get_publish_queue_items(platform="x")
+    assert result == 0
+    assert "Scheduled publish queue item" in output
+    assert rows[0]["content_id"] == content_id
+    assert rows[0]["scheduled_at"] == "2026-04-24T09:30:00+00:00"
+
+
+def test_main_schedule_uses_next_recommended_slot(db, capsys):
+    content_id = _insert_content(db, "Recommended schedule")
+
+    class FakeScheduler:
+        def __init__(self, db, config, *, recommendation_days, recommendation_limit):
+            self.db = db
+            assert recommendation_days == 30
+            assert recommendation_limit == 2
+
+        def schedule_content(self, content_id, platform):
+            queue_id = self.db.queue_for_publishing(
+                content_id,
+                "2026-04-27T10:00:00+00:00",
+                platform=platform,
+            )
+            return SimpleNamespace(queue_id=queue_id)
+
+    with patch("manage_publish_queue.script_context", return_value=_script_context(db)):
+        with patch("manage_publish_queue.QueueScheduler", FakeScheduler):
+            result = main([
+                "schedule",
+                str(content_id),
+                "--platform",
+                "bluesky",
+                "--next-recommended",
+                "--recommendation-days",
+                "30",
+                "--recommendation-limit",
+                "2",
+            ])
+
+    output = capsys.readouterr().out
+    rows = db.get_publish_queue_items(platform="bluesky")
+    assert result == 0
+    assert "Scheduled publish queue item" in output
+    assert rows[0]["content_id"] == content_id
+    assert rows[0]["scheduled_at"] == "2026-04-27T10:00:00+00:00"
 
 
 def test_main_hold_accepts_multiple_ids_and_reason(db, capsys):
