@@ -443,6 +443,8 @@ class Database:
                     status TEXT DEFAULT 'open',
                     source TEXT,
                     source_metadata JSON,
+                    snoozed_until TEXT,
+                    snooze_reason TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -450,6 +452,10 @@ class Database:
             ci_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(content_ideas)")}
             if ci_cols and "source_metadata" not in ci_cols:
                 self.conn.execute("ALTER TABLE content_ideas ADD COLUMN source_metadata JSON")
+            if ci_cols and "snoozed_until" not in ci_cols:
+                self.conn.execute("ALTER TABLE content_ideas ADD COLUMN snoozed_until TEXT")
+            if ci_cols and "snooze_reason" not in ci_cols:
+                self.conn.execute("ALTER TABLE content_ideas ADD COLUMN snooze_reason TEXT")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_content_ideas_status_priority "
                 "ON content_ideas(status, priority, created_at)"
@@ -5567,18 +5573,24 @@ class Database:
         status: str = "open",
         priority: str = None,
         limit: int = 20,
+        include_snoozed: bool = False,
     ) -> list[dict]:
         """List content ideas, optionally filtered by status and priority."""
         if limit <= 0:
             return []
         filters = []
         params: list[object] = []
+        normalized_status = None
         if status:
+            normalized_status = self._normalize_content_idea_status(status)
             filters.append("status = ?")
-            params.append(self._normalize_content_idea_status(status))
+            params.append(normalized_status)
         if priority:
             filters.append("priority = ?")
             params.append(self._normalize_content_idea_priority(priority))
+        if normalized_status == "open" and not include_snoozed:
+            filters.append("(snoozed_until IS NULL OR datetime(snoozed_until) <= datetime(?))")
+            params.append(datetime.now(timezone.utc).isoformat())
         where = "WHERE " + " AND ".join(filters) if filters else ""
         cursor = self.conn.execute(
             f"""SELECT * FROM content_ideas
@@ -5827,7 +5839,10 @@ class Database:
                 planned_topic_id = cursor.lastrowid
                 self.conn.execute(
                     """UPDATE content_ideas
-                       SET status = 'promoted', updated_at = ?
+                       SET status = 'promoted',
+                           snoozed_until = NULL,
+                           snooze_reason = NULL,
+                           updated_at = ?
                        WHERE id = ?""",
                     (now, idea_id),
                 )
@@ -5839,6 +5854,51 @@ class Database:
     def dismiss_content_idea(self, idea_id: int) -> None:
         """Mark a content idea as dismissed."""
         self._set_content_idea_status(idea_id, "dismissed")
+
+    def snooze_content_idea(
+        self,
+        idea_id: int,
+        snoozed_until: str,
+        reason: str = None,
+    ) -> None:
+        """Temporarily hide an open content idea until an ISO date or datetime."""
+        value = str(snoozed_until or "").strip()
+        if not value:
+            raise ValueError("snoozed_until is required")
+        try:
+            datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("snoozed_until must be an ISO date or datetime") from exc
+
+        now = datetime.now(timezone.utc).isoformat()
+        reason_value = str(reason).strip() if reason is not None else None
+        cursor = self.conn.execute(
+            """UPDATE content_ideas
+               SET snoozed_until = ?, snooze_reason = ?, updated_at = ?
+               WHERE id = ? AND status = 'open'""",
+            (value, reason_value or None, now, idea_id),
+        )
+        if cursor.rowcount == 0:
+            existing = self.get_content_idea(idea_id)
+            if existing is None:
+                raise ValueError(f"Content idea {idea_id} does not exist")
+            raise ValueError(
+                f"Content idea {idea_id} is {existing.get('status')}; only open ideas can be snoozed"
+            )
+        self.conn.commit()
+
+    def unsnooze_content_idea(self, idea_id: int) -> None:
+        """Clear snooze fields for a content idea."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.execute(
+            """UPDATE content_ideas
+               SET snoozed_until = NULL, snooze_reason = NULL, updated_at = ?
+               WHERE id = ?""",
+            (now, idea_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Content idea {idea_id} does not exist")
+        self.conn.commit()
 
     def _set_content_idea_status(self, idea_id: int, status: str) -> None:
         status = self._normalize_content_idea_status(status)

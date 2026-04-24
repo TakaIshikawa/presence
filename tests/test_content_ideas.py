@@ -2,13 +2,21 @@
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from content_ideas import cmd_add, cmd_dismiss, cmd_list, cmd_promote
+from content_ideas import (
+    cmd_add,
+    cmd_dismiss,
+    cmd_list,
+    cmd_promote,
+    cmd_snooze,
+    cmd_unsnooze,
+)
 
 
 def test_add_and_list_content_ideas_orders_high_priority_first(db):
@@ -139,6 +147,45 @@ def test_content_ideas_cli_helpers_print_expected_output(db, capsys):
     output = capsys.readouterr().out
     assert f"Dismissed content idea {idea_id}" in output
     assert db.get_content_idea(idea_id)["status"] == "dismissed"
+
+
+def test_cmd_snooze_unsnooze_and_list_include_snoozed(db, capsys):
+    idea_id = cmd_add(
+        db,
+        "A useful idea that should wait for the right week",
+        topic="planning",
+        priority="high",
+    )
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+    capsys.readouterr()
+
+    cmd_snooze(db, idea_id, snoozed_until=future, reason="wait for launch")
+    output = capsys.readouterr().out
+
+    assert f"Snoozed content idea {idea_id} until {future}" in output
+    assert db.get_content_idea(idea_id)["snooze_reason"] == "wait for launch"
+
+    listed = cmd_list(db, priority="high")
+    output = capsys.readouterr().out
+    assert listed == []
+    assert "No content ideas" in output
+
+    listed = cmd_list(db, priority="high", include_snoozed=True)
+    output = capsys.readouterr().out
+    assert listed[0]["id"] == idea_id
+    assert "snoozed" in output
+    assert future in output
+
+    listed = cmd_list(db, status="open", priority="high", snoozed_only=True)
+    output = capsys.readouterr().out
+    assert listed[0]["id"] == idea_id
+    assert "useful idea" in output
+
+    cmd_unsnooze(db, idea_id)
+    output = capsys.readouterr().out
+    assert f"Unsnoozed content idea {idea_id}" in output
+    assert db.get_content_idea(idea_id)["snoozed_until"] is None
+    assert cmd_list(db, priority="high")[0]["id"] == idea_id
 
 
 def test_cmd_add_skips_duplicate_unless_forced(db, capsys):

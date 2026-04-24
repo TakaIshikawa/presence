@@ -149,6 +149,8 @@ class TestSchemaInit:
             "status",
             "source",
             "source_metadata",
+            "snoozed_until",
+            "snooze_reason",
             "created_at",
             "updated_at",
         }
@@ -565,6 +567,30 @@ class TestInitSchemaMigrations:
                 ).fetchall()
             }
             assert "idx_generated_content_auto_quality" in indexes
+
+    def test_migration_adds_content_idea_snooze_columns_if_missing(self, schema_path):
+        """Test that snooze columns are added to existing content_ideas tables."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE content_ideas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    note TEXT NOT NULL,
+                    topic TEXT,
+                    priority TEXT DEFAULT 'normal',
+                    status TEXT DEFAULT 'open',
+                    source TEXT,
+                    source_metadata JSON,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {row[1] for row in db.conn.execute("PRAGMA table_info(content_ideas)")}
+            assert "snoozed_until" in cols
+            assert "snooze_reason" in cols
 
     def test_migration_adds_reply_queue_columns_if_missing(self, schema_path):
         """Test that reply_queue columns (relationship_context, quality_score, quality_flags) are added when missing."""
@@ -1310,6 +1336,53 @@ class TestGitHubActivity:
 
         assert found["id"] == open_id
         assert found["id"] != dismissed_id
+
+    def test_snoozed_content_ideas_are_excluded_until_date_passes(self, db):
+        visible_id = db.add_content_idea("Visible idea", topic="testing", priority="high")
+        snoozed_id = db.add_content_idea("Snoozed idea", topic="testing", priority="high")
+        expired_id = db.add_content_idea("Expired snooze", topic="testing", priority="high")
+
+        future = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+        db.snooze_content_idea(snoozed_id, future, reason="mistimed")
+        db.snooze_content_idea(expired_id, past, reason="already passed")
+
+        open_ids = [idea["id"] for idea in db.get_content_ideas(status="open")]
+        included_ids = [
+            idea["id"]
+            for idea in db.get_content_ideas(status="open", include_snoozed=True)
+        ]
+        snoozed = db.get_content_idea(snoozed_id)
+
+        assert open_ids == [visible_id, expired_id]
+        assert included_ids == [visible_id, snoozed_id, expired_id]
+        assert snoozed["snoozed_until"] == future
+        assert snoozed["snooze_reason"] == "mistimed"
+
+    def test_unsnooze_content_idea_restores_default_open_listing(self, db):
+        idea_id = db.add_content_idea("Bring this idea back", topic="testing")
+        future = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+
+        db.snooze_content_idea(idea_id, future)
+        assert db.get_content_ideas(status="open") == []
+
+        db.unsnooze_content_idea(idea_id)
+
+        idea = db.get_content_idea(idea_id)
+        assert db.get_content_ideas(status="open")[0]["id"] == idea_id
+        assert idea["snoozed_until"] is None
+        assert idea["snooze_reason"] is None
+
+    def test_snooze_content_idea_rejects_closed_or_invalid_ideas(self, db):
+        dismissed_id = db.add_content_idea("Closed idea", topic="testing")
+        db.dismiss_content_idea(dismissed_id)
+
+        with pytest.raises(ValueError, match="only open ideas"):
+            db.snooze_content_idea(dismissed_id, "2026-05-01")
+        with pytest.raises(ValueError, match="does not exist"):
+            db.unsnooze_content_idea(999)
+        with pytest.raises(ValueError, match="ISO date"):
+            db.snooze_content_idea(dismissed_id, "not-a-date")
 
     def test_find_similar_content_ideas_matches_topic_note_and_metadata_ids(self, db):
         topic_id = db.add_content_idea("Topic seed", topic="  Reliability  ")

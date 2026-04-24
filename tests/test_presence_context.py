@@ -122,6 +122,36 @@ def test_idea_inbox_includes_high_priority_open_ideas_only(db):
     assert "Dismissed idea" not in section
 
 
+def test_idea_inbox_excludes_currently_snoozed_ideas_until_they_expire(db):
+    active_id = db.add_content_idea(
+        "Active idea should shape generation context.",
+        topic="testing",
+        priority="high",
+    )
+    snoozed_id = db.add_content_idea(
+        "Snoozed idea should wait for later context.",
+        topic="planning",
+        priority="high",
+    )
+    expired_id = db.add_content_idea(
+        "Expired snooze should reappear automatically.",
+        topic="release",
+        priority="high",
+    )
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+    db.snooze_content_idea(snoozed_id, future)
+    db.snooze_content_idea(expired_id, past)
+
+    section = PresenceContextBuilder(db).build_idea_inbox()
+
+    assert "Active idea" in section
+    assert "Expired snooze" in section
+    assert "Snoozed idea" not in section
+    assert active_id != snoozed_id
+    assert expired_id != snoozed_id
+
+
 def test_feedback_memory_includes_recent_rejections_and_revisions(db):
     rejected_id = _published_content(
         db,

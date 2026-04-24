@@ -601,6 +601,8 @@ CREATE TABLE IF NOT EXISTS content_ideas (
     status TEXT DEFAULT 'open',          -- open | promoted | dismissed
     source TEXT,
     source_metadata JSON,
+    snoozed_until TEXT,
+    snooze_reason TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
