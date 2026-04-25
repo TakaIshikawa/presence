@@ -249,6 +249,7 @@ def _record_review_decision(db, reply, event_type, new_status=None, notes=None):
         notes=notes,
     )
 def _record_publish_result(db, reply, result) -> bool:
+    current_status = reply.get("status", "pending")
     if result.success:
         posted_platform_id = _posted_platform_id(result)
         db.update_reply_status(
@@ -257,10 +258,26 @@ def _record_publish_result(db, reply, result) -> bool:
             posted_tweet_id=getattr(result, "tweet_id", None),
             posted_platform_id=posted_platform_id,
         )
+        db.record_reply_review_event(
+            reply["id"],
+            "posted",
+            actor="publisher",
+            old_status=current_status,
+            new_status="posted",
+            notes=getattr(result, "url", None),
+        )
         logger.info(f"  Posted: {result.url}")
         return True
 
     logger.error(f"  Error: {result.error}")
+    db.record_reply_review_event(
+        reply["id"],
+        "failed",
+        actor="publisher",
+        old_status=current_status,
+        new_status=current_status,
+        notes=str(getattr(result, "error", "")) or None,
+    )
     return False
 
 

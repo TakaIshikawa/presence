@@ -825,8 +825,6 @@ class TestPollNewActivity:
         assert result == [activity]
         db.upsert_github_activity.assert_not_called()
 
-
-<<<<<<< HEAD
 def test_recent_github_issues_helper_filters_repo_and_label(db):
     db.upsert_github_activity(
         repo_name="taka/presence",

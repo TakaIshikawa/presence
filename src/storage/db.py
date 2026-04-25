@@ -1297,8 +1297,6 @@ class Database:
         )
         return [self._github_activity_from_row(row) for row in cursor.fetchall()]
 
-<<<<<<< HEAD
-    def get_recent_github_issues(
     def get_recent_github_discussions(
         self,
         days: int = 7,
@@ -1486,6 +1484,9 @@ class Database:
 
     def _github_activity_from_row(self, row: sqlite3.Row) -> dict:
         item = dict(row)
+        number = item.get("number")
+        if isinstance(number, str) and number.isdigit():
+            item["number"] = int(number)
         item["labels"] = self._parse_json_list(item.get("labels"))
         item["metadata"] = self._parse_json_object(item.get("metadata"))
         item["activity_id"] = self.github_activity_id(

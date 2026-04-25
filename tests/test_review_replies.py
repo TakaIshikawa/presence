@@ -211,8 +211,7 @@ class TestPublishReply:
 
         assert posted is False
         db.update_reply_status.assert_not_called()
-<<<<<<< HEAD
-=======
+
         db.record_reply_review_event.assert_called_once_with(
             123,
             "failed",
@@ -304,4 +303,3 @@ class TestPriorityReviewHelpers:
         assert row["posted_tweet_id"] == "posted-compat-1"
         events = db.list_reply_review_events(reply_id)
         assert events[0]["event_type"] == "posted"
->>>>>>> 7a5700f (Add reply priority scoring)
