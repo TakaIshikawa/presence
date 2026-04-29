@@ -50,6 +50,7 @@ def _send_with_link(
     content_ids,
     url,
     clicks,
+    raw_url=None,
     subscriber_count=100,
     fetched_at=None,
 ):
@@ -71,7 +72,7 @@ def _send_with_link(
     db.insert_newsletter_link_clicks(
         newsletter_send_id=send_id,
         issue_id=issue_id,
-        link_clicks=[{"url": url, "clicks": clicks}],
+        link_clicks=[{"url": url, "raw_url": raw_url, "clicks": clicks}],
         fetched_at=fetched_at,
     )
     return send_id
@@ -178,6 +179,100 @@ def test_min_clicks_excludes_low_click_links(db):
     assert [item.url for item in summary.opportunities] == ["https://example.com/high"]
 
 
+def test_excluded_domains_filter_before_scoring_and_limit(db):
+    utility_id = _content(
+        db,
+        "Utility",
+        url="https://utility.example.com/archive",
+    )
+    retained_id = _content(db, "Retained", url="https://reader.example.net/post")
+    _send_with_link(
+        db,
+        issue_id="issue-utility",
+        content_ids=[utility_id],
+        url="https://utility.example.com/archive",
+        clicks=20,
+    )
+    _send_with_link(
+        db,
+        issue_id="issue-retained",
+        content_ids=[retained_id],
+        url="https://reader.example.net/post",
+        clicks=4,
+    )
+
+    summary = NewsletterLinkOpportunityAnalyzer(db).summarize(
+        days=30,
+        limit=1,
+        excluded_domains=["utility.example.com"],
+    )
+
+    assert summary.excluded_domains == ["utility.example.com"]
+    assert summary.opportunity_count == 1
+    assert [item.url for item in summary.opportunities] == [
+        "https://reader.example.net/post"
+    ]
+
+
+def test_excluded_domains_match_case_insensitively(db):
+    excluded_id = _content(db, "Self promo", url="https://Self.Example.com/post")
+    retained_id = _content(db, "Partner", url="https://partner.example.com/post")
+    _send_with_link(
+        db,
+        issue_id="issue-self",
+        content_ids=[excluded_id],
+        url="https://Self.Example.com/post",
+        clicks=8,
+    )
+    _send_with_link(
+        db,
+        issue_id="issue-partner",
+        content_ids=[retained_id],
+        url="https://partner.example.com/post",
+        clicks=6,
+    )
+
+    summary = NewsletterLinkOpportunityAnalyzer(db).summarize(
+        days=30,
+        excluded_domains=["SELF.example.COM"],
+    )
+
+    assert summary.excluded_domains == ["self.example.com"]
+    assert [item.url for item in summary.opportunities] == [
+        "https://partner.example.com/post"
+    ]
+
+
+def test_excluded_domains_filter_by_raw_url_fallback(db):
+    tracking_id = _content(db, "Tracked", url="https://tracking.example.com/click")
+    retained_id = _content(db, "Untracked", url="https://news.example.org/story")
+    _send_with_link(
+        db,
+        issue_id="issue-tracked",
+        content_ids=[tracking_id],
+        url="https://tracking.example.com/click",
+        raw_url="https://Owned.Example.com/post?utm_source=newsletter",
+        clicks=9,
+    )
+    _send_with_link(
+        db,
+        issue_id="issue-untracked",
+        content_ids=[retained_id],
+        url="https://news.example.org/story",
+        raw_url="https://news.example.org/story?utm_source=newsletter",
+        clicks=5,
+    )
+
+    summary = NewsletterLinkOpportunityAnalyzer(db).summarize(
+        days=30,
+        excluded_domains=["owned.example.com"],
+    )
+
+    assert [item.url for item in summary.opportunities] == [
+        "https://news.example.org/story"
+    ]
+
+
 def test_handles_missing_newsletter_metrics_without_crashing(db):
     content_id = _content(db, "Metric free", url="https://example.com/metric-free")
     send_id = db.insert_newsletter_send(
@@ -248,3 +343,46 @@ def test_script_supports_json_flag_and_limit(db, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["opportunity_count"] == 1
     assert payload["opportunities"][0]["url"] == "https://example.com/script"
+
+
+def test_script_supports_repeatable_exclude_domain(db, capsys):
+    excluded_id = _content(db, "Script excluded", url="https://utility.example.com/post")
+    retained_id = _content(db, "Script retained", url="https://reader.example.net/post")
+    _send_with_link(
+        db,
+        issue_id="issue-script-excluded",
+        content_ids=[excluded_id],
+        url="https://utility.example.com/post",
+        clicks=10,
+    )
+    _send_with_link(
+        db,
+        issue_id="issue-script-retained",
+        content_ids=[retained_id],
+        url="https://reader.example.net/post",
+        clicks=4,
+    )
+
+    with patch.object(
+        newsletter_link_opportunities,
+        "script_context",
+        return_value=_script_context(db),
+    ):
+        newsletter_link_opportunities.main(
+            [
+                "--json",
+                "--exclude-domain",
+                "UTILITY.example.com",
+                "--exclude-domain",
+                "unused.example.org",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["excluded_domains"] == [
+        "unused.example.org",
+        "utility.example.com",
+    ]
+    assert [item["url"] for item in payload["opportunities"]] == [
+        "https://reader.example.net/post"
+    ]

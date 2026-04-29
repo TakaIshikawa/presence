@@ -84,6 +84,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Exclude links below this click count (default: 1)",
     )
     parser.add_argument(
+        "--exclude-domain",
+        action="append",
+        default=[],
+        help=(
+            "Exclude links whose normalized link or raw URL hostname matches this "
+            "domain. May be repeated."
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Output JSON instead of text",
@@ -98,6 +107,7 @@ def main(argv: list[str] | None = None) -> None:
             days=args.days,
             limit=args.limit,
             min_clicks=args.min_clicks,
+            excluded_domains=args.exclude_domain,
         )
 
     if args.json:

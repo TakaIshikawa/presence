@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -35,6 +36,7 @@ class NewsletterLinkOpportunitySummary:
 
     period_days: int
     min_clicks: int
+    excluded_domains: list[str]
     opportunity_count: int
     opportunities: list[NewsletterLinkOpportunity]
 
@@ -50,9 +52,17 @@ class NewsletterLinkOpportunityAnalyzer:
         days: int = 90,
         limit: int = 20,
         min_clicks: int = 1,
+        excluded_domains: Optional[list[str]] = None,
     ) -> NewsletterLinkOpportunitySummary:
         """Return clicked links ranked by follow-up opportunity score."""
         rows = self._load_latest_link_rows(days=days, min_clicks=min_clicks)
+        normalized_exclusions = self._normalize_domains(excluded_domains or [])
+        if normalized_exclusions:
+            rows = [
+                row
+                for row in rows
+                if not self._row_matches_excluded_domain(row, normalized_exclusions)
+            ]
         content_by_id, content_by_url, follow_up_counts = self._load_content_context(rows)
 
         opportunities = []
@@ -83,6 +93,7 @@ class NewsletterLinkOpportunityAnalyzer:
         return NewsletterLinkOpportunitySummary(
             period_days=days,
             min_clicks=min_clicks,
+            excluded_domains=sorted(normalized_exclusions),
             opportunity_count=len(opportunities),
             opportunities=opportunities,
         )
@@ -270,6 +281,41 @@ class NewsletterLinkOpportunityAnalyzer:
             except (TypeError, ValueError):
                 continue
         return source_ids
+
+    @staticmethod
+    def _normalize_domains(domains: list[str]) -> set[str]:
+        normalized = set()
+        for domain in domains:
+            hostname = NewsletterLinkOpportunityAnalyzer._hostname_for(domain)
+            if hostname:
+                normalized.add(hostname)
+        return normalized
+
+    @staticmethod
+    def _row_matches_excluded_domain(
+        row: dict[str, Any],
+        excluded_domains: set[str],
+    ) -> bool:
+        for url_key in (row.get("link_url"), row.get("raw_url")):
+            hostname = NewsletterLinkOpportunityAnalyzer._hostname_for(url_key)
+            if hostname in excluded_domains:
+                return True
+        return False
+
+    @staticmethod
+    def _hostname_for(value: Any) -> Optional[str]:
+        if not value:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            return None
+
+        parsed = urlparse(candidate)
+        if not parsed.hostname and "://" not in candidate:
+            parsed = urlparse(f"//{candidate}")
+
+        hostname = parsed.hostname
+        return hostname.casefold().rstrip(".") if hostname else None
 
     @staticmethod
     def _title_for(content: Optional[dict[str, Any]]) -> Optional[str]:
