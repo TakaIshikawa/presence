@@ -8,8 +8,15 @@ from output.publish_errors import classify_publish_error, normalize_error_catego
 def test_normalize_error_category_accepts_known_values():
     assert normalize_error_category("auth") == "auth"
     assert normalize_error_category("rate_limit") == "rate_limit"
+
+
+def test_normalize_error_category_maps_unknown_string_to_unknown():
     assert normalize_error_category("not-real") == "unknown"
+
+
+def test_normalize_error_category_maps_non_string_to_unknown():
     assert normalize_error_category(None) == "unknown"
+    assert normalize_error_category(429) == "unknown"
 
 
 def test_classify_publish_error_categories():

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeGuard
 
 
 PublishErrorCategory = Literal[
@@ -28,8 +28,8 @@ KNOWN_ERROR_CATEGORIES: tuple[PublishErrorCategory, ...] = (
 
 def normalize_error_category(category: object) -> PublishErrorCategory:
     """Return a known publication error category."""
-    if isinstance(category, str) and category in KNOWN_ERROR_CATEGORIES:
-        return category  # type: ignore[return-value]
+    if _is_publish_error_category(category):
+        return category
     return "unknown"
 
 
@@ -131,3 +131,7 @@ def classify_publish_error(
 
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
     return any(marker in text for marker in markers)
+
+
+def _is_publish_error_category(category: object) -> TypeGuard[PublishErrorCategory]:
+    return isinstance(category, str) and category in KNOWN_ERROR_CATEGORIES
