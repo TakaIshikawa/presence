@@ -10,8 +10,7 @@ from typing import Literal
 
 Platform = Literal["all", "x", "bluesky"]
 
-VALID_PLATFORMS = {"all", "x", "bluesky"}
-PLATFORM_ALIASES = {
+PLATFORM_ALIASES: dict[str, Platform] = {
     "all": "all",
     "x": "x",
     "twitter": "x",
@@ -70,10 +69,10 @@ class _Snapshot:
 
 def normalize_platform(platform: str | None) -> Platform:
     """Normalize public platform filter names."""
-    normalized = PLATFORM_ALIASES.get((platform or "all").strip().lower())
-    if normalized not in VALID_PLATFORMS:
+    normalized = PLATFORM_ALIASES.get("all" if platform is None else platform.strip().lower())
+    if normalized is None:
         raise ValueError("platform must be one of: all, x, bluesky")
-    return normalized  # type: ignore[return-value]
+    return normalized
 
 
 class EngagementDecayAnalyzer:
