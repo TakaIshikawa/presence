@@ -6542,6 +6542,33 @@ class Database:
         )
         self.conn.commit()
 
+    def find_stale_planned_topics(
+        self,
+        *,
+        cutoff_date: str,
+        campaign_id: int | None = None,
+    ) -> list[dict]:
+        """Return ungenerated planned topics whose target date is before cutoff."""
+        where = [
+            "status = 'planned'",
+            "content_id IS NULL",
+            "target_date IS NOT NULL",
+            "substr(target_date, 1, 10) < ?",
+        ]
+        params: list[object] = [cutoff_date]
+        if campaign_id is not None:
+            where.append("campaign_id = ?")
+            params.append(campaign_id)
+
+        cursor = self.conn.execute(
+            f"""SELECT *
+                  FROM planned_topics
+                 WHERE {' AND '.join(where)}
+                 ORDER BY target_date ASC, created_at ASC, id ASC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     # Manual content idea inbox
     def add_content_idea(
         self,
