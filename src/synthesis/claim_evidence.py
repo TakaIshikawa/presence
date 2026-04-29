@@ -10,6 +10,9 @@ from synthesis.claim_checker import Claim, ClaimChecker
 
 SUPPORTED_STATUSES = {"all", "supported", "unsupported"}
 
+ClaimEvidencePayload = dict[str, Any]
+ClaimEvidenceExport = ClaimEvidencePayload | list[ClaimEvidencePayload]
+
 
 def _shorten(value: Any, width: int = 180) -> str:
     if value is None:
@@ -277,7 +280,7 @@ def load_claim_evidence_export(
     *,
     content_id: int | None = None,
     status: str = "all",
-) -> dict[str, Any] | list[dict[str, Any]]:
+) -> ClaimEvidenceExport:
     """Load one content payload or a status-filtered list of payloads."""
     if content_id is not None:
         payload = load_claim_evidence(db, content_id)
@@ -287,7 +290,7 @@ def load_claim_evidence_export(
     return [load_claim_evidence(db, item_id) for item_id in list_claim_checked_content_ids(db, status)]
 
 
-def format_claim_evidence_json(payload: dict[str, Any] | list[dict[str, Any]]) -> str:
+def format_claim_evidence_json(payload: ClaimEvidenceExport) -> str:
     """Render claim evidence as deterministic JSON."""
     return json.dumps(payload, indent=2, sort_keys=True, default=str)
 
@@ -302,7 +305,7 @@ def _format_reference(reference: dict[str, Any]) -> str:
     return f"- {reference.get('type')}: {label}{score_text}{marker} - {text}{url}"
 
 
-def _format_one_markdown(payload: dict[str, Any]) -> list[str]:
+def _format_one_markdown(payload: ClaimEvidencePayload) -> list[str]:
     content = payload["content"]
     claim_check = payload["claim_check"]
     lines = [
@@ -360,7 +363,7 @@ def _format_one_markdown(payload: dict[str, Any]) -> list[str]:
     return lines
 
 
-def format_claim_evidence_markdown(payload: dict[str, Any] | list[dict[str, Any]]) -> str:
+def format_claim_evidence_markdown(payload: ClaimEvidenceExport) -> str:
     """Render claim evidence as readable markdown, with unsupported claims first."""
     if isinstance(payload, list):
         lines = [f"# Claim Evidence Export ({len(payload)} items)"]

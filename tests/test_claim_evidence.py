@@ -93,6 +93,16 @@ def seed_claim_evidence(db) -> tuple[int, int]:
     return unsupported_id, supported_id
 
 
+@contextmanager
+def _script_context_for(db):
+    yield None, db
+
+
+def _run_main(db, argv: list[str]) -> None:
+    with patch("claim_evidence.script_context", lambda: _script_context_for(db)):
+        main(argv)
+
+
 def test_load_claim_evidence_includes_summary_claims_sources_and_warnings(db):
     content_id, _supported_id = seed_claim_evidence(db)
 
@@ -163,33 +173,73 @@ def test_main_writes_markdown_export(db, tmp_path, capsys):
     content_id, _supported_id = seed_claim_evidence(db)
     output_path = tmp_path / "claim-evidence.md"
 
-    @contextmanager
-    def fake_script_context():
-        yield None, db
-
-    with patch("claim_evidence.script_context", fake_script_context):
-        main(
-            [
-                "--content-id",
-                str(content_id),
-                "--format",
-                "markdown",
-                "--output",
-                str(output_path),
-            ]
-        )
+    _run_main(
+        db,
+        [
+            "--content-id",
+            str(content_id),
+            "--format",
+            "markdown",
+            "--output",
+            str(output_path),
+        ],
+    )
 
     output = output_path.read_text(encoding="utf-8")
     assert output.startswith(f"# Claim Evidence: Content #{content_id}")
+    assert "## Unsupported Claims (1)" in output
+    assert "## Supported Claims (1)" in output
     assert "## Source References" in output
     assert "Exported claim evidence" in capsys.readouterr().err
 
 
-def test_main_missing_content_exits(db):
-    @contextmanager
-    def fake_script_context():
-        yield None, db
+def test_main_prints_json_single_content_export(db, capsys):
+    content_id, _supported_id = seed_claim_evidence(db)
 
-    with patch("claim_evidence.script_context", fake_script_context):
+    _run_main(db, ["--content-id", str(content_id)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["content"]["id"] == content_id
+    assert payload["claim_check"]["status"] == "unsupported"
+    assert payload["claims"][0]["text"] == "Postgres removed JSONB indexing."
+
+
+def test_main_prints_json_filtered_multi_export(db, capsys):
+    unsupported_id, _supported_id = seed_claim_evidence(db)
+
+    _run_main(db, ["--status", "unsupported"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert isinstance(payload, list)
+    assert [item["content"]["id"] for item in payload] == [unsupported_id]
+
+
+def test_main_prints_markdown_single_content_export(db, capsys):
+    content_id, _supported_id = seed_claim_evidence(db)
+
+    _run_main(db, ["--content-id", str(content_id), "--format", "markdown"])
+
+    output = capsys.readouterr().out
+    assert output.startswith(f"# Claim Evidence: Content #{content_id}")
+    assert "## Unsupported Claims (1)" in output
+    assert "## Supported Claims (1)" in output
+    assert "## Source References" in output
+
+
+def test_main_prints_markdown_filtered_multi_export(db, capsys):
+    unsupported_id, _supported_id = seed_claim_evidence(db)
+
+    _run_main(db, ["--status", "unsupported", "--format", "markdown"])
+
+    output = capsys.readouterr().out
+    assert output.startswith("# Claim Evidence Export (1 items)")
+    assert f"# Claim Evidence: Content #{unsupported_id}" in output
+    assert "## Unsupported Claims (1)" in output
+    assert "## Supported Claims (1)" in output
+    assert "## Source References" in output
+
+
+def test_main_missing_content_exits(db):
+    with patch("claim_evidence.script_context", lambda: _script_context_for(db)):
         with pytest.raises(SystemExit, match="Content ID 9999 not found"):
             main(["--content-id", "9999"])
