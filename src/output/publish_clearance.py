@@ -142,6 +142,7 @@ def check_publication_clearance(
     *,
     platform_texts: dict[str, str | list[str] | tuple[str, ...]] | None = None,
     alt_text_guard_mode: str = "strict",
+    persona_guard_mode: str = "strict",
 ) -> PublicationClearanceResult:
     """Return whether a queued item is clear for platform publication.
 
@@ -157,7 +158,10 @@ def check_publication_clearance(
 
     persona_guard = _persona_guard_status(_fetch_persona_guard_summary(db, content_id))
     checks["persona_guard"] = persona_guard
-    if persona_guard["status"] == "failed" or persona_guard["passed"] is False:
+    if (
+        persona_guard_mode == "strict"
+        and (persona_guard["status"] == "failed" or persona_guard["passed"] is False)
+    ):
         return PublicationClearanceResult(False, PERSONA_GUARD_FAILED, checks)
 
     texts = platform_texts or {"default": item.get("content") or ""}

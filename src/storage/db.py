@@ -2074,6 +2074,26 @@ class Database:
         day_start = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
         return self.count_platform_publications_since(platform, day_start.isoformat())
 
+    def count_platform_queue_items_between(
+        self,
+        platform: str,
+        start: str,
+        end: str,
+    ) -> int:
+        """Count queued publish items targeting a platform in a scheduled range."""
+        if platform not in {"x", "bluesky"}:
+            raise ValueError(f"invalid publish queue platform: {platform}")
+        row = self.conn.execute(
+            """SELECT COUNT(*) AS count
+               FROM publish_queue
+               WHERE status IN ('queued', 'failed')
+                 AND scheduled_at >= ?
+                 AND scheduled_at < ?
+                 AND platform IN (?, 'all')""",
+            (start, end, platform),
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
     def get_latest_publication_states(self, content_id: int) -> list[dict]:
         """Get durable publication states for a content item, newest first."""
         cursor = self.conn.execute(
@@ -7120,6 +7140,47 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_held_publish_queue_items(
+        self,
+        *,
+        before: str | None = None,
+        reason_match: str | None = None,
+        platform: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return held publish queue items matching operator filters."""
+        if platform is not None and platform not in self.PUBLISH_QUEUE_PLATFORMS:
+            raise ValueError(f"invalid publish queue platform: {platform}")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        filters = ["pq.status = 'held'"]
+        params: list[object] = []
+        if before is not None:
+            filters.append("pq.scheduled_at < ?")
+            params.append(before)
+        if reason_match is not None:
+            filters.append("LOWER(COALESCE(pq.hold_reason, '')) LIKE ?")
+            params.append(f"%{reason_match.lower()}%")
+        if platform is not None:
+            filters.append("pq.platform = ?")
+            params.append(platform)
+
+        params.append(limit)
+        cursor = self.conn.execute(
+            f"""SELECT pq.id, pq.content_id, pq.scheduled_at, pq.platform,
+                      pq.status, pq.published_at, pq.error, pq.error_category,
+                      pq.hold_reason,
+                      pq.created_at, gc.content_type, gc.content
+               FROM publish_queue pq
+               INNER JOIN generated_content gc ON gc.id = pq.content_id
+               WHERE {' AND '.join(filters)}
+               ORDER BY pq.scheduled_at ASC, pq.id ASC
+               LIMIT ?""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     def get_queued_publish_queue_items_for_audit(self) -> list[dict]:
         """Return queued publish queue items for collision auditing."""
         cursor = self.conn.execute(
@@ -7321,6 +7382,69 @@ class Database:
         )
         self.conn.commit()
         return self.get_publish_queue_item(queue_id)
+
+    def release_held_publish_queue_items(
+        self,
+        *,
+        before: str | None = None,
+        reason_match: str | None = None,
+        platform: str | None = None,
+        limit: int = 50,
+        dry_run: bool = False,
+    ) -> list[dict]:
+        """Release filtered held publish queue items back to queued."""
+        rows = self.get_held_publish_queue_items(
+            before=before,
+            reason_match=reason_match,
+            platform=platform,
+            limit=limit,
+        )
+        if dry_run or not rows:
+            return rows
+
+        ids = [row["id"] for row in rows]
+        placeholders = ",".join("?" for _ in ids)
+        self.conn.execute(
+            f"""UPDATE publish_queue
+                SET status = 'queued', hold_reason = NULL,
+                    error = NULL, error_category = NULL
+                WHERE status = 'held' AND id IN ({placeholders})""",
+            ids,
+        )
+        self.conn.commit()
+        return [self.get_publish_queue_item(queue_id) for queue_id in ids]
+
+    def cancel_held_publish_queue_items(
+        self,
+        *,
+        status_message: str,
+        before: str | None = None,
+        reason_match: str | None = None,
+        platform: str | None = None,
+        limit: int = 50,
+        dry_run: bool = False,
+    ) -> list[dict]:
+        """Cancel filtered held publish queue items with an operator message."""
+        rows = self.get_held_publish_queue_items(
+            before=before,
+            reason_match=reason_match,
+            platform=platform,
+            limit=limit,
+        )
+        if dry_run or not rows:
+            return rows
+
+        ids = [row["id"] for row in rows]
+        placeholders = ",".join("?" for _ in ids)
+        self.conn.execute(
+            f"""UPDATE publish_queue
+                SET status = 'cancelled', error = ?, error_category = NULL,
+                    hold_reason = NULL
+                WHERE status = 'held' AND id IN ({placeholders})""",
+            [status_message, *ids],
+        )
+        self.conn.commit()
+        return [self.get_publish_queue_item(queue_id) for queue_id in ids]
 
     def restore_publish_queue_item(
         self,

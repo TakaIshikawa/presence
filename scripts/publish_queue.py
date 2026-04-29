@@ -372,6 +372,17 @@ def main(argv: list[str] | None = None) -> None:
         daily_limits = _daily_platform_limits(config)
         daily_counts = {}
         restricted_prompt_behavior = restricted_prompt_behavior_from_config(config)
+        persona_guard_mode = _persona_guard_publish_mode(config)
+        raw_persona_guard_mode = getattr(
+            getattr(config, "publishing", None),
+            "persona_guard_publish_mode",
+            None,
+        )
+        clearance_persona_guard_mode = (
+            persona_guard_mode
+            if isinstance(raw_persona_guard_mode, str)
+            else "strict"
+        )
 
         # Get due queue items
         due_items = db.get_due_queue_items(now_iso)
@@ -519,8 +530,26 @@ def main(argv: list[str] | None = None) -> None:
                         item,
                         platform_texts=platform_texts,
                         alt_text_guard_mode=_alt_text_guard_mode(config),
+                        persona_guard_mode=clearance_persona_guard_mode,
                     )
                     if clearance.blocked:
+                        if clearance.hold_reason == "alt_text_failed":
+                            error_text = _alt_text_guard_error(item) or clearance.hold_reason
+                            for failed_platform in pending_platforms:
+                                db.upsert_publication_failure(
+                                    content_id,
+                                    failed_platform,
+                                    error_text,
+                                    max_retry_delay_minutes=max_retry_delay_minutes,
+                                    error_category="media",
+                                )
+                            db.mark_queue_failed(
+                                queue_id,
+                                error_text,
+                                error_category="media",
+                            )
+                            logger.error("  Alt text guard failed: %s", error_text)
+                            continue
                         db.hold_publish_queue_item(
                             queue_id,
                             reason=clearance.hold_reason,

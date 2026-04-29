@@ -16,7 +16,13 @@ from .license_guard import (
     STRICT_RESTRICTED_BEHAVIOR,
     check_publication_license_guard,
 )
-from .platform_adapter import BlueskyPlatformAdapter, count_graphemes
+from .platform_adapter import (
+    BlueskyPlatformAdapter,
+    build_bluesky_variant,
+    build_linkedin_variant,
+    deterministic_variant_metadata,
+    count_graphemes,
+)
 from .thread_preflight import (
     split_thread_content_for_preflight,
     validate_thread_preflight,
@@ -526,7 +532,7 @@ def _render_platform_posts(
     suggestions: HashtagSuggestions | None = None,
     variant: dict | None = None,
 ) -> list[dict]:
-    variant_type = variant_type_for_content_type(content_type)
+    variant_type = _variant_type_for_content_type(content_type)
     variant_getter = getattr(db, "get_content_variant", None)
     variant = (
         variant_getter(content_id, platform, variant_type)
@@ -583,7 +589,7 @@ def refresh_deterministic_variants(
     content_id = content["id"]
     content_type = content.get("content_type") or "x_post"
     source_text = content.get("content") or ""
-    variant_type = variant_type_for_content_type(content_type)
+    variant_type = _variant_type_for_content_type(content_type)
     refreshed_at = datetime.now(timezone.utc).isoformat()
     suggestions = (
         suggest_hashtags(source_text, topics=_fetch_content_topics(db, content_id))
@@ -770,6 +776,7 @@ def build_publication_preview(
             platform,
             [post["text"] for post in posts],
             content_type=content["content_type"],
+        ).as_dict()
         platform_persona_drift = detect_persona_drift(
             "\n".join(post["text"] for post in posts),
             recent_accepted_posts,
