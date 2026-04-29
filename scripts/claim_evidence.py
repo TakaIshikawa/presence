@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from runner import script_context
 from synthesis.claim_evidence import (
+    ClaimEvidenceExport,
     SUPPORTED_STATUSES,
     format_claim_evidence_json,
     format_claim_evidence_markdown,
@@ -48,10 +49,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _render(payload: object, output_format: str) -> str:
+def _render(payload: ClaimEvidenceExport, output_format: str) -> str:
     if output_format == "markdown":
-        return format_claim_evidence_markdown(payload)  # type: ignore[arg-type]
-    return format_claim_evidence_json(payload)  # type: ignore[arg-type]
+        return format_claim_evidence_markdown(payload)
+    return format_claim_evidence_json(payload)
 
 
 def _write_text(path: Path, body: str) -> None:
