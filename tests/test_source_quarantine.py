@@ -191,3 +191,112 @@ def test_dry_run_reports_json_without_modifying_database(db, capsys):
     row = db.get_curated_source("blog", "example.com")
     assert row["status"] == "active"
     assert row["active"] == 1
+
+
+def test_pause_subcommand_marks_active_source_inactive(db, capsys):
+    db.sync_config_sources(
+        [{"identifier": "example.com", "name": "Example"}],
+        "blog",
+    )
+    _set_health(
+        db,
+        "blog",
+        "example.com",
+        failures=4,
+        status="failure",
+        last_success_at=(NOW - timedelta(days=1)).isoformat(),
+    )
+    db.conn.execute(
+        """UPDATE curated_sources
+           SET last_failure_at = ?
+           WHERE source_type = 'blog' AND identifier = 'example.com'""",
+        (NOW.isoformat(),),
+    )
+    db.conn.commit()
+
+    mock_config = MagicMock()
+    with patch("quarantine_sources.script_context") as mock_context, patch(
+        "sys.argv",
+        ["quarantine_sources.py", "pause", "--failure-threshold", "3"],
+    ):
+        mock_context.return_value.__enter__ = lambda self: (mock_config, db)
+        mock_context.return_value.__exit__ = lambda self, *args: None
+
+        main()
+
+    row = db.get_curated_source("blog", "example.com")
+    assert row["status"] == "paused"
+    assert row["active"] == 0
+    assert row["reviewed_at"] is not None
+
+
+def test_resume_dry_run_does_not_reactivate_paused_source(db, capsys):
+    db.sync_config_sources(
+        [{"identifier": "example.com", "name": "Example"}],
+        "blog",
+    )
+    row = db.get_curated_source("blog", "example.com")
+    db.pause_curated_sources_by_ids([row["id"]])
+
+    mock_config = MagicMock()
+    with patch("quarantine_sources.script_context") as mock_context, patch(
+        "sys.argv",
+        ["quarantine_sources.py", "resume", "example.com", "--dry-run", "--json"],
+    ):
+        mock_context.return_value.__enter__ = lambda self: (mock_config, db)
+        mock_context.return_value.__exit__ = lambda self, *args: None
+
+        main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["planned"] == 1
+    assert payload["updated"] == 0
+    row = db.get_curated_source("blog", "example.com")
+    assert row["status"] == "paused"
+    assert row["active"] == 0
+
+
+def test_resume_reactivates_and_clears_reviewed_at(db, capsys):
+    db.sync_config_sources(
+        [{"identifier": "example.com", "name": "Example"}],
+        "blog",
+    )
+    row = db.get_curated_source("blog", "example.com")
+    db.pause_curated_sources_by_ids([row["id"]])
+
+    mock_config = MagicMock()
+    with patch("quarantine_sources.script_context") as mock_context, patch(
+        "sys.argv",
+        ["quarantine_sources.py", "resume", str(row["id"])],
+    ):
+        mock_context.return_value.__enter__ = lambda self: (mock_config, db)
+        mock_context.return_value.__exit__ = lambda self, *args: None
+
+        main()
+
+    row = db.get_curated_source("blog", "example.com")
+    assert row["status"] == "active"
+    assert row["active"] == 1
+    assert row["reviewed_at"] is None
+
+
+def test_reject_marks_source_inactive(db, capsys):
+    db.sync_config_sources(
+        [{"identifier": "example.com", "name": "Example"}],
+        "blog",
+    )
+
+    mock_config = MagicMock()
+    with patch("quarantine_sources.script_context") as mock_context, patch(
+        "sys.argv",
+        ["quarantine_sources.py", "reject", "example.com"],
+    ):
+        mock_context.return_value.__enter__ = lambda self: (mock_config, db)
+        mock_context.return_value.__exit__ = lambda self, *args: None
+
+        main()
+
+    row = db.get_curated_source("blog", "example.com")
+    assert row["status"] == "rejected"
+    assert row["active"] == 0
+    assert row["reviewed_at"] is not None

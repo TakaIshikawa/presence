@@ -3291,8 +3291,8 @@ class Database:
         placeholders = ",".join("?" for _ in source_ids)
         cursor = self.conn.execute(
             f"""UPDATE curated_sources
-                SET status = 'paused', reviewed_at = ?
-                WHERE status = 'active' AND id IN ({placeholders})""",
+                SET status = 'paused', active = 0, reviewed_at = ?
+                WHERE status = 'active' AND active = 1 AND id IN ({placeholders})""",
             [now, *source_ids],
         )
         self.conn.commit()
@@ -3333,6 +3333,7 @@ class Database:
         *,
         source_ids: list[int] | None = None,
         identifiers: list[str] | None = None,
+        source_type: str | None = None,
     ) -> int:
         """Restore paused curated sources to active by ID or identifier."""
         id_list = source_ids or []
@@ -3349,11 +3350,98 @@ class Database:
             params.extend(identifier_list)
         if not lookup_filters:
             return 0
+        filters = [f"({' OR '.join(lookup_filters)})"]
+        if source_type:
+            filters.append("source_type = ?")
+            params.append(source_type)
+        cursor = self.conn.execute(
+            f"""UPDATE curated_sources
+                SET status = 'active',
+                    active = 1,
+                    reviewed_at = NULL
+                WHERE status = 'paused' AND {' AND '.join(filters)}""",
+            params,
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_curated_sources_for_review(
+        self,
+        *,
+        source_ids: list[int] | None = None,
+        identifiers: list[str] | None = None,
+        source_type: str | None = None,
+        statuses: list[str] | None = None,
+    ) -> list[dict]:
+        """Return curated sources matching optional review filters."""
+        filters: list[str] = []
+        params: list[object] = []
+        if source_type:
+            filters.append("source_type = ?")
+            params.append(source_type)
+        if statuses:
+            filters.append(f"status IN ({','.join('?' for _ in statuses)})")
+            params.extend(statuses)
+
+        id_list = source_ids or []
+        identifier_list = identifiers or []
+        lookup_filters = []
+        if id_list:
+            lookup_filters.append(f"id IN ({','.join('?' for _ in id_list)})")
+            params.extend(id_list)
+        if identifier_list:
+            lookup_filters.append(
+                f"identifier IN ({','.join('?' for _ in identifier_list)})"
+            )
+            params.extend(identifier_list)
+        if lookup_filters:
+            filters.append(f"({' OR '.join(lookup_filters)})")
+
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        cursor = self.conn.execute(
+            f"""SELECT * FROM curated_sources
+                {where}
+                ORDER BY source_type ASC, identifier ASC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def reject_curated_sources(
+        self,
+        *,
+        source_ids: list[int] | None = None,
+        identifiers: list[str] | None = None,
+        source_type: str | None = None,
+    ) -> int:
+        """Reject curated sources by ID or identifier and mark them inactive."""
+        id_list = source_ids or []
+        identifier_list = identifiers or []
+        lookup_filters = []
+        params: list[object] = []
+        if id_list:
+            lookup_filters.append(f"id IN ({','.join('?' for _ in id_list)})")
+            params.extend(id_list)
+        if identifier_list:
+            lookup_filters.append(
+                f"identifier IN ({','.join('?' for _ in identifier_list)})"
+            )
+            params.extend(identifier_list)
+        if not lookup_filters:
+            return 0
+
+        filters = [f"({' OR '.join(lookup_filters)})"]
+        if source_type:
+            filters.append("source_type = ?")
+            params.append(source_type)
+
         now = datetime.now(timezone.utc).isoformat()
         cursor = self.conn.execute(
             f"""UPDATE curated_sources
-                SET status = 'active', reviewed_at = ?
-                WHERE status = 'paused' AND ({' OR '.join(lookup_filters)})""",
+                SET status = 'rejected',
+                    active = 0,
+                    reviewed_at = ?
+                WHERE {' AND '.join(filters)}
+                  AND status != 'rejected'""",
             [now, *params],
         )
         self.conn.commit()

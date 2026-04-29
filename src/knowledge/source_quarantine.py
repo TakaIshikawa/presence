@@ -21,6 +21,8 @@ class SourceQuarantineDecision:
     consecutive_failures: int
     last_fetch_status: str | None
     last_success_at: str | None
+    last_failure_at: str | None
+    last_error: str | None
     would_pause: bool
 
     def to_dict(self) -> dict[str, Any]:
@@ -52,6 +54,8 @@ def _classify_row(
     last_success_at = row.get("last_success_at")
     last_success = _parse_datetime(last_success_at)
     last_fetch_status = row.get("last_fetch_status")
+    last_failure_at = row.get("last_failure_at")
+    last_error = row.get("last_error")
 
     classification = "healthy"
     reason = "within thresholds"
@@ -87,6 +91,8 @@ def _classify_row(
         consecutive_failures=failures,
         last_fetch_status=last_fetch_status,
         last_success_at=last_success_at,
+        last_failure_at=last_failure_at,
+        last_error=last_error,
         would_pause=would_pause,
     )
 
@@ -138,19 +144,104 @@ def apply_source_quarantine(db, decisions: list[SourceQuarantineDecision]) -> in
     ids = [decision.id for decision in decisions if decision.would_pause]
     if not ids:
         return 0
+    return db.pause_curated_sources_by_ids(ids)
 
-    placeholders = ", ".join("?" for _ in ids)
-    cursor = db.conn.execute(
-        f"""UPDATE curated_sources
-            SET status = 'paused',
-                active = 0
-            WHERE id IN ({placeholders})
-              AND status = 'active'
-              AND active = 1""",
-        ids,
+
+def _split_targets(targets: list[str] | None) -> tuple[list[int], list[str]]:
+    source_ids: list[int] = []
+    identifiers: list[str] = []
+    for target in targets or []:
+        if target.isdigit():
+            source_ids.append(int(target))
+        else:
+            identifiers.append(target.lstrip("@"))
+    return source_ids, identifiers
+
+
+def pause_quarantined_sources(
+    db,
+    *,
+    failure_threshold: int = 3,
+    stale_days: int = 30,
+    source_type: str | None = None,
+    dry_run: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Pause active sources classified for quarantine."""
+    report = quarantine_curated_sources(
+        db,
+        failure_threshold=failure_threshold,
+        stale_days=stale_days,
+        source_type=source_type,
+        apply=not dry_run,
+        now=now,
     )
-    db.conn.commit()
-    return cursor.rowcount
+    report["command"] = "pause"
+    report["dry_run"] = dry_run
+    return report
+
+
+def resume_quarantined_sources(
+    db,
+    targets: list[str],
+    *,
+    source_type: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Reactivate paused sources and clear their review timestamp."""
+    source_ids, identifiers = _split_targets(targets)
+    rows = db.get_curated_sources_for_review(
+        source_ids=source_ids,
+        identifiers=identifiers,
+        source_type=source_type,
+        statuses=["paused"],
+    )
+    updated = 0
+    if rows and not dry_run:
+        updated = db.restore_curated_sources(
+            source_ids=source_ids,
+            identifiers=identifiers,
+            source_type=source_type,
+        )
+    return {
+        "command": "resume",
+        "dry_run": dry_run,
+        "source_type": source_type,
+        "planned": len(rows),
+        "updated": updated,
+        "sources": rows,
+    }
+
+
+def reject_quarantined_sources(
+    db,
+    targets: list[str],
+    *,
+    source_type: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Reject matching sources and mark them inactive."""
+    source_ids, identifiers = _split_targets(targets)
+    rows = db.get_curated_sources_for_review(
+        source_ids=source_ids,
+        identifiers=identifiers,
+        source_type=source_type,
+    )
+    updated = 0
+    if rows and not dry_run:
+        updated = db.reject_curated_sources(
+            source_ids=source_ids,
+            identifiers=identifiers,
+            source_type=source_type,
+        )
+    return {
+        "command": "reject",
+        "dry_run": dry_run,
+        "source_type": source_type,
+        "planned": len(rows),
+        "updated": updated,
+        "sources": rows,
+    }
 
 
 def quarantine_curated_sources(
@@ -177,7 +268,9 @@ def quarantine_curated_sources(
         counts[decision.classification] += 1
 
     return {
+        "command": "report",
         "applied": apply,
+        "dry_run": not apply,
         "failure_threshold": failure_threshold,
         "stale_days": stale_days,
         "source_type": source_type,
