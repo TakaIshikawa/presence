@@ -108,6 +108,32 @@ def test_platform_filtering_and_aliases(db):
     ]
 
 
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        (None, "all"),
+        ("all", "all"),
+        ("x", "x"),
+        ("twitter", "x"),
+        ("bluesky", "bluesky"),
+        ("bsky", "bluesky"),
+        (" ALL ", "all"),
+        (" X ", "x"),
+        (" Twitter ", "x"),
+        (" BlueSky ", "bluesky"),
+        (" BSKY ", "bluesky"),
+    ],
+)
+def test_normalize_platform_accepts_aliases_defaults_and_normalizes_input(platform, expected):
+    assert normalize_platform(platform) == expected
+
+
+@pytest.mark.parametrize("platform", ["linkedin", "", " mastodon "])
+def test_normalize_platform_rejects_invalid_values(platform):
+    with pytest.raises(ValueError, match="platform must be one of: all, x, bluesky"):
+        normalize_platform(platform)
+
+
 def test_no_matching_data_formats_empty_state(db):
     report = EngagementDecayAnalyzer(db).analyze(days=7, platform="all", now=NOW)
 
