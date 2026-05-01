@@ -28,6 +28,7 @@ class TestSchemaInit:
             "generated_content",
             "post_engagement",
             "linkedin_engagement",
+            "mastodon_engagement",
             "prompt_versions",
             "poll_state",
             "knowledge",
@@ -254,6 +255,36 @@ class TestSchemaInit:
             "created_at",
         }
         assert expected.issubset(cols)
+
+    def test_mastodon_engagement_table_exists(self, db):
+        cols = {
+            row[1]
+            for row in db.conn.execute("PRAGMA table_info(mastodon_engagement)")
+        }
+        expected = {
+            "content_id",
+            "mastodon_url",
+            "post_id",
+            "favourite_count",
+            "boost_count",
+            "reply_count",
+            "engagement_score",
+            "fetched_at",
+            "raw_metrics",
+            "created_at",
+        }
+        assert expected.issubset(cols)
+
+        indexes = {
+            row[1]
+            for row in db.conn.execute("PRAGMA index_list(mastodon_engagement)")
+        }
+        assert {
+            "idx_mastodon_engagement_content",
+            "idx_mastodon_engagement_url",
+            "idx_mastodon_engagement_post_id",
+            "idx_mastodon_engagement_fetched",
+        }.issubset(indexes)
 
     def test_idempotent_init(self, db, schema_path):
         # Running init_schema again should not raise
@@ -749,6 +780,37 @@ class TestInitSchemaMigrations:
                 "share_count",
                 "engagement_score",
                 "fetched_at",
+            }.issubset(cols)
+
+    def test_migration_creates_mastodon_engagement_for_existing_schema(self, schema_path):
+        """Test that mastodon_engagement is added to an existing schema."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {
+                row[1]
+                for row in db.conn.execute("PRAGMA table_info(mastodon_engagement)")
+            }
+            assert {
+                "content_id",
+                "mastodon_url",
+                "post_id",
+                "favourite_count",
+                "boost_count",
+                "reply_count",
+                "engagement_score",
+                "fetched_at",
+                "raw_metrics",
             }.issubset(cols)
 
     def test_migration_adds_publication_retry_columns_before_schema_indexes(self, schema_path):

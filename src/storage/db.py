@@ -6483,6 +6483,47 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def find_similar_planned_topic(
+        self,
+        topic: str = None,
+        source_activity_id: str = None,
+    ) -> dict | None:
+        """Find an active planned topic with the same normalized topic or source."""
+        if topic:
+            normalized_topic = re.sub(r"\s+", " ", topic.strip().lower())
+            rows = self.conn.execute(
+                """SELECT *
+                   FROM planned_topics
+                   WHERE status != 'skipped'
+                   ORDER BY created_at ASC, id ASC"""
+            ).fetchall()
+            for row in rows:
+                row_topic = re.sub(r"\s+", " ", str(row["topic"] or "").strip().lower())
+                if row_topic == normalized_topic:
+                    result = dict(row)
+                    result["duplicate_reason"] = "topic"
+                    return result
+
+        if source_activity_id:
+            rows = self.conn.execute(
+                """SELECT *
+                   FROM planned_topics
+                   WHERE status != 'skipped'
+                     AND source_material IS NOT NULL
+                   ORDER BY created_at ASC, id ASC"""
+            ).fetchall()
+            for row in rows:
+                try:
+                    source_material = json.loads(row["source_material"])
+                except (TypeError, json.JSONDecodeError):
+                    source_material = {}
+                if source_material.get("activity_id") == source_activity_id:
+                    result = dict(row)
+                    result["duplicate_reason"] = "source_activity_id"
+                    return result
+
+        return None
+
     def update_planned_topic(
         self,
         planned_id: int,

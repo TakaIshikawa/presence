@@ -169,6 +169,29 @@ CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_post_id
 CREATE INDEX IF NOT EXISTS idx_linkedin_engagement_fetched
     ON linkedin_engagement(fetched_at);
 
+-- Track Mastodon engagement metrics imported from manual exports (time-series)
+CREATE TABLE IF NOT EXISTS mastodon_engagement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+    mastodon_url TEXT,
+    post_id TEXT,
+    favourite_count INTEGER DEFAULT 0,
+    boost_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    engagement_score REAL,
+    fetched_at TEXT NOT NULL,
+    raw_metrics JSON,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mastodon_engagement_content
+    ON mastodon_engagement(content_id);
+CREATE INDEX IF NOT EXISTS idx_mastodon_engagement_url
+    ON mastodon_engagement(mastodon_url);
+CREATE INDEX IF NOT EXISTS idx_mastodon_engagement_post_id
+    ON mastodon_engagement(post_id);
+CREATE INDEX IF NOT EXISTS idx_mastodon_engagement_fetched
+    ON mastodon_engagement(fetched_at);
+
 -- Track Bluesky engagement metrics (time-series)
 CREATE TABLE IF NOT EXISTS bluesky_engagement (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
