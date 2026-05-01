@@ -151,7 +151,8 @@ def test_schedule_campaign_topics_cli_json_serializes_report(db, capsys):
         yield None, db
 
     with patch("schedule_campaign_topics.script_context", fake_script_context):
-        main(["--campaign-id", str(campaign_id), "--days", "3", "--dry-run", "--json"])
+        with patch("synthesis.campaign_scheduler._coerce_today", return_value=date(2026, 4, 23)):
+            main(["--campaign-id", str(campaign_id), "--days", "3", "--dry-run", "--json"])
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["summary"] == {"created": 0, "proposed": 0, "skipped": 1}
