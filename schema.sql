@@ -310,6 +310,10 @@ CREATE TABLE IF NOT EXISTS curated_sources (
     name TEXT,
     license TEXT DEFAULT 'attribution_required',  -- 'open', 'attribution_required', 'restricted'
     feed_url TEXT,
+    canonical_url TEXT,
+    link_title TEXT,
+    site_name TEXT,
+    published_at TEXT,
     feed_etag TEXT,
     feed_last_modified TEXT,
     last_fetch_status TEXT,
