@@ -2784,6 +2784,17 @@ class Database:
         """Update the last successful GitHub PR review comment poll time."""
         self.set_meta("github_pr_reviews:last_poll_time", poll_time.isoformat())
 
+    def get_last_github_issue_comment_poll_time(self) -> Optional[datetime]:
+        """Get the last successful GitHub issue comment poll time."""
+        value = self.get_meta("github_issue_comments:last_poll_time")
+        if not value:
+            return None
+        return datetime.fromisoformat(value)
+
+    def set_last_github_issue_comment_poll_time(self, poll_time: datetime) -> None:
+        """Update the last successful GitHub issue comment poll time."""
+        self.set_meta("github_issue_comments:last_poll_time", poll_time.isoformat())
+
     # Engagement tracking
     def get_posts_needing_metrics(self, max_age_days: int = 30) -> list[dict]:
         """Get published posts with tweet_ids that need engagement metrics fetched."""
