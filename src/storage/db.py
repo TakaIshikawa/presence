@@ -530,6 +530,14 @@ class Database:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN reviewed_at TEXT")
                 if "feed_url" not in cs_cols:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_url TEXT")
+                if "canonical_url" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN canonical_url TEXT")
+                if "link_title" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN link_title TEXT")
+                if "site_name" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN site_name TEXT")
+                if "published_at" not in cs_cols:
+                    self.conn.execute("ALTER TABLE curated_sources ADD COLUMN published_at TEXT")
                 if "feed_etag" not in cs_cols:
                     self.conn.execute("ALTER TABLE curated_sources ADD COLUMN feed_etag TEXT")
                 if "feed_last_modified" not in cs_cols:
