@@ -38,6 +38,14 @@ class BlueskyConfig:
 
 
 @dataclass
+class MastodonConfig:
+    enabled: bool
+    base_url: str
+    access_token: str
+    handle: str = ""
+
+
+@dataclass
 class AnthropicConfig:
     api_key: str
 
@@ -291,6 +299,7 @@ class Config:
     github: GitHubConfig
     x: XConfig
     bluesky: Optional[BlueskyConfig]
+    mastodon: Optional[MastodonConfig]
     anthropic: AnthropicConfig
     paths: PathsConfig
     synthesis: SynthesisConfig
@@ -520,6 +529,15 @@ def load_config(config_path: Optional[str] = None) -> Config:
             app_password=_resolve_env_var(data["bluesky"].get("app_password", "")),
         )
 
+    mastodon_config = None
+    if "mastodon" in data:
+        mastodon_config = MastodonConfig(
+            enabled=data["mastodon"].get("enabled", True),
+            base_url=_resolve_env_var(data["mastodon"].get("base_url", "")),
+            access_token=_resolve_env_var(data["mastodon"].get("access_token", "")),
+            handle=_resolve_env_var(data["mastodon"].get("handle", "")),
+        )
+
     # Validate required sections exist and are dictionaries
     _require(data, "github", section="github")
     _require(data, "x", section="x")
@@ -732,6 +750,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             ),
         ),
         bluesky=bluesky_config,
+        mastodon=mastodon_config,
         anthropic=AnthropicConfig(
             api_key=_resolve_env_var(_require(data, "anthropic", "api_key", section="anthropic"))
         ),

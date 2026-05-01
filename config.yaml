@@ -16,6 +16,12 @@ x:
   access_token: "${X_ACCESS_TOKEN}"
   access_token_secret: "${X_ACCESS_TOKEN_SECRET}"
 
+mastodon:
+  enabled: false
+  base_url: "${MASTODON_BASE_URL}"
+  access_token: "${MASTODON_ACCESS_TOKEN}"
+  handle: "${MASTODON_HANDLE}"
+
 anthropic:
   api_key: "${ANTHROPIC_API_KEY}"
 
