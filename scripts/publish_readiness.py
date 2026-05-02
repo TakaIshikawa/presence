@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from output.publish_readiness import check_publish_readiness  # noqa: E402
+from output.publish_readiness_report import (  # noqa: E402
+    build_publish_format_readiness_report,
+    format_publish_format_readiness_json,
+)
 from runner import script_context  # noqa: E402
 
 
@@ -31,6 +36,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--json",
         action="store_true",
         help="Emit stable machine-readable JSON",
+    )
+    parser.add_argument(
+        "--report",
+        choices=("platform", "format"),
+        default="platform",
+        help=(
+            "Report kind: platform keeps the existing platform/policy readiness "
+            "output; format emits grouped JSON destination-format findings "
+            "(default: platform)."
+        ),
+    )
+    parser.add_argument(
+        "--format-report",
+        action="store_true",
+        help="Alias for --report format.",
     )
     parser.add_argument(
         "--allow-restricted-knowledge",
@@ -64,7 +84,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    if args.format_report:
+        args.report = "format"
+
     with script_context() as (config, db):
+        if args.report == "format":
+            try:
+                report = build_publish_format_readiness_report(db)
+            except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            print(format_publish_format_readiness_json(report))
+            return 1 if report.blocker_count else 0
+
         results = check_publish_readiness(
             db,
             config=config,
