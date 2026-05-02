@@ -8,6 +8,7 @@ from pathlib import Path
 
 from output.blog_canonical_audit import (
     build_blog_canonical_audit_report,
+    build_blog_canonical_audit_report_from_records,
     format_blog_canonical_audit_json,
     format_blog_canonical_audit_text,
 )
@@ -135,6 +136,83 @@ def test_clean_output_and_json_are_deterministic(tmp_path):
     assert payload["entries"][0]["generated_content_ids"] == [7, 8]
     assert payload["issues"] == []
     assert "No canonical URL or publication identity issues found." in text
+
+
+def test_plain_dictionary_records_are_audited():
+    report = build_blog_canonical_audit_report_from_records(
+        [
+            {
+                "title": "Clean Record",
+                "slug": "clean-record",
+                "canonical_url": "https://example.com/blog/clean-record",
+                "generated_content_id": 11,
+            },
+            {
+                "title": "Tracked Record",
+                "slug": "tracked-record",
+                "canonical_url": "https://example.com/blog/tracked-record?utm_source=newsletter",
+                "generated_content_id": 12,
+            },
+            {
+                "title": "Local Record",
+                "slug": "local-record",
+                "canonical_url": "http://localhost:8000/blog/local-record",
+                "generated_content_id": 13,
+            },
+            {
+                "title": "Missing Record",
+                "slug": "missing-record",
+                "generated_content_id": 14,
+            },
+        ]
+    )
+    codes = [issue.code for issue in report.issues]
+
+    assert report.ok is False
+    assert "tracking_parameter_canonical_url" in codes
+    assert "unstable_canonical_host" in codes
+    assert "missing_canonical_url" in codes
+    assert report.entries[0].canonical_url == "https://example.com/blog/clean-record"
+
+
+def test_metadata_records_and_duplicate_canonicals_are_audited():
+    report = build_blog_canonical_audit_report_from_records(
+        [
+            {
+                "file_path": "drafts/first.md",
+                "metadata": {
+                    "title": "First",
+                    "slug": "first",
+                    "canonical_url": "https://example.com/blog/first/",
+                    "source_content_ids": [31],
+                },
+            },
+            {
+                "file_path": "drafts/second.md",
+                "metadata": {
+                    "title": "Second",
+                    "slug": "second",
+                    "canonical_url": "ftp://example.com/blog/second",
+                    "source_content_ids": [32],
+                },
+            },
+            {
+                "file_path": "drafts/duplicate.md",
+                "metadata": {
+                    "title": "Duplicate",
+                    "slug": "first",
+                    "canonical_url": "https://example.com/blog/first",
+                    "source_content_ids": [33],
+                },
+            },
+        ],
+        root_path="fixture-records",
+    )
+    codes = [issue.code for issue in report.issues]
+
+    assert report.root_path == "fixture-records"
+    assert codes.count("duplicate_canonical_url") == 2
+    assert "invalid_canonical_url" in codes
 
 
 def test_cli_json_and_strict_exit_behavior(tmp_path, capsys):
