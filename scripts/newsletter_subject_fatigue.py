@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from evaluation.newsletter_subject_fatigue import (  # noqa: E402
+from output.newsletter_subject_fatigue import (  # noqa: E402
     DEFAULT_DAYS,
     DEFAULT_THRESHOLD,
     build_newsletter_subject_fatigue_report,
