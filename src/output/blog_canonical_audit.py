@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 from output.blog_frontmatter_validator import parse_markdown_frontmatter
 
@@ -16,6 +16,20 @@ from output.blog_frontmatter_validator import parse_markdown_frontmatter
 DEFAULT_BLOG_PATH = "drafts"
 CANONICAL_FIELDS = ("canonical_url", "canonical", "url")
 CONTENT_ID_FIELDS = ("generated_content_id", "content_id")
+TRACKING_QUERY_PARAMS = {
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "msclkid",
+    "ref",
+    "spm",
+    "utm_campaign",
+    "utm_content",
+    "utm_medium",
+    "utm_source",
+    "utm_term",
+}
 
 
 @dataclass(frozen=True)
@@ -89,6 +103,13 @@ class BlogCanonicalAuditReport:
         }
 
 
+@dataclass
+class _AuditState:
+    canonical_paths: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    title_paths: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    content_id_paths: dict[int, list[str]] = field(default_factory=lambda: defaultdict(list))
+
+
 def build_blog_canonical_audit_report(
     root_path: str | Path = DEFAULT_BLOG_PATH,
 ) -> BlogCanonicalAuditReport:
@@ -101,9 +122,7 @@ def build_blog_canonical_audit_report(
 
     entries: list[BlogCanonicalEntry] = []
     issues: list[BlogCanonicalIssue] = []
-    canonical_paths: dict[str, list[str]] = defaultdict(list)
-    title_paths: dict[str, list[str]] = defaultdict(list)
-    content_id_paths: dict[int, list[str]] = defaultdict(list)
+    audit_state = _AuditState()
 
     if not root.exists():
         issues.append(
@@ -147,160 +166,45 @@ def build_blog_canonical_audit_report(
             )
             continue
 
-        title = _string_value(frontmatter.get("title"))
-        slug = _string_value(frontmatter.get("slug"))
-        canonical_url = _canonical_value(frontmatter)
-        generated_content_ids = tuple(_generated_content_ids(frontmatter))
-        entries.append(
-            BlogCanonicalEntry(
-                file_path=file_path,
-                title=title,
-                slug=slug,
-                canonical_url=canonical_url,
-                generated_content_ids=generated_content_ids,
-                frontmatter=frontmatter,
-            )
+        entry = _entry_from_frontmatter(file_path, frontmatter)
+        entries.append(entry)
+        _audit_entry(
+            entry,
+            expected_slug=_expected_slug(path, root),
+            issues=issues,
+            state=audit_state,
         )
 
-        if not title:
-            issues.append(
-                _issue(
-                    "error",
-                    "missing_title",
-                    "Blog markdown is missing a non-empty title.",
-                    file_path,
-                    "Add a stable frontmatter title for the published article.",
-                    field="title",
-                )
-            )
-        else:
-            title_paths[_title_key(title)].append(file_path)
+    return _build_report(str(root), entries, issues, audit_state)
 
-        if canonical_url is None:
-            issues.append(
-                _issue(
-                    "error",
-                    "missing_canonical_url",
-                    "Blog markdown is missing a canonical URL.",
-                    file_path,
-                    "Add canonical_url with the final published article URL.",
-                    field="canonical_url",
-                )
-            )
-        elif not _valid_canonical_url(canonical_url):
-            issues.append(
-                _issue(
-                    "error",
-                    "invalid_canonical_url",
-                    "Canonical URL must be an absolute http(s) URL.",
-                    file_path,
-                    "Use the final absolute https:// URL for the published article.",
-                    field="canonical_url",
-                )
-            )
-        else:
-            canonical_paths[_normalize_url(canonical_url)].append(file_path)
 
-        expected_slug = _expected_slug(path, root)
-        canonical_slug = _canonical_slug(canonical_url) if canonical_url else None
-        if slug and slug != expected_slug:
-            issues.append(
-                _issue(
-                    "error",
-                    "slug_file_mismatch",
-                    f"Frontmatter slug '{slug}' does not match file slug '{expected_slug}'.",
-                    file_path,
-                    "Rename the file or update slug so both identify the same article.",
-                    field="slug",
-                )
-            )
-        if canonical_slug and (slug or expected_slug) != canonical_slug:
-            compared_slug = slug or expected_slug
-            issues.append(
-                _issue(
-                    "error",
-                    "slug_canonical_mismatch",
-                    f"Slug '{compared_slug}' does not match canonical URL slug '{canonical_slug}'.",
-                    file_path,
-                    "Update canonical_url, slug, or filename so the publication identity is consistent.",
-                    field="canonical_url",
-                )
-            )
-        if title and (slug or expected_slug) and _slugify(title) != (slug or expected_slug):
-            issues.append(
-                _issue(
-                    "warning",
-                    "title_slug_mismatch",
-                    "Title does not normalize to the configured blog slug.",
-                    file_path,
-                    "Confirm the title and slug intentionally refer to the same article.",
-                    field="title",
-                )
-            )
+def build_blog_canonical_audit_report_from_records(
+    records: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    root_path: str = "<records>",
+) -> BlogCanonicalAuditReport:
+    """Validate in-memory blog metadata dictionaries.
 
-        if not generated_content_ids:
-            issues.append(
-                _issue(
-                    "error",
-                    "missing_generated_content_reference",
-                    "Blog markdown has no generated content ID reference.",
-                    file_path,
-                    "Add generated_content_id, content_id, or source_content_ids with positive integer IDs.",
-                )
-            )
-        else:
-            for content_id in generated_content_ids:
-                content_id_paths[content_id].append(file_path)
+    Records may be raw frontmatter dictionaries or richer post dictionaries that
+    contain a ``frontmatter``/``metadata`` mapping plus a path-like field.
+    """
+    entries: list[BlogCanonicalEntry] = []
+    issues: list[BlogCanonicalIssue] = []
+    audit_state = _AuditState()
 
-        if _has_invalid_generated_content_ids(frontmatter):
-            issues.append(
-                _issue(
-                    "error",
-                    "invalid_generated_content_reference",
-                    "Generated content references must be positive integers.",
-                    file_path,
-                    "Use positive integer IDs in generated_content_id, content_id, or source_content_ids.",
-                )
-            )
+    for index, record in enumerate(records):
+        frontmatter = _record_frontmatter(record)
+        file_path = _record_file_path(record, index)
+        entry = _entry_from_frontmatter(file_path, frontmatter)
+        entries.append(entry)
+        _audit_entry(
+            entry,
+            expected_slug=_record_expected_slug(record, entry),
+            issues=issues,
+            state=audit_state,
+        )
 
-    _append_duplicate_issues(
-        issues,
-        canonical_paths,
-        code="duplicate_canonical_url",
-        message="Canonical URL is used by multiple markdown files.",
-        field="canonical_url",
-        remediation_hint="Keep one markdown file for this canonical URL or assign distinct canonical URLs.",
-    )
-    _append_duplicate_issues(
-        issues,
-        title_paths,
-        code="duplicate_title",
-        message="Title is used by multiple markdown files.",
-        field="title",
-        remediation_hint="Update duplicate titles so each published article has a distinct identity.",
-    )
-    _append_duplicate_issues(
-        issues,
-        {str(key): value for key, value in content_id_paths.items()},
-        code="duplicate_generated_content_reference",
-        message="Generated content ID is referenced by multiple markdown files.",
-        field=None,
-        remediation_hint="Point each article at its own generated content row, or remove duplicate drafts.",
-    )
-
-    issues = sorted(issues, key=lambda item: (item.file_path, item.severity, item.code))
-    error_count = sum(1 for issue in issues if issue.severity == "error")
-    warning_count = sum(1 for issue in issues if issue.severity == "warning")
-    return BlogCanonicalAuditReport(
-        ok=error_count == 0,
-        root_path=str(root),
-        file_count=len(paths),
-        issue_count=len(issues),
-        error_count=error_count,
-        warning_count=warning_count,
-        entries=tuple(entries),
-        issues=tuple(issues),
-    )
+    return _build_report(root_path, entries, issues, audit_state)
 
 
 def format_blog_canonical_audit_json(report: BlogCanonicalAuditReport) -> str:
@@ -328,6 +232,162 @@ def format_blog_canonical_audit_text(report: BlogCanonicalAuditReport) -> str:
             f"{issue.code}: {issue.message} Hint: {issue.remediation_hint}{related}"
         )
     return "\n".join(lines)
+
+
+def _entry_from_frontmatter(file_path: str, frontmatter: dict[str, Any]) -> BlogCanonicalEntry:
+    return BlogCanonicalEntry(
+        file_path=file_path,
+        title=_string_value(frontmatter.get("title")),
+        slug=_string_value(frontmatter.get("slug")),
+        canonical_url=_canonical_value(frontmatter),
+        generated_content_ids=tuple(_generated_content_ids(frontmatter)),
+        frontmatter=frontmatter,
+    )
+
+
+def _audit_entry(
+    entry: BlogCanonicalEntry,
+    *,
+    expected_slug: str | None,
+    issues: list[BlogCanonicalIssue],
+    state: _AuditState,
+) -> None:
+    if not entry.title:
+        issues.append(
+            _issue(
+                "error",
+                "missing_title",
+                "Blog metadata is missing a non-empty title.",
+                entry.file_path,
+                "Add a stable title for the published article.",
+                field="title",
+            )
+        )
+    else:
+        state.title_paths[_title_key(entry.title)].append(entry.file_path)
+
+    canonical_issue = _canonical_url_issue(entry.canonical_url)
+    if canonical_issue:
+        code, message, hint = canonical_issue
+        issues.append(
+            _issue(
+                "error",
+                code,
+                message,
+                entry.file_path,
+                hint,
+                field="canonical_url",
+            )
+        )
+    elif entry.canonical_url is not None:
+        state.canonical_paths[_normalize_url(entry.canonical_url)].append(entry.file_path)
+
+    canonical_slug = _canonical_slug(entry.canonical_url) if entry.canonical_url else None
+    if entry.slug and expected_slug and entry.slug != expected_slug:
+        issues.append(
+            _issue(
+                "error",
+                "slug_file_mismatch",
+                f"Frontmatter slug '{entry.slug}' does not match file slug '{expected_slug}'.",
+                entry.file_path,
+                "Rename the file or update slug so both identify the same article.",
+                field="slug",
+            )
+        )
+    compared_slug = entry.slug or expected_slug
+    if canonical_slug and compared_slug and compared_slug != canonical_slug:
+        issues.append(
+            _issue(
+                "error",
+                "slug_canonical_mismatch",
+                f"Slug '{compared_slug}' does not match canonical URL slug '{canonical_slug}'.",
+                entry.file_path,
+                "Update canonical_url, slug, or filename so the publication identity is consistent.",
+                field="canonical_url",
+            )
+        )
+    if entry.title and compared_slug and _slugify(entry.title) != compared_slug:
+        issues.append(
+            _issue(
+                "warning",
+                "title_slug_mismatch",
+                "Title does not normalize to the configured blog slug.",
+                entry.file_path,
+                "Confirm the title and slug intentionally refer to the same article.",
+                field="title",
+            )
+        )
+
+    if not entry.generated_content_ids:
+        issues.append(
+            _issue(
+                "error",
+                "missing_generated_content_reference",
+                "Blog metadata has no generated content ID reference.",
+                entry.file_path,
+                "Add generated_content_id, content_id, or source_content_ids with positive integer IDs.",
+            )
+        )
+    else:
+        for content_id in entry.generated_content_ids:
+            state.content_id_paths[content_id].append(entry.file_path)
+
+    if _has_invalid_generated_content_ids(entry.frontmatter):
+        issues.append(
+            _issue(
+                "error",
+                "invalid_generated_content_reference",
+                "Generated content references must be positive integers.",
+                entry.file_path,
+                "Use positive integer IDs in generated_content_id, content_id, or source_content_ids.",
+            )
+        )
+
+
+def _build_report(
+    root_path: str,
+    entries: list[BlogCanonicalEntry],
+    issues: list[BlogCanonicalIssue],
+    state: _AuditState,
+) -> BlogCanonicalAuditReport:
+    _append_duplicate_issues(
+        issues,
+        state.canonical_paths,
+        code="duplicate_canonical_url",
+        message="Canonical URL is used by multiple markdown files.",
+        field="canonical_url",
+        remediation_hint="Keep one markdown file for this canonical URL or assign distinct canonical URLs.",
+    )
+    _append_duplicate_issues(
+        issues,
+        state.title_paths,
+        code="duplicate_title",
+        message="Title is used by multiple markdown files.",
+        field="title",
+        remediation_hint="Update duplicate titles so each published article has a distinct identity.",
+    )
+    _append_duplicate_issues(
+        issues,
+        {str(key): value for key, value in state.content_id_paths.items()},
+        code="duplicate_generated_content_reference",
+        message="Generated content ID is referenced by multiple markdown files.",
+        field=None,
+        remediation_hint="Point each article at its own generated content row, or remove duplicate drafts.",
+    )
+
+    sorted_issues = sorted(issues, key=lambda item: (item.file_path, item.severity, item.code))
+    error_count = sum(1 for issue in sorted_issues if issue.severity == "error")
+    warning_count = sum(1 for issue in sorted_issues if issue.severity == "warning")
+    return BlogCanonicalAuditReport(
+        ok=error_count == 0,
+        root_path=root_path,
+        file_count=len(entries),
+        issue_count=len(sorted_issues),
+        error_count=error_count,
+        warning_count=warning_count,
+        entries=tuple(entries),
+        issues=tuple(sorted_issues),
+    )
 
 
 def _issue(
@@ -366,9 +426,53 @@ def _canonical_value(frontmatter: dict[str, Any]) -> str | None:
     return None
 
 
-def _valid_canonical_url(value: str) -> bool:
+def _canonical_url_issue(value: str | None) -> tuple[str, str, str] | None:
+    if value is None:
+        return (
+            "missing_canonical_url",
+            "Blog metadata is missing a canonical URL.",
+            "Add canonical_url with the final published article URL.",
+        )
     parts = urlsplit(value)
-    return parts.scheme in {"http", "https"} and bool(parts.netloc) and bool(parts.path.strip("/"))
+    if parts.scheme not in {"http", "https"} or not parts.netloc or not parts.path.strip("/"):
+        return (
+            "invalid_canonical_url",
+            "Canonical URL must be an absolute http(s) URL.",
+            "Use the final absolute https:// URL for the published article.",
+        )
+    if not _stable_host(parts.hostname):
+        return (
+            "unstable_canonical_host",
+            "Canonical URL must use a stable public host.",
+            "Use the production website host instead of a localhost, numeric, or malformed host.",
+        )
+    if _has_tracking_query_params(value):
+        return (
+            "tracking_parameter_canonical_url",
+            "Canonical URL must not include tracking query parameters.",
+            "Remove utm, click ID, ref, and other tracking parameters from canonical_url.",
+        )
+    return None
+
+
+def _valid_canonical_url(value: str) -> bool:
+    return _canonical_url_issue(value) is None
+
+
+def _stable_host(value: str | None) -> bool:
+    if value is None:
+        return False
+    host = value.strip().lower()
+    if host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+        return False
+    if "." not in host:
+        return False
+    return bool(re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", host))
+
+
+def _has_tracking_query_params(value: str) -> bool:
+    query_params = {key.casefold() for key, _value in parse_qsl(urlsplit(value).query)}
+    return any(key in TRACKING_QUERY_PARAMS or key.startswith("utm_") for key in query_params)
 
 
 def _normalize_url(value: str) -> str:
@@ -402,6 +506,40 @@ def _expected_slug(path: Path, root: Path) -> str:
             relative = path.name
         return Path(relative).with_suffix("").as_posix()
     return path.stem
+
+
+def _record_frontmatter(record: dict[str, Any]) -> dict[str, Any]:
+    for key in ("frontmatter", "metadata"):
+        value = record.get(key)
+        if isinstance(value, dict):
+            merged = dict(record)
+            merged.update(value)
+            merged.pop("frontmatter", None)
+            merged.pop("metadata", None)
+            return merged
+    return dict(record)
+
+
+def _record_file_path(record: dict[str, Any], index: int) -> str:
+    for field_name in ("file_path", "path", "filename", "slug", "id"):
+        value = record.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+    return f"<record:{index}>"
+
+
+def _record_expected_slug(record: dict[str, Any], entry: BlogCanonicalEntry) -> str | None:
+    for field_name in ("expected_slug", "file_slug"):
+        value = _string_value(record.get(field_name))
+        if value:
+            return value
+    for field_name in ("file_path", "path", "filename"):
+        value = _string_value(record.get(field_name))
+        if value:
+            return Path(value).with_suffix("").name
+    return entry.slug
 
 
 def _slugify(value: str) -> str:
