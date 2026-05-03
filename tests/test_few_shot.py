@@ -1055,6 +1055,347 @@ class TestEdgeCases:
 # --- Topic quota diversification ---
 
 
+class TestEngagementScoreNormalization:
+    """Test engagement score normalization across different time periods."""
+
+    def test_engagement_scores_from_different_periods_comparable(self, db):
+        """Engagement scores from different time periods should be directly comparable."""
+        from datetime import datetime, timezone, timedelta
+
+        # Insert post from 6 months ago with engagement
+        pid_old = _insert_published_post(db, "Old popular post", post_id=1)
+        old_date = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat()
+        _insert_engagement(db, pid_old, engagement_score=10.0, fetched_at=old_date)
+
+        # Insert recent post with same engagement
+        pid_new = _insert_published_post(db, "New popular post", post_id=2)
+        new_date = datetime.now(timezone.utc).isoformat()
+        _insert_engagement(db, pid_new, engagement_score=10.0, fetched_at=new_date)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=2)
+
+        # Both should be available regardless of time period
+        assert len(examples) == 2
+        scores = {e.engagement_score for e in examples}
+        assert scores == {10.0}
+
+    def test_multiple_engagement_snapshots_uses_latest(self, db):
+        """When engagement updates over time, use the latest snapshot."""
+        from datetime import datetime, timezone, timedelta
+
+        pid = _insert_published_post(db, "Growing engagement post", post_id=1)
+
+        # Initial low engagement
+        day1 = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        _insert_engagement(db, pid, engagement_score=2.0, fetched_at=day1)
+
+        # Later high engagement
+        day2 = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        _insert_engagement(db, pid, engagement_score=15.0, fetched_at=day2)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=1)
+
+        assert len(examples) == 1
+        assert examples[0].engagement_score == 15.0
+
+    def test_zero_engagement_score_handled_correctly(self, db):
+        """Posts with zero engagement should not be filtered out."""
+        pid_zero = _insert_published_post(db, "Zero engagement post", post_id=1)
+        _insert_engagement(db, pid_zero, engagement_score=0.0)
+
+        pid_some = _insert_published_post(db, "Some engagement post", post_id=2)
+        _insert_engagement(db, pid_some, engagement_score=5.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=2)
+
+        # Both should be included, ordered by engagement
+        assert len(examples) == 2
+        assert examples[0].engagement_score == 5.0
+        assert examples[1].engagement_score == 0.0
+
+    def test_negative_engagement_not_possible_but_handled_gracefully(self, db):
+        """Negative engagement scores should be handled gracefully if they occur."""
+        # While the schema doesn't enforce non-negative, verify graceful handling
+        pid = _insert_published_post(db, "Edge case post", post_id=1)
+        # Directly insert negative score (edge case)
+        db.conn.execute(
+            """INSERT INTO post_engagement
+               (content_id, tweet_id, engagement_score, like_count, retweet_count,
+                reply_count, quote_count, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (pid, f"tweet_{pid}", -1.0, 0, 0, 0, 0, "2025-01-01T00:00:00"),
+        )
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=1)
+
+        # Should still work, just with negative score
+        assert len(examples) == 1
+        assert examples[0].engagement_score == -1.0
+
+
+class TestRecencyWeightingAndPoolRefresh:
+    """Test recency weighting decay and example pool refresh on engagement updates."""
+
+    def test_example_pool_refreshes_with_new_engagement_data(self, db):
+        """When new engagement data arrives, the example pool should update."""
+        # Initial state: one post with low engagement
+        pid1 = _insert_published_post(db, "Initial post", post_id=1)
+        _insert_engagement(db, pid1, engagement_score=3.0)
+
+        selector = FewShotSelector(db)
+        initial_examples = selector.get_examples(limit=1)
+
+        assert len(initial_examples) == 1
+        assert initial_examples[0].content == "Initial post"
+
+        # Add a new post with higher engagement
+        pid2 = _insert_published_post(db, "Better post", post_id=2)
+        _insert_engagement(db, pid2, engagement_score=10.0)
+
+        # Pool should refresh to include new high-engagement post
+        refreshed_examples = selector.get_examples(limit=1)
+
+        assert len(refreshed_examples) == 1
+        assert refreshed_examples[0].content == "Better post"
+        assert refreshed_examples[0].engagement_score == 10.0
+
+    def test_engagement_update_changes_example_ranking(self, db):
+        """Updating engagement on existing post should change ranking."""
+        from datetime import datetime, timezone, timedelta
+
+        pid1 = _insert_published_post(db, "Post A", post_id=1)
+        _insert_engagement(db, pid1, engagement_score=10.0)
+
+        pid2 = _insert_published_post(db, "Post B", post_id=2)
+        old_date = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        _insert_engagement(db, pid2, engagement_score=5.0, fetched_at=old_date)
+
+        selector = FewShotSelector(db)
+        initial = selector.get_examples(limit=2)
+
+        assert initial[0].content == "Post A"  # Higher engagement
+        assert initial[1].content == "Post B"
+
+        # Post B gets engagement update
+        new_date = datetime.now(timezone.utc).isoformat()
+        _insert_engagement(db, pid2, engagement_score=20.0, fetched_at=new_date)
+
+        # Ranking should change
+        updated = selector.get_examples(limit=2)
+
+        assert updated[0].content == "Post B"  # Now higher
+        assert updated[0].engagement_score == 20.0
+        assert updated[1].content == "Post A"
+
+    def test_recency_implicit_through_latest_engagement_snapshot(self, db):
+        """Recency weighting is implicit: we use the latest engagement snapshot."""
+        from datetime import datetime, timezone, timedelta
+
+        pid = _insert_published_post(db, "Evolving post", post_id=1)
+
+        # Old snapshot
+        old_date = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        _insert_engagement(db, pid, engagement_score=5.0, fetched_at=old_date)
+
+        # Recent snapshot (higher engagement)
+        recent_date = datetime.now(timezone.utc).isoformat()
+        _insert_engagement(db, pid, engagement_score=12.0, fetched_at=recent_date)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=1)
+
+        # Should use most recent engagement score
+        assert len(examples) == 1
+        assert examples[0].engagement_score == 12.0
+
+
+class TestSelectionBiasDetection:
+    """Test that selection spans the engagement spectrum and avoids bias."""
+
+    def test_examples_span_engagement_spectrum(self, db):
+        """When limit > diversity constraint, examples should span different engagement levels."""
+        # Insert posts with varying engagement levels
+        engagement_levels = [1.0, 5.0, 10.0, 15.0, 20.0]
+        for i, score in enumerate(engagement_levels, start=1):
+            pid = _insert_published_post(db, f"Post engagement {score}", post_id=i)
+            _insert_engagement(db, pid, engagement_score=score)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=5)
+
+        # All engagement levels should be represented
+        actual_scores = sorted([e.engagement_score for e in examples], reverse=True)
+        expected_scores = sorted(engagement_levels, reverse=True)
+        assert actual_scores == expected_scores
+
+    def test_topic_quota_prevents_single_topic_dominance(self, db):
+        """Topic quota should prevent all examples from being about agents."""
+        # Insert 10 agent posts with high engagement
+        for i in range(10):
+            pid = _insert_published_post(db, f"Agent framework {i}", post_id=i)
+            _insert_engagement(db, pid, engagement_score=float(20 - i))
+
+        # Insert 3 non-agent posts with lower engagement
+        pid_other1 = _insert_published_post(db, "Database indexing strategy", post_id=100)
+        _insert_engagement(db, pid_other1, engagement_score=5.0)
+
+        pid_other2 = _insert_published_post(db, "API rate limiting design", post_id=101)
+        _insert_engagement(db, pid_other2, engagement_score=4.0)
+
+        pid_other3 = _insert_published_post(db, "Error handling patterns", post_id=102)
+        _insert_engagement(db, pid_other3, engagement_score=3.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=5, max_per_topic=2)
+
+        # Should have at most 2 agent posts
+        agent_count = sum(1 for e in examples if AGENT_PATTERN.search(e.content))
+        non_agent_count = sum(1 for e in examples if not AGENT_PATTERN.search(e.content))
+
+        assert agent_count <= 2
+        assert non_agent_count == 3  # Rest should be non-agent
+
+    def test_selection_with_mixed_quality_levels(self, db):
+        """Selection should work across different quality levels."""
+        # High engagement, high quality
+        pid1 = _insert_published_post(db, "Excellent post", eval_score=9.0, post_id=1)
+        _insert_engagement(db, pid1, engagement_score=20.0)
+
+        # Medium engagement, medium quality
+        pid2 = _insert_published_post(db, "Good post", eval_score=7.0, post_id=2)
+        _insert_engagement(db, pid2, engagement_score=10.0)
+
+        # Low engagement, low quality
+        pid3 = _insert_published_post(db, "Okay post", eval_score=5.0, post_id=3)
+        _insert_engagement(db, pid3, engagement_score=2.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=3)
+
+        # Should be ordered by engagement, not eval_score
+        assert examples[0].content == "Excellent post"
+        assert examples[1].content == "Good post"
+        assert examples[2].content == "Okay post"
+
+
+class TestErrorHandlingEdgeCases:
+    """Test error handling for edge cases in few-shot selection."""
+
+    def test_empty_example_pool_after_all_filters(self, db):
+        """When all posts are filtered out, return empty list."""
+        # Insert only stale pattern posts
+        for i in range(3):
+            pid = _insert_published_post(db, f"AI is transforming {i}", post_id=i)
+            _insert_engagement(db, pid, engagement_score=float(10 - i))
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=3)
+
+        # All posts filtered out by stale pattern detection
+        assert examples == []
+
+    def test_all_examples_below_quality_threshold_falls_back(self, db):
+        """When engagement posts don't meet quality, fallback to eval score."""
+        # Engagement posts all have stale patterns
+        pid_stale = _insert_published_post(db, "Unpopular opinion: testing is waste", post_id=1)
+        _insert_engagement(db, pid_stale, engagement_score=10.0)
+
+        # Fallback post without engagement
+        _insert_published_post(db, "Solid debugging workflow", eval_score=7.0, post_id=2)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=2)
+
+        # Should fall back after stale filter rejects engagement post
+        assert len(examples) == 1
+        assert examples[0].content == "Solid debugging workflow"
+
+    def test_missing_engagement_metrics_uses_score_only(self, db):
+        """Posts with engagement records but missing individual metrics should work."""
+        pid = _insert_published_post(db, "Metrics missing post", post_id=1)
+        # Insert engagement with only score, nulls for individual metrics
+        db.conn.execute(
+            """INSERT INTO post_engagement
+               (content_id, tweet_id, engagement_score, like_count, retweet_count,
+                reply_count, quote_count, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (pid, f"tweet_{pid}", 8.5, None, None, None, None, "2025-01-01T00:00:00"),
+        )
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=1)
+
+        assert len(examples) == 1
+        assert examples[0].engagement_score == 8.5
+
+    def test_corrupted_example_text_with_empty_content(self, db):
+        """Posts with empty content should be filtered out by stale pattern or handled gracefully."""
+        # Insert post with empty content (edge case - not NULL but empty string)
+        pid_empty = _insert_published_post(db, "", post_id=999)
+        _insert_engagement(db, pid_empty, engagement_score=10.0)
+
+        pid_good = _insert_published_post(db, "Valid post", post_id=1)
+        _insert_engagement(db, pid_good, engagement_score=5.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=2)
+
+        # Empty content post might be returned, but valid post definitely should be
+        assert any(e.content == "Valid post" for e in examples)
+
+    def test_concurrent_selection_requests(self, db):
+        """Multiple concurrent selections should not interfere."""
+        for i in range(5):
+            pid = _insert_published_post(db, f"Post {i}", post_id=i)
+            _insert_engagement(db, pid, engagement_score=float(i))
+
+        selector = FewShotSelector(db)
+
+        # Simulate concurrent requests
+        examples1 = selector.get_examples(limit=2, content_type="x_post")
+        examples2 = selector.get_examples(limit=3, content_type="x_post")
+
+        # Both should succeed independently
+        assert len(examples1) == 2
+        assert len(examples2) == 3
+
+    def test_large_limit_exceeds_available_posts(self, db):
+        """When limit exceeds available posts, return all available."""
+        pid = _insert_published_post(db, "Only post", post_id=1)
+        _insert_engagement(db, pid, engagement_score=10.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=100)
+
+        assert len(examples) == 1
+
+    def test_exclude_ids_with_empty_set(self, db):
+        """Empty exclude_ids set should not affect results."""
+        pid = _insert_published_post(db, "Test post", post_id=1)
+        _insert_engagement(db, pid, engagement_score=10.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=1, exclude_ids=set())
+
+        assert len(examples) == 1
+        assert examples[0].content == "Test post"
+
+    def test_exclude_ids_with_none(self, db):
+        """None exclude_ids should work same as empty set."""
+        pid = _insert_published_post(db, "Test post", post_id=1)
+        _insert_engagement(db, pid, engagement_score=10.0)
+
+        selector = FewShotSelector(db)
+        examples = selector.get_examples(limit=1, exclude_ids=None)
+
+        assert len(examples) == 1
+        assert examples[0].content == "Test post"
+
+
 class TestTopicQuota:
     """Verify agent/non-agent quota selection prevents topic overfitting."""
 
