@@ -11,6 +11,7 @@ import sqlite3
 from ingestion.claude_session_command_exit_codes import (
     build_claude_session_command_exit_codes_report,
     format_claude_session_command_exit_codes_json,
+    format_claude_session_command_exit_codes_text,
 )
 
 
@@ -87,6 +88,47 @@ def test_missing_command_text_malformed_metadata_and_exit_code_filter():
     assert report.rows[0].representative_commands == ("unknown command",)
 
 
+def test_text_formatter_includes_filters_totals_tables_and_rows():
+    rows = [
+        {
+            "_source_table": "claude_session_events",
+            "session_id": "sess-a",
+            "timestamp": "2026-05-01T10:00:00+00:00",
+            "command": "pytest",
+            "exit_code": 1,
+        },
+        {
+            "_source_table": "claude_session_events",
+            "session_id": "sess-b",
+            "timestamp": "2026-05-01T10:05:00+00:00",
+            "command": "npm test",
+            "exit_code": 2,
+        },
+    ]
+
+    report = build_claude_session_command_exit_codes_report(
+        rows,
+        days=7,
+        include_zero=True,
+        now=NOW,
+    )
+    text = format_claude_session_command_exit_codes_text(report)
+
+    assert "Claude Session Command Exit Codes" in text
+    assert "Generated: 2026-05-03T12:00:00+00:00" in text
+    assert "Filters: days=7 exit_code=None include_zero=True" in text
+    assert "Totals: rows=2 command_events=2 groups=2 sessions=2 malformed_metadata=0" in text
+    assert "Source tables: claude_session_events" in text
+    assert (
+        "- day=2026-05-01 exit_code=1 failures=1 sessions=1 commands=pytest"
+        in text
+    )
+    assert (
+        "- day=2026-05-01 exit_code=2 failures=1 sessions=1 commands=npm test"
+        in text
+    )
+
+
 def test_sqlite_cli_defaults_to_nonzero_and_can_include_zero(capsys, tmp_path):
     db_path = tmp_path / "events.db"
     conn = sqlite3.connect(db_path)
@@ -124,5 +166,17 @@ def test_sqlite_cli_defaults_to_nonzero_and_can_include_zero(capsys, tmp_path):
     )
     payload = json.loads(capsys.readouterr().out)
     assert [row["exit_code"] for row in payload["rows"]] == [0, 1]
+
+    assert (
+        claude_session_command_exit_codes_script.main(
+            ["--db", str(db_path), "--days", "7", "--format", "text"]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "Filters: days=7 exit_code=None include_zero=False" in output
+    assert "Totals: rows=2 command_events=1 groups=1 sessions=1 malformed_metadata=0" in output
+    assert "- day=2026-05-01 exit_code=1 failures=1 sessions=1 commands=pytest" in output
+
     assert claude_session_command_exit_codes_script.main(["--days", "0"]) == 2
     assert "value must be positive" in capsys.readouterr().err

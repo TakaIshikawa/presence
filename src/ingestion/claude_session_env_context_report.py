@@ -165,6 +165,48 @@ def format_claude_session_env_context_json(report: ClaudeSessionEnvContextReport
     return json.dumps(report.to_dict(), indent=2, sort_keys=True)
 
 
+def format_claude_session_env_context_text(report: ClaudeSessionEnvContextReport) -> str:
+    """Render a concise human-readable environment context report."""
+    filters = report.filters
+    totals = report.totals
+    lines = [
+        "Claude Session Environment Context",
+        f"Generated: {report.generated_at}",
+        (
+            "Filters: "
+            f"days={filters['days']} lookback_start={filters['lookback_start']} "
+            f"lookback_end={filters['lookback_end']}"
+        ),
+        (
+            "Totals: "
+            f"rows={totals['rows_scanned']} context_events={totals['context_event_count']} "
+            f"sessions={totals['session_count']} "
+            f"malformed_metadata={totals['malformed_metadata_count']}"
+        ),
+    ]
+    if report.source_tables:
+        lines.append("Source tables: " + ", ".join(report.source_tables))
+    if report.missing_tables:
+        lines.append("Missing tables: " + ", ".join(report.missing_tables))
+    if not report.rows:
+        lines.extend(["", "No Claude environment context events found."])
+        return "\n".join(lines)
+
+    lines.extend(["", "Sessions:"])
+    for row in report.rows:
+        values = "; ".join(
+            f"{key}={','.join(values)}"
+            for key, values in sorted(row.representative_values.items())
+        ) or "-"
+        lines.append(
+            f"- session={row.session_id} events={row.context_event_count} "
+            f"cwd_changed={row.cwd_changed} git_branch_changed={row.git_branch_changed} "
+            f"first_seen={row.first_seen_at or '-'} last_seen={row.last_seen_at or '-'} "
+            f"values={values}"
+        )
+    return "\n".join(lines)
+
+
 def _group_env_context_events(
     events: Iterable[_EnvContextEvent],
 ) -> list[ClaudeSessionEnvContextRow]:

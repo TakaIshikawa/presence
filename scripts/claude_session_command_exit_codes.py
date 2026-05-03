@@ -14,6 +14,7 @@ from ingestion.claude_session_command_exit_codes import (  # noqa: E402
     DEFAULT_DAYS,
     build_claude_session_command_exit_codes_report,
     format_claude_session_command_exit_codes_json,
+    format_claude_session_command_exit_codes_text,
 )
 from runner import script_context  # noqa: E402
 
@@ -45,6 +46,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Lookback window in days for Claude events (default: {DEFAULT_DAYS}).",
     )
     parser.add_argument("--exit-code", type=_int, help="Only include this exit code.")
+    parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="Output format (default: json).",
+    )
     parser.add_argument(
         "--include-zero",
         action="store_true",
@@ -81,7 +88,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(format_claude_session_command_exit_codes_json(report))
+    if args.format == "text":
+        print(format_claude_session_command_exit_codes_text(report))
+    else:
+        print(format_claude_session_command_exit_codes_json(report))
     return 0
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import re
 import sqlite3
@@ -109,7 +110,8 @@ def build_publication_replay_bundle(
             limit=engagement_limit,
         ),
     }
-    return redact_publication_replay_bundle(bundle) if redact else _json_ready(bundle)
+    bundle = _add_source_digests(_json_ready(bundle))
+    return redact_publication_replay_bundle(bundle) if redact else bundle
 
 
 def format_publication_replay_bundle_json(bundle: dict[str, Any]) -> str:
@@ -371,6 +373,44 @@ def _coerce_booleans(row: dict[str, Any]) -> dict[str, Any]:
         if key in row and row[key] is not None:
             row[key] = bool(row[key])
     return row
+
+
+def _add_source_digests(bundle: dict[str, Any]) -> dict[str, Any]:
+    digested = dict(bundle)
+    for key in ("generated_content", "publish_queue"):
+        if isinstance(digested.get(key), dict):
+            digested[key] = _with_content_digest(digested[key])
+    for key in (
+        "publication_attempts",
+        "content_variants",
+        "content_publications",
+        "recent_post_engagement",
+    ):
+        if isinstance(digested.get(key), list):
+            digested[key] = [
+                _with_content_digest(row) if isinstance(row, dict) else row
+                for row in digested[key]
+            ]
+    knowledge = digested.get("content_knowledge_links_summary")
+    if isinstance(knowledge, dict) and isinstance(knowledge.get("links"), list):
+        digested["content_knowledge_links_summary"] = {
+            **knowledge,
+            "links": [
+                _with_content_digest(row) if isinstance(row, dict) else row
+                for row in knowledge["links"]
+            ],
+        }
+    return digested
+
+
+def _with_content_digest(row: dict[str, Any]) -> dict[str, Any]:
+    payload = {key: value for key, value in row.items() if key != "content_digest"}
+    return {**row, "content_digest": _content_digest(payload)}
+
+
+def _content_digest(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _redact_value(value: Any, *, key_path: tuple[str, ...]) -> Any:

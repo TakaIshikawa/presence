@@ -76,11 +76,13 @@ class ClaudeSessionFileEditOutcomeRow:
     no_ops: int
     session_count: int
     target_count: int
+    target_extension_counts: dict[str, int]
     example_targets: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["example_targets"] = list(self.example_targets)
+        payload["target_extension_counts"] = dict(sorted(self.target_extension_counts.items()))
         return payload
 
 
@@ -228,6 +230,7 @@ def group_file_edit_outcome_events(
     for (tool_name, path_category), group in grouped.items():
         outcomes = Counter(event.outcome for event in group)
         targets = tuple(sorted({event.target_path for event in group if event.target_path}))
+        target_extension_counts = Counter(_target_extension(event.target_path) for event in group)
         rows.append(
             ClaudeSessionFileEditOutcomeRow(
                 tool_name=tool_name,
@@ -239,6 +242,7 @@ def group_file_edit_outcome_events(
                 no_ops=outcomes["no_op"],
                 session_count=len({event.session_id for event in group}),
                 target_count=len(targets),
+                target_extension_counts=dict(sorted(target_extension_counts.items())),
                 example_targets=targets[:5],
             )
         )
@@ -302,6 +306,12 @@ def format_claude_session_file_edit_outcomes_text(
             f"missing_results={row.missing_results} no_ops={row.no_ops} "
             f"sessions={row.session_count} targets={row.target_count}"
         )
+        if row.target_extension_counts:
+            extensions = ", ".join(
+                f"{extension}={count}"
+                for extension, count in sorted(row.target_extension_counts.items())
+            )
+            lines.append("  extensions: " + extensions)
         if row.example_targets:
             lines.append("  targets: " + ", ".join(row.example_targets))
     return "\n".join(lines)
@@ -440,6 +450,13 @@ def _path_category(path: str | None) -> str:
         return "[no extension]"
     suffix = Path(path).suffix.lower()
     return suffix or "[no extension]"
+
+
+def _target_extension(path: str | None) -> str:
+    if not path:
+        return "[unknown]"
+    suffix = Path(path).suffix.lower()
+    return suffix or "[none]"
 
 
 def _canonical_file_edit_tool(value: Any) -> str | None:

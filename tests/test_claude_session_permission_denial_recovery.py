@@ -243,6 +243,8 @@ def test_sqlite_and_cli_emit_deterministic_json_and_text(capsys, tmp_path):
     assert "Claude Session Permission Denial Recovery" in capsys.readouterr().out
     assert claude_session_permission_denial_recovery_script.main(["--limit", "0"]) == 2
     assert "value must be positive" in capsys.readouterr().err
+    assert claude_session_permission_denial_recovery_script.main(["--format", "yaml"]) == 2
+    assert "invalid choice" in capsys.readouterr().err
 
     text = format_claude_session_permission_denial_recovery_text(
         build_claude_session_permission_denial_recovery_report(sqlite3.connect(db_path), now=NOW)

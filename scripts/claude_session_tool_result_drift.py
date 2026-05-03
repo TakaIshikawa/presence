@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report environment context captured in Claude session events."""
+"""Report Claude sessions where tool result shapes drift over time."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from ingestion.claude_session_env_context_report import (  # noqa: E402
+from ingestion.claude_session_tool_result_drift import (  # noqa: E402
     DEFAULT_DAYS,
-    build_claude_session_env_context_report,
-    format_claude_session_env_context_json,
-    format_claude_session_env_context_text,
+    DEFAULT_LIMIT,
+    build_claude_session_tool_result_drift_report,
+    format_claude_session_tool_result_drift_json,
 )
 from runner import script_context  # noqa: E402
 
@@ -39,11 +39,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Lookback window in days for Claude events (default: {DEFAULT_DAYS}).",
     )
     parser.add_argument(
-        "--format",
-        choices=("json", "text"),
-        default="json",
-        help="Output format (default: json).",
+        "--limit",
+        type=_positive_int,
+        default=DEFAULT_LIMIT,
+        help=f"Maximum drift rows to emit (default: {DEFAULT_LIMIT}).",
     )
+    parser.add_argument("--tool", help="Only include this normalized Claude tool name.")
     return parser.parse_args(argv)
 
 
@@ -57,18 +58,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.db:
             with sqlite3.connect(args.db) as conn:
                 conn.row_factory = sqlite3.Row
-                report = build_claude_session_env_context_report(conn, days=args.days)
+                report = build_claude_session_tool_result_drift_report(
+                    conn,
+                    days=args.days,
+                    tool=args.tool,
+                    limit=args.limit,
+                )
         else:
             with script_context() as (_config, db):
-                report = build_claude_session_env_context_report(db, days=args.days)
+                report = build_claude_session_tool_result_drift_report(
+                    db,
+                    days=args.days,
+                    tool=args.tool,
+                    limit=args.limit,
+                )
     except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    if args.format == "text":
-        print(format_claude_session_env_context_text(report))
-    else:
-        print(format_claude_session_env_context_json(report))
+    print(format_claude_session_tool_result_drift_json(report))
     return 0
 
 
