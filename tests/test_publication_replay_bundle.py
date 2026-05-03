@@ -156,16 +156,23 @@ def test_content_id_lookup_builds_complete_bundle_newest_attempts_first(db):
     assert bundle["lookup"]["resolved_content_id"] == ids["content_id"]
     assert bundle["lookup"]["resolved_queue_id"] == ids["queue_id"]
     assert bundle["generated_content"]["id"] == ids["content_id"]
+    assert len(bundle["generated_content"]["content_digest"]) == 64
+    assert len(bundle["publish_queue"]["content_digest"]) == 64
     assert bundle["publish_queue"]["status"] == "failed"
     assert [attempt["id"] for attempt in bundle["publication_attempts"]] == [
         ids["new_attempt_id"],
         ids["old_attempt_id"],
     ]
+    assert all(len(attempt["content_digest"]) == 64 for attempt in bundle["publication_attempts"])
     assert bundle["content_variants"][0]["selected"] is True
+    assert len(bundle["content_variants"][0]["content_digest"]) == 64
     assert bundle["content_publications"][0]["status"] == "failed"
+    assert len(bundle["content_publications"][0]["content_digest"]) == 64
     assert bundle["content_knowledge_links_summary"]["knowledge_ids"] == [ids["knowledge_id"]]
     assert bundle["content_knowledge_links_summary"]["link_count"] == 1
+    assert len(bundle["content_knowledge_links_summary"]["links"][0]["content_digest"]) == 64
     assert bundle["recent_post_engagement"][0]["tweet_id"] == "tweet-1"
+    assert len(bundle["recent_post_engagement"][0]["content_digest"]) == 64
 
 
 def test_queue_id_lookup_filters_to_queue_attempts_and_cli_json(db, capsys, monkeypatch):
@@ -215,6 +222,46 @@ def test_redaction_strips_handles_and_urls_from_free_text_only(db):
     assert payload["content_variants"][0]["metadata"]["status"] == "draft"
     assert payload["content_knowledge_links_summary"]["links"][0]["source_url"] == (
         "https://example.com/source"
+    )
+
+
+def test_source_digests_are_stable_and_change_when_source_content_changes(db):
+    ids = _seed_bundle(db)
+
+    bundle_a = build_publication_replay_bundle(
+        db,
+        content_id=ids["content_id"],
+        generated_at=BASE_TIME,
+    )
+    bundle_b = build_publication_replay_bundle(
+        db,
+        content_id=ids["content_id"],
+        generated_at=BASE_TIME,
+    )
+
+    assert bundle_a["generated_content"]["content_digest"] == (
+        bundle_b["generated_content"]["content_digest"]
+    )
+    assert bundle_a["publication_attempts"][0]["content_digest"] == (
+        bundle_b["publication_attempts"][0]["content_digest"]
+    )
+
+    db.conn.execute(
+        "UPDATE generated_content SET content = ? WHERE id = ?",
+        ("Changed replay content", ids["content_id"]),
+    )
+    db.conn.commit()
+    changed = build_publication_replay_bundle(
+        db,
+        content_id=ids["content_id"],
+        generated_at=BASE_TIME,
+    )
+
+    assert changed["generated_content"]["content_digest"] != (
+        bundle_a["generated_content"]["content_digest"]
+    )
+    assert changed["publication_attempts"][0]["content_digest"] == (
+        bundle_a["publication_attempts"][0]["content_digest"]
     )
 
 

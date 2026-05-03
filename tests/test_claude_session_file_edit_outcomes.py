@@ -124,6 +124,8 @@ def test_pairs_file_edit_tool_uses_with_results_and_groups_by_extension():
         ("Write", ".py", 1, 1, 0),
     ]
     assert report.rows[0].example_targets == ("README.md",)
+    assert payload["rows"][0]["target_extension_counts"] == {".md": 1}
+    assert payload["rows"][1]["target_extension_counts"] == {".py": 1}
 
 
 def test_missing_results_no_ops_and_no_extension_targets_are_separate_outcomes():
@@ -151,10 +153,61 @@ def test_missing_results_no_ops_and_no_extension_targets_are_separate_outcomes()
     by_tool = {row.tool_name: row for row in report.rows}
     assert by_tool["MultiEdit"].path_category == "[no extension]"
     assert by_tool["MultiEdit"].missing_results == 1
+    assert by_tool["MultiEdit"].target_extension_counts == {"[none]": 1}
     assert by_tool["NotebookEdit"].path_category == ".ipynb"
     assert by_tool["NotebookEdit"].no_ops == 1
     assert report.totals["missing_result_count"] == 1
     assert report.totals["no_op_count"] == 1
+
+
+def test_target_extension_counts_cover_mixed_and_missing_targets():
+    rows = [
+        {
+            "session_id": "sess-meta",
+            "timestamp": "2026-05-01T10:00:00+00:00",
+            "metadata": {
+                "tool_use": {"name": "Edit", "input": {"file_path": "src/app.PY"}},
+                "tool_result": {"content": "updated"},
+            },
+        },
+        {
+            "session_id": "sess-meta",
+            "timestamp": "2026-05-01T10:01:00+00:00",
+            "metadata": {
+                "tool_use": {"name": "Edit", "input": {"file_path": "README.md"}},
+                "tool_result": {"content": "updated"},
+            },
+        },
+        {
+            "session_id": "sess-meta",
+            "timestamp": "2026-05-01T10:02:00+00:00",
+            "metadata": {
+                "tool_use": {"name": "Edit", "input": {"file_path": "Makefile"}},
+                "tool_result": {"content": "updated"},
+            },
+        },
+        {
+            "session_id": "sess-meta",
+            "timestamp": "2026-05-01T10:03:00+00:00",
+            "metadata": {
+                "tool_use": {"name": "Edit", "input": {"old_string": "a", "new_string": "b"}},
+                "tool_result": {"content": "updated"},
+            },
+        },
+    ]
+
+    report = build_claude_session_file_edit_outcomes_report(rows, now=NOW)
+    counts = {}
+    for row in report.rows:
+        counts.update(row.target_extension_counts)
+
+    assert counts == {".md": 1, ".py": 1, "[none]": 1, "[unknown]": 1}
+    payload = json.loads(format_claude_session_file_edit_outcomes_json(report))
+    serialized_counts = {}
+    for row in payload["rows"]:
+        serialized_counts.update(row["target_extension_counts"])
+        assert list(row["target_extension_counts"]) == sorted(row["target_extension_counts"])
+    assert serialized_counts == counts
 
 
 def test_row_style_metadata_with_embedded_result_is_supported():

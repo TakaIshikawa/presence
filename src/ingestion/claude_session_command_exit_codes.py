@@ -180,6 +180,47 @@ def format_claude_session_command_exit_codes_json(
     return json.dumps(report.to_dict(), indent=2, sort_keys=True)
 
 
+def format_claude_session_command_exit_codes_text(
+    report: ClaudeSessionCommandExitCodeReport,
+) -> str:
+    """Render a concise human-readable command exit-code report."""
+    filters = report.filters
+    totals = report.totals
+    lines = [
+        "Claude Session Command Exit Codes",
+        f"Generated: {report.generated_at}",
+        (
+            "Filters: "
+            f"days={filters['days']} exit_code={filters['exit_code']} "
+            f"include_zero={filters['include_zero']} "
+            f"lookback_start={filters['lookback_start']} "
+            f"lookback_end={filters['lookback_end']}"
+        ),
+        (
+            "Totals: "
+            f"rows={totals['rows_scanned']} command_events={totals['command_event_count']} "
+            f"groups={totals['exit_code_group_count']} sessions={totals['session_count']} "
+            f"malformed_metadata={totals['malformed_metadata_count']}"
+        ),
+    ]
+    if report.source_tables:
+        lines.append("Source tables: " + ", ".join(report.source_tables))
+    if report.missing_tables:
+        lines.append("Missing tables: " + ", ".join(report.missing_tables))
+    if not report.rows:
+        lines.extend(["", "No Claude command exit-code groups found."])
+        return "\n".join(lines)
+
+    lines.extend(["", "Exit Codes:"])
+    for row in report.rows:
+        commands = ", ".join(row.representative_commands) if row.representative_commands else "-"
+        lines.append(
+            f"- day={row.day} exit_code={row.exit_code} failures={row.failure_count} "
+            f"sessions={row.session_count} commands={commands}"
+        )
+    return "\n".join(lines)
+
+
 def _group_command_exit_events(
     events: Iterable[_CommandExitEvent],
 ) -> list[ClaudeSessionCommandExitCodeRow]:
