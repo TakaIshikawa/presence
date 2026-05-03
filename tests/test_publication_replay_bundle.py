@@ -1,25 +1,32 @@
-"""Tests for publication replay bundle export."""
+"""Tests for publication replay bundle v2 export."""
 
 from __future__ import annotations
 
-import json
-import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import importlib.util
+import json
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import pytest
 
-from export_publication_replay_bundle import main  # noqa: E402
-from output.publication_replay_bundle import (  # noqa: E402
+from evaluation.publication_replay_bundle import (
     REDACTED,
     build_publication_replay_bundle,
-    publication_replay_bundle_to_json,
-    redact_response_metadata,
+    format_publication_replay_bundle_json,
 )
 
 
 BASE_TIME = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+SCRIPT_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "scripts"
+    / "export_publication_replay_bundle_v2.py"
+)
+spec = importlib.util.spec_from_file_location("export_publication_replay_bundle_v2", SCRIPT_PATH)
+export_publication_replay_bundle_v2 = importlib.util.module_from_spec(spec)
+assert spec and spec.loader
+spec.loader.exec_module(export_publication_replay_bundle_v2)
 
 
 @contextmanager
@@ -27,235 +34,203 @@ def _script_context(db):
     yield None, db
 
 
-def _insert_content(db, text: str = "Replay this post") -> int:
+def _seed_bundle(db) -> dict[str, int]:
     content_id = db.insert_generated_content(
         content_type="x_post",
         source_commits=["abc123"],
         source_messages=["uuid-1"],
         source_activity_ids=["repo#1:issue"],
-        content=text,
+        content="Debug this failed post from @author: https://example.com/post",
         eval_score=8.0,
-        eval_feedback="ok",
+        eval_feedback="looks useful",
         content_format="tip",
         image_path="/tmp/replay-card.png",
-        image_prompt="A clean product card",
-        image_alt_text="A product card with text",
+        image_prompt="A product card for https://example.com",
+        image_alt_text="Card mentioning @author",
     )
     db.conn.execute(
         "UPDATE generated_content SET created_at = ? WHERE id = ?",
         ((BASE_TIME - timedelta(hours=2)).isoformat(), content_id),
     )
-    db.conn.commit()
-    return content_id
-
-
-def _queue_item(db, content_id: int, platform: str = "x") -> int:
     queue_id = db.queue_for_publishing(
         content_id,
         (BASE_TIME - timedelta(minutes=30)).isoformat(),
-        platform=platform,
+        platform="x",
     )
     db.conn.execute(
-        "UPDATE publish_queue SET created_at = ? WHERE id = ?",
-        ((BASE_TIME - timedelta(hours=1)).isoformat(), queue_id),
+        """UPDATE publish_queue
+           SET created_at = ?, status = 'failed', error = ?, error_category = 'auth'
+           WHERE id = ?""",
+        (
+            (BASE_TIME - timedelta(hours=1)).isoformat(),
+            "failed for @author at https://example.com/error",
+            queue_id,
+        ),
     )
-    db.conn.commit()
-    return queue_id
-
-
-def _seed_failed_bundle(db) -> dict[str, int]:
-    content_id = _insert_content(db)
-    queue_id = _queue_item(db, content_id)
     db.upsert_content_variant(
         content_id,
         "x",
         "post",
-        "Variant post",
-        metadata={"headers": {"Authorization": "Bearer variant-secret"}},
+        "Variant for @author https://example.com/variant",
+        metadata={"note": "review @author at https://example.com/meta", "status": "draft"},
     )
     db.select_content_variant(content_id, "x", "post")
     db.upsert_publication_failure(
         content_id,
         "x",
-        "401 invalid token",
+        "401 invalid token from @platform",
         error_category="auth",
     )
-    attempt_id = db.record_publication_attempt(
+    old_attempt_id = db.record_publication_attempt(
         queue_id,
         content_id,
         "x",
         False,
-        attempted_at=(BASE_TIME - timedelta(minutes=10)).isoformat(),
-        error="401 invalid token",
+        attempted_at=(BASE_TIME - timedelta(minutes=20)).isoformat(),
+        error="old failure",
         error_category="auth",
-        response_metadata={
-            "status_code": 401,
-            "headers": {
-                "authorization": "Bearer platform-token",
-                "x-request-id": "req-1",
-                "set-cookie": "sid=secret; Path=/",
-            },
-            "body": {
-                "message": "Authorization: Basic dXNlcjpwYXNz failed",
-                "nested": [{"refreshToken": "refresh-secret"}],
-            },
-        },
     )
-    return {"content_id": content_id, "queue_id": queue_id, "attempt_id": attempt_id}
-
-
-def test_redacts_secret_keys_and_auth_values_recursively():
-    metadata = {
-        "access_token": "abc",
-        "headers": {"Cookie": "sid=abc", "x-request-id": "req-1"},
-        "events": [
-            "POST failed with Bearer secret-token",
-            {"note": "Authorization: Basic dXNlcjpwYXNz"},
-        ],
+    new_attempt_id = db.record_publication_attempt(
+        queue_id,
+        content_id,
+        "x",
+        False,
+        attempted_at=(BASE_TIME - timedelta(minutes=5)).isoformat(),
+        error="new failure at https://example.com/fail from @platform",
+        error_category="auth",
+        response_metadata={"message": "retry @platform via https://example.com/retry", "status": 401},
+    )
+    db.conn.execute(
+        """INSERT INTO knowledge
+           (source_type, source_id, source_url, author, content, insight, approved)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "curated_article",
+            "article-1",
+            "https://example.com/source",
+            "@source",
+            "Source text",
+            "Useful detail",
+            1,
+        ),
+    )
+    knowledge_id = int(db.conn.execute("SELECT MAX(id) FROM knowledge").fetchone()[0])
+    db.insert_content_knowledge_links(content_id, [(knowledge_id, 0.9)])
+    db.conn.execute(
+        """INSERT INTO post_engagement
+           (content_id, tweet_id, like_count, retweet_count, reply_count, quote_count,
+            engagement_score, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            content_id,
+            "tweet-1",
+            4,
+            1,
+            2,
+            0,
+            7.5,
+            (BASE_TIME - timedelta(minutes=1)).isoformat(),
+        ),
+    )
+    db.conn.commit()
+    return {
+        "content_id": content_id,
+        "queue_id": queue_id,
+        "new_attempt_id": new_attempt_id,
+        "old_attempt_id": old_attempt_id,
+        "knowledge_id": knowledge_id,
     }
 
-    redacted = redact_response_metadata(metadata)
 
-    assert redacted["access_token"] == REDACTED
-    assert redacted["headers"]["Cookie"] == REDACTED
-    assert redacted["headers"]["x-request-id"] == "req-1"
-    assert redacted["events"][0] == f"POST failed with Bearer {REDACTED}"
-    assert redacted["events"][1]["note"] == f"Authorization: Basic {REDACTED}"
-
-
-def test_bundle_defaults_to_failed_attempts_only(db):
-    ids = _seed_failed_bundle(db)
-    db.record_publication_attempt(
-        ids["queue_id"],
-        ids["content_id"],
-        "x",
-        True,
-        attempted_at=(BASE_TIME - timedelta(minutes=5)).isoformat(),
-        platform_post_id="post-1",
-    )
+def test_content_id_lookup_builds_complete_bundle_newest_attempts_first(db):
+    ids = _seed_bundle(db)
 
     bundle = build_publication_replay_bundle(
         db,
+        content_id=ids["content_id"],
         generated_at=BASE_TIME,
     )
 
-    assert bundle["bundle_version"] == 1
-    assert bundle["filters"]["include_successful"] is False
-    assert len(bundle["contents"]) == 1
-    attempts = bundle["contents"][0]["attempts"]
-    assert [attempt["id"] for attempt in attempts] == [ids["attempt_id"]]
-    assert attempts[0]["success"] is False
-    assert attempts[0]["response_metadata"]["headers"]["authorization"] == REDACTED
-    assert attempts[0]["response_metadata"]["headers"]["set-cookie"] == REDACTED
+    assert bundle["artifact_type"] == "publication_replay_bundle"
+    assert bundle["bundle_version"] == 2
+    assert bundle["lookup"]["resolved_content_id"] == ids["content_id"]
+    assert bundle["lookup"]["resolved_queue_id"] == ids["queue_id"]
+    assert bundle["generated_content"]["id"] == ids["content_id"]
+    assert bundle["publish_queue"]["status"] == "failed"
+    assert [attempt["id"] for attempt in bundle["publication_attempts"]] == [
+        ids["new_attempt_id"],
+        ids["old_attempt_id"],
+    ]
+    assert bundle["content_variants"][0]["selected"] is True
+    assert bundle["content_publications"][0]["status"] == "failed"
+    assert bundle["content_knowledge_links_summary"]["knowledge_ids"] == [ids["knowledge_id"]]
+    assert bundle["content_knowledge_links_summary"]["link_count"] == 1
+    assert bundle["recent_post_engagement"][0]["tweet_id"] == "tweet-1"
 
 
-def test_include_successful_adds_success_attempts_and_platform_filter(db):
-    ids = _seed_failed_bundle(db)
-    success_id = db.record_publication_attempt(
-        ids["queue_id"],
-        ids["content_id"],
-        "x",
-        True,
-        attempted_at=(BASE_TIME - timedelta(minutes=5)).isoformat(),
-        platform_post_id="post-1",
-        response_metadata={"headers": {"Authorization": "Bearer ok"}},
-    )
+def test_queue_id_lookup_filters_to_queue_attempts_and_cli_json(db, capsys, monkeypatch):
+    ids = _seed_bundle(db)
     db.record_publication_attempt(
         None,
         ids["content_id"],
         "bluesky",
         False,
-        attempted_at=(BASE_TIME - timedelta(minutes=4)).isoformat(),
-    )
-
-    bundle = build_publication_replay_bundle(
-        db,
-        content_id=ids["content_id"],
-        platform="x",
-        include_successful=True,
-        generated_at=BASE_TIME,
-    )
-
-    attempts = bundle["contents"][0]["attempts"]
-    assert [attempt["id"] for attempt in attempts] == [ids["attempt_id"], success_id]
-    assert attempts[1]["success"] is True
-    assert attempts[1]["response_metadata"]["headers"]["Authorization"] == REDACTED
-    assert {state["platform"] for state in bundle["contents"][0]["platform_states"]} == {"x"}
-    assert {variant["platform"] for variant in bundle["contents"][0]["selected_variants"]} == {"x"}
-
-
-def test_since_filter_uses_attempted_at(db):
-    ids = _seed_failed_bundle(db)
-    recent_id = db.record_publication_attempt(
-        ids["queue_id"],
-        ids["content_id"],
-        "x",
-        False,
         attempted_at=(BASE_TIME - timedelta(minutes=2)).isoformat(),
-        error="recent",
+        error="other queue",
     )
-
-    bundle = build_publication_replay_bundle(
-        db,
-        since=(BASE_TIME - timedelta(minutes=3)).isoformat(),
-        generated_at=BASE_TIME,
-    )
-
-    assert [attempt["id"] for attempt in bundle["contents"][0]["attempts"]] == [recent_id]
-
-
-def test_json_shape_is_stable_and_includes_replay_fields(db):
-    ids = _seed_failed_bundle(db)
-
-    bundle = build_publication_replay_bundle(
-        db,
-        content_id=ids["content_id"],
-        generated_at=BASE_TIME,
-    )
-    payload = json.loads(publication_replay_bundle_to_json(bundle))
-
-    assert list(payload) == ["bundle_version", "contents", "filters", "generated_at"]
-    content_bundle = payload["contents"][0]
-    assert list(content_bundle) == [
-        "attempts",
-        "content",
-        "media",
-        "platform_states",
-        "selected_variants",
-    ]
-    assert content_bundle["content"]["source_commits"] == ["abc123"]
-    assert content_bundle["media"] == {
-        "image_alt_text": "A product card with text",
-        "image_path": "/tmp/replay-card.png",
-        "image_prompt": "A clean product card",
-    }
-    assert content_bundle["platform_states"][0]["status"] == "failed"
-    assert content_bundle["selected_variants"][0]["content"] == "Variant post"
-
-
-def test_cli_writes_json_bundle_to_output_path(db, tmp_path, monkeypatch):
-    ids = _seed_failed_bundle(db)
-    output_path = tmp_path / "bundle.json"
     monkeypatch.setattr(
-        "export_publication_replay_bundle.script_context",
+        export_publication_replay_bundle_v2,
+        "script_context",
         lambda: _script_context(db),
     )
 
-    result = main(
-        [
-            "--content-id",
-            str(ids["content_id"]),
-            "--platform",
-            "x",
-            "--output",
-            str(output_path),
-        ]
+    result = export_publication_replay_bundle_v2.main(["--queue-id", str(ids["queue_id"])])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["lookup"]["resolved_content_id"] == ids["content_id"]
+    assert payload["lookup"]["resolved_queue_id"] == ids["queue_id"]
+    assert [attempt["platform"] for attempt in payload["publication_attempts"]] == ["x", "x"]
+
+
+def test_redaction_strips_handles_and_urls_from_free_text_only(db):
+    ids = _seed_bundle(db)
+
+    bundle = build_publication_replay_bundle(
+        db,
+        content_id=ids["content_id"],
+        redact=True,
+        generated_at=BASE_TIME,
+    )
+    payload = json.loads(format_publication_replay_bundle_json(bundle))
+    serialized = json.dumps(payload, sort_keys=True)
+
+    assert "https://example.com/post" not in serialized
+    assert "@author" not in serialized
+    assert payload["generated_content"]["content"] == (
+        f"Debug this failed post from {REDACTED}: {REDACTED}"
+    )
+    assert payload["generated_content"]["id"] == ids["content_id"]
+    assert payload["publish_queue"]["status"] == "failed"
+    assert payload["content_variants"][0]["metadata"]["status"] == "draft"
+    assert payload["content_knowledge_links_summary"]["links"][0]["source_url"] == (
+        "https://example.com/source"
     )
 
-    payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert result == 0
-    assert payload["filters"]["content_id"] == ids["content_id"]
-    assert payload["filters"]["platform"] == "x"
-    assert payload["contents"][0]["attempts"][0]["response_metadata"]["headers"][
-        "authorization"
-    ] == REDACTED
+
+def test_unknown_ids_return_actionable_errors(db, capsys, monkeypatch):
+    monkeypatch.setattr(
+        export_publication_replay_bundle_v2,
+        "script_context",
+        lambda: _script_context(db),
+    )
+
+    with pytest.raises(ValueError, match="generated_content id 999 does not exist"):
+        build_publication_replay_bundle(db, content_id=999)
+    with pytest.raises(ValueError, match="publish_queue id 999 does not exist"):
+        build_publication_replay_bundle(db, queue_id=999)
+
+    result = export_publication_replay_bundle_v2.main(["--content-id", "999"])
+
+    assert result == 1
+    assert "error: generated_content id 999 does not exist" in capsys.readouterr().err
