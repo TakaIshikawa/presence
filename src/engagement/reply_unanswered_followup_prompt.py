@@ -1,4 +1,4 @@
-"""Report reply drafts that don't answer follow-up questions from the source message."""
+"""Report reply drafts where follow-up questions remain unanswered."""
 
 from __future__ import annotations
 
@@ -6,30 +6,29 @@ import json
 import re
 import sqlite3
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from typing import Any, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 
 DEFAULT_DAYS = 7
-DEFAULT_STATUS = ("pending",)
-EXCERPT_CHARS = 160
+DEFAULT_LIMIT = 100
+EXCERPT_CHARS = 180
 
-WARNING_EMPTY_SOURCE = "empty_source_text"
-WARNING_EMPTY_DRAFT = "empty_draft_text"
-WARNING_MALFORMED_SOURCE = "malformed_source_text"
-
-_QUESTION_SENTENCE_RE = re.compile(r"([^.!?\n\r]{0,260}\?+)")
+_SPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9'-]*")
+_URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+_QUESTION_SENTENCE_RE = re.compile(r"([^.!?\n\r]{0,260}\?+)")
 
 _QUESTION_OPENERS = {
+    "are",
     "can",
     "could",
+    "did",
     "do",
     "does",
-    "did",
     "how",
     "is",
-    "are",
+    "should",
     "was",
     "were",
     "what",
@@ -40,420 +39,390 @@ _QUESTION_OPENERS = {
     "why",
     "will",
     "would",
-    "should",
 }
 
-_QUESTION_PHRASES = (
-    "any advice",
-    "any idea",
-    "any recommendations",
-    "can you help",
-    "could you explain",
-    "could you share",
-    "do you recommend",
-    "how should i",
-    "please explain",
-    "please help",
-    "what should i",
-    "would love your take",
+_DIRECT_ANSWER_RE = re.compile(
+    r"\b(?:yes|no|because|the answer is|the fix is|the issue is|"
+    r"use|try|run|set|check|add|remove|change|avoid|prefer)\b",
+    re.IGNORECASE,
 )
 
-_ANSWER_PATTERNS = (
-    re.compile(r"\b(?:yes|no)\b", re.I),
-    re.compile(
-        r"\b(?:because|the answer is|the fix is|the issue is|it is|it's|"
-        r"try|use|set|run|check|ship|add|remove|change|avoid|prefer)\b",
-        re.I,
-    ),
-)
+_STOP_WORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "because",
+    "been",
+    "being",
+    "could",
+    "does",
+    "from",
+    "have",
+    "help",
+    "into",
+    "just",
+    "like",
+    "more",
+    "need",
+    "only",
+    "please",
+    "really",
+    "reply",
+    "should",
+    "that",
+    "their",
+    "there",
+    "they",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+    "your",
+}
 
 
 @dataclass(frozen=True)
-class ReplyUnansweredFollowupFinding:
-    """A reply draft that doesn't answer follow-up questions."""
+class ReplyUnansweredFollowupPromptFinding:
+    """A reply draft where one or more follow-up questions remain unanswered."""
 
     mention_id: str | None
     draft_id: int | None
     author_handle: str | None
-    platform: str
     question_count: int
     answered_question_count: int
     unanswered_question_count: int
     drafted_at: str | None
-    warnings: tuple[str, ...]
+    warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        result = asdict(self)
+        result["warnings"] = list(self.warnings)
+        return result
 
 
 @dataclass(frozen=True)
-class ReplyUnansweredFollowupReport:
-    """Aggregated unanswered follow-up report."""
+class ReplyUnansweredFollowupPromptReport:
+    """Aggregate report of reply drafts with unanswered follow-up questions."""
 
-    ok: bool
     generated_at: str
     filters: dict[str, Any]
-    scanned_count: int
-    unanswered_count: int
-    findings: tuple[ReplyUnansweredFollowupFinding, ...]
+    summary: dict[str, int]
+    findings: tuple[ReplyUnansweredFollowupPromptFinding, ...]
     missing_tables: tuple[str, ...] = ()
     missing_columns: dict[str, tuple[str, ...]] | None = None
-
-    @property
-    def blocking_issue_count(self) -> int:
-        return self.unanswered_count
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "artifact_type": "reply_unanswered_followup_prompt",
-            "ok": self.ok,
             "generated_at": self.generated_at,
             "filters": dict(self.filters),
-            "scanned_count": self.scanned_count,
-            "unanswered_count": self.unanswered_count,
-            "blocking_issue_count": self.blocking_issue_count,
+            "summary": dict(self.summary),
             "findings": [finding.to_dict() for finding in self.findings],
             "missing_tables": list(self.missing_tables),
             "missing_columns": {
                 table: list(columns)
                 for table, columns in sorted((self.missing_columns or {}).items())
-            }
-            if self.missing_columns
-            else {},
+            },
         }
 
 
-def build_reply_unanswered_followup_report(
-    db_or_conn: Any,
+def build_reply_unanswered_followup_prompt_report(
+    db: Any,
     *,
     days: int = DEFAULT_DAYS,
-    status: str | Sequence[str] | None = DEFAULT_STATUS,
-    platform: str | Sequence[str] | None = None,
+    limit: int = DEFAULT_LIMIT,
     now: datetime | None = None,
-) -> ReplyUnansweredFollowupReport:
-    """Build a report of reply drafts that don't answer follow-up questions."""
+) -> ReplyUnansweredFollowupPromptReport:
+    """Build a deterministic report of reply drafts with unanswered follow-up questions."""
+
     if days <= 0:
         raise ValueError("days must be positive")
+    if limit <= 0:
+        raise ValueError("limit must be positive")
 
     generated_at = _as_utc(now or datetime.now(timezone.utc))
-    statuses = _normalize_filter(status)
-    platforms = _normalize_filter(platform)
+    filters = {"days": days, "limit": limit}
 
-    filters = {
-        "days": days,
-        "status": list(statuses),
-        "platform": list(platforms) if platforms else None,
-    }
-
-    conn = _connection(db_or_conn)
-    schema = _schema(conn)
-
-    if "reply_queue" not in schema:
+    conn = _connection(db)
+    columns = _table_columns(conn, "reply_queue")
+    if not columns:
         return _empty_report(generated_at, filters, missing_tables=("reply_queue",))
 
-    required = {"id", "inbound_tweet_id", "inbound_text", "draft_text"}
-    missing_required = tuple(sorted(required - schema["reply_queue"]))
-    if missing_required:
+    required = ("inbound_text", "draft_text")
+    missing = tuple(column for column in required if column not in columns)
+    if missing:
         return _empty_report(
             generated_at,
             filters,
-            missing_columns={"reply_queue": missing_required},
+            missing_columns={"reply_queue": missing},
         )
 
-    rows = _reply_rows(
-        conn,
-        schema,
-        days=days,
-        statuses=statuses,
-        platforms=platforms,
-        generated_at=generated_at,
+    rows = _reply_rows(conn, columns, days=days, limit=limit, now=generated_at)
+    findings: list[ReplyUnansweredFollowupPromptFinding] = []
+    total_drafts_with_questions = 0
+
+    for row in rows:
+        finding = inspect_reply_unanswered_followup_prompt(row)
+        if finding is None:
+            continue
+        total_drafts_with_questions += 1
+        if finding.unanswered_question_count > 0:
+            findings.append(finding)
+
+    findings.sort(
+        key=lambda item: (
+            item.drafted_at or "",
+            item.draft_id or 0,
+            item.mention_id or "",
+        )
     )
 
-    all_findings = tuple(
-        _analyze_followup_coverage(row) for row in rows
-    )
+    summary = {
+        "total_drafts_with_questions": total_drafts_with_questions,
+        "drafts_with_unanswered_questions": len(findings),
+        "total_unanswered_questions": sum(f.unanswered_question_count for f in findings),
+    }
 
-    # Only include findings with unanswered questions
-    findings = tuple(
-        f for f in all_findings if f.unanswered_question_count > 0
-    )
-
-    return ReplyUnansweredFollowupReport(
-        ok=len(findings) == 0,
+    return ReplyUnansweredFollowupPromptReport(
         generated_at=generated_at.isoformat(),
         filters=filters,
-        scanned_count=len(all_findings),
-        unanswered_count=len(findings),
-        findings=tuple(sorted(findings, key=_finding_sort_key)),
+        summary=summary,
+        findings=tuple(findings),
     )
 
 
-def format_reply_unanswered_followup_json(report: ReplyUnansweredFollowupReport) -> str:
-    """Render deterministic JSON for automation."""
-    return json.dumps(report.to_dict(), indent=2, sort_keys=True)
+def inspect_reply_unanswered_followup_prompt(
+    row: dict[str, Any],
+) -> ReplyUnansweredFollowupPromptFinding | None:
+    """Inspect a reply_queue row for unanswered follow-up questions.
 
-
-def format_reply_unanswered_followup_text(report: ReplyUnansweredFollowupReport) -> str:
-    """Render human-readable text summary."""
-    lines = [
-        "Reply Unanswered Follow-up Prompt Report",
-        f"Generated: {report.generated_at}",
-        f"Filters: days={report.filters['days']}, status={report.filters['status']}",
-        "",
-        f"Scanned: {report.scanned_count}",
-        f"Unanswered: {report.unanswered_count}",
-        f"OK: {report.ok}",
-    ]
-
-    if report.missing_tables:
-        lines.extend(["", f"Missing tables: {', '.join(report.missing_tables)}"])
-
-    if report.missing_columns:
-        lines.append("")
-        lines.append("Missing columns:")
-        for table, columns in sorted(report.missing_columns.items()):
-            lines.append(f"  {table}: {', '.join(columns)}")
-
-    if report.findings:
-        lines.extend(["", "Findings:"])
-        for finding in report.findings:
-            warnings_str = f" [{', '.join(finding.warnings)}]" if finding.warnings else ""
-            lines.append(
-                f"  {finding.author_handle or 'unknown'} ({finding.mention_id}): "
-                f"{finding.unanswered_question_count}/{finding.question_count} unanswered{warnings_str}"
-            )
-
-    return "\n".join(lines)
-
-
-def _analyze_followup_coverage(row: dict[str, Any]) -> ReplyUnansweredFollowupFinding:
-    """Analyze one reply draft for follow-up question coverage."""
-    draft_id = _int_or_none(row.get("id"))
-    mention_id = _clean(row.get("inbound_tweet_id") or row.get("mention_id"))
-    author_handle = _clean(row.get("inbound_author_handle") or row.get("author_handle"))
-    platform = _clean(row.get("platform")) or "x"
-    drafted_at = _clean(row.get("detected_at") or row.get("created_at"))
-
-    inbound_text = _clean(row.get("inbound_text"))
-    draft_text = _clean(row.get("draft_text"))
+    Returns None if the row has no questions, otherwise returns a finding.
+    """
 
     warnings: list[str] = []
+    inbound_text = row.get("inbound_text")
+    draft_text = row.get("draft_text")
 
-    if not inbound_text:
-        warnings.append(WARNING_EMPTY_SOURCE)
+    if not inbound_text or not str(inbound_text).strip():
+        warnings.append("missing_source_text")
+        return None
 
-    if not draft_text:
-        warnings.append(WARNING_EMPTY_DRAFT)
+    if not draft_text or not str(draft_text).strip():
+        warnings.append("missing_draft_text")
 
-    if not inbound_text or not draft_text:
-        return ReplyUnansweredFollowupFinding(
-            mention_id=mention_id,
-            draft_id=draft_id,
-            author_handle=author_handle,
-            platform=platform,
-            question_count=0,
-            answered_question_count=0,
-            unanswered_question_count=0,
-            drafted_at=drafted_at,
-            warnings=tuple(warnings),
-        )
-
-    # Detect questions in source
-    questions = _extract_questions(inbound_text)
+    questions = extract_questions(str(inbound_text))
     if not questions:
-        return ReplyUnansweredFollowupFinding(
-            mention_id=mention_id,
-            draft_id=draft_id,
-            author_handle=author_handle,
-            platform=platform,
-            question_count=0,
-            answered_question_count=0,
-            unanswered_question_count=0,
-            drafted_at=drafted_at,
-            warnings=tuple(warnings),
-        )
+        return None
 
-    # Check answer coverage
-    answered_count = sum(
-        1 for q in questions if _draft_answers_question(q, draft_text)
-    )
-    unanswered_count = len(questions) - answered_count
+    answered_count = 0
+    draft_str = str(draft_text or "")
+    for question in questions:
+        if is_question_answered(question, draft_str):
+            answered_count += 1
 
-    return ReplyUnansweredFollowupFinding(
-        mention_id=mention_id,
-        draft_id=draft_id,
-        author_handle=author_handle,
-        platform=platform,
+    return ReplyUnansweredFollowupPromptFinding(
+        mention_id=_str_or_none(row.get("inbound_tweet_id") or row.get("mention_id")),
+        draft_id=_int_or_none(row.get("id") or row.get("draft_id") or row.get("reply_queue_id")),
+        author_handle=_str_or_none(
+            row.get("inbound_author_handle") or row.get("author_handle")
+        ),
         question_count=len(questions),
         answered_question_count=answered_count,
-        unanswered_question_count=unanswered_count,
-        drafted_at=drafted_at,
+        unanswered_question_count=len(questions) - answered_count,
+        drafted_at=_str_or_none(row.get("detected_at") or row.get("drafted_at")),
         warnings=tuple(warnings),
     )
 
 
-def _extract_questions(text: str) -> list[str]:
-    """Extract question sentences from text."""
-    if not text:
-        return []
+def extract_questions(text: str) -> list[str]:
+    """Extract all question-like sentences from text."""
 
-    normalized = " ".join(text.split())
-    sentences = _QUESTION_SENTENCE_RE.findall(normalized)
+    questions: list[str] = []
+    compact = _SPACE_RE.sub(" ", text).strip()
 
-    questions = []
-    for sentence in sentences:
-        cleaned = sentence.strip()
-        if not cleaned:
-            continue
+    # Find sentences ending with ?
+    for match in _QUESTION_SENTENCE_RE.finditer(compact):
+        question_text = match.group(1).strip()
+        if question_text:
+            questions.append(question_text)
 
-        # Check for question markers
-        lower = cleaned.lower()
-        tokens = _TOKEN_RE.findall(lower)
-
-        if not tokens:
-            continue
-
-        # Question opener at start
-        if tokens[0] in _QUESTION_OPENERS:
-            questions.append(cleaned)
-            continue
-
-        # Question phrase anywhere
-        if any(phrase in lower for phrase in _QUESTION_PHRASES):
-            questions.append(cleaned)
-            continue
+    # If no explicit ? questions, check for question opener patterns
+    if not questions:
+        normalized = _normalize(text)
+        tokens = _TOKEN_RE.findall(normalized)
+        if tokens:
+            first = tokens[0]
+            second = tokens[1] if len(tokens) > 1 else ""
+            if first in _QUESTION_OPENERS or (
+                first in {"hey", "hi", "hello"} and second in _QUESTION_OPENERS
+            ):
+                questions.append(_shorten(compact, EXCERPT_CHARS))
 
     return questions
 
 
-def _draft_answers_question(question: str, draft: str) -> bool:
-    """Check if draft contains answer signals for the question."""
-    if not question or not draft:
+def is_question_answered(question: str, draft: str) -> bool:
+    """Determine if a question is answered in the draft."""
+
+    if not draft or not draft.strip():
         return False
 
-    draft_lower = draft.lower()
+    # Check for direct answer signals
+    if _DIRECT_ANSWER_RE.search(draft):
+        return True
 
-    # Check for answer patterns
-    for pattern in _ANSWER_PATTERNS:
-        if pattern.search(draft):
-            return True
+    # Check for semantic overlap (at least 2 shared content terms)
+    question_terms = _content_terms(question)
+    draft_terms = _content_terms(draft)
+    if len(question_terms.intersection(draft_terms)) >= 2:
+        return True
 
-    # Check for keyword overlap (simple heuristic)
-    question_tokens = set(_TOKEN_RE.findall(question.lower()))
-    draft_tokens = set(_TOKEN_RE.findall(draft_lower))
+    return False
 
-    # Remove common question words
-    question_tokens -= _QUESTION_OPENERS
 
-    # Need meaningful overlap
-    if not question_tokens:
-        return False
+def format_reply_unanswered_followup_prompt_json(
+    report: ReplyUnansweredFollowupPromptReport,
+) -> str:
+    """Render deterministic JSON for automation."""
 
-    overlap = question_tokens & draft_tokens
-    coverage = len(overlap) / len(question_tokens)
+    return json.dumps(report.to_dict(), indent=2, sort_keys=True)
 
-    # Require at least 30% keyword overlap as a signal
-    return coverage >= 0.3
+
+def format_reply_unanswered_followup_prompt_text(
+    report: ReplyUnansweredFollowupPromptReport,
+) -> str:
+    """Render a compact human-readable report."""
+
+    summary = report.summary
+    lines = [
+        "Reply Unanswered Follow-up Prompt Report",
+        f"Generated: {report.generated_at}",
+        f"Filters: days={report.filters['days']} limit={report.filters['limit']}",
+        (
+            "Summary: "
+            f"drafts_with_questions={summary['total_drafts_with_questions']} "
+            f"drafts_with_unanswered={summary['drafts_with_unanswered_questions']} "
+            f"total_unanswered={summary['total_unanswered_questions']}"
+        ),
+    ]
+    if report.missing_tables:
+        lines.append("Missing tables: " + ", ".join(report.missing_tables))
+    if report.missing_columns:
+        missing = "; ".join(
+            f"{table}({', '.join(columns)})"
+            for table, columns in sorted(report.missing_columns.items())
+            if columns
+        )
+        if missing:
+            lines.append("Missing columns: " + missing)
+    if not report.findings:
+        lines.append("No unanswered follow-up questions found.")
+        return "\n".join(lines)
+
+    lines.extend(["", "Findings:"])
+    for finding in report.findings:
+        author = f"@{finding.author_handle}" if finding.author_handle else "@unknown"
+        lines.append(
+            f"- draft={finding.draft_id or '-'} mention={finding.mention_id or '-'} "
+            f"{author} questions={finding.question_count} "
+            f"answered={finding.answered_question_count} "
+            f"unanswered={finding.unanswered_question_count}"
+        )
+        if finding.warnings:
+            lines.append(f"  warnings: {', '.join(finding.warnings)}")
+    return "\n".join(lines)
 
 
 def _reply_rows(
     conn: sqlite3.Connection,
-    schema: dict[str, set[str]],
+    columns: set[str],
     *,
     days: int,
-    statuses: tuple[str, ...],
-    platforms: tuple[str, ...],
-    generated_at: datetime,
+    limit: int,
+    now: datetime,
 ) -> list[dict[str, Any]]:
-    """Load reply queue rows matching filters."""
-    columns = schema.get("reply_queue", set())
-    where: list[str] = []
+    where = ["draft_text IS NOT NULL"]
     params: list[Any] = []
-
     if "detected_at" in columns:
-        from datetime import timedelta
-
-        cutoff = generated_at - timedelta(days=days)
+        cutoff = now - timedelta(days=days)
         where.append("(detected_at IS NULL OR datetime(detected_at) >= datetime(?))")
         params.append(cutoff.isoformat())
 
-    if "status" in columns and statuses:
-        where.append(f"LOWER(COALESCE(status, 'pending')) IN ({_placeholders(statuses)})")
-        params.extend(statuses)
-
-    if "platform" in columns and platforms:
-        where.append(f"LOWER(COALESCE(platform, 'x')) IN ({_placeholders(platforms)})")
-        params.extend(platforms)
-
-    query = "SELECT * FROM reply_queue"
-    if where:
-        query += " WHERE " + " AND ".join(where)
-    query += " ORDER BY " + _order_clause(columns)
-
-    return [dict(row) for row in conn.execute(query, params).fetchall()]
+    query = "SELECT * FROM reply_queue WHERE " + " AND ".join(where)
+    query += " ORDER BY " + _order_clause(columns) + " LIMIT ?"
+    params.append(limit)
+    cursor = conn.execute(query, params)
+    names = [description[0] for description in cursor.description]
+    return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
-def _connection(db_or_conn: Any) -> sqlite3.Connection:
-    conn = db_or_conn.conn if hasattr(db_or_conn, "conn") else db_or_conn
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def _schema(conn: sqlite3.Connection) -> dict[str, set[str]]:
-    tables = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
-    ).fetchall()
-    return {str(row[0]): _table_columns(conn, str(row[0])) for row in tables}
-
-
-def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {
-        str(row[1])
-        for row in conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()
-    }
+def _order_clause(columns: set[str]) -> str:
+    parts = []
+    if "detected_at" in columns:
+        parts.append("datetime(detected_at) DESC")
+    parts.append("id DESC" if "id" in columns else "rowid DESC")
+    return ", ".join(parts)
 
 
 def _empty_report(
     generated_at: datetime,
     filters: dict[str, Any],
     *,
-    missing_tables: Sequence[str] = (),
-    missing_columns: dict[str, Sequence[str]] | None = None,
-) -> ReplyUnansweredFollowupReport:
-    return ReplyUnansweredFollowupReport(
-        ok=True,
+    missing_tables: tuple[str, ...] = (),
+    missing_columns: dict[str, tuple[str, ...]] | None = None,
+) -> ReplyUnansweredFollowupPromptReport:
+    return ReplyUnansweredFollowupPromptReport(
         generated_at=generated_at.isoformat(),
-        filters=dict(filters),
-        scanned_count=0,
-        unanswered_count=0,
+        filters=filters,
+        summary={
+            "total_drafts_with_questions": 0,
+            "drafts_with_unanswered_questions": 0,
+            "total_unanswered_questions": 0,
+        },
         findings=(),
-        missing_tables=tuple(missing_tables),
-        missing_columns={
-            table: tuple(columns) for table, columns in (missing_columns or {}).items()
-        }
-        or None,
+        missing_tables=missing_tables,
+        missing_columns=missing_columns,
     )
 
 
-def _normalize_filter(value: str | Sequence[str] | None) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        values = (value,)
-    else:
-        values = tuple(value)
-    return tuple(sorted({item.strip().casefold() for item in values if item and item.strip()}))
+def _connection(db: Any) -> sqlite3.Connection:
+    return db.conn if hasattr(db, "conn") else db
 
 
-def _clean(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    try:
+        return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return set()
+
+
+def _content_terms(text: str) -> set[str]:
+    return {
+        token
+        for token in _TOKEN_RE.findall(_normalize(text))
+        if len(token) >= 4 and token not in _STOP_WORDS
+    }
+
+
+def _normalize(text: str) -> str:
+    value = _URL_RE.sub(" ", text.lower())
+    value = re.sub(r"@\w+", " ", value)
+    value = _SPACE_RE.sub(" ", value)
+    return value.strip()
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _int_or_none(value: Any) -> int | None:
-    if value is None or value == "":
+    if value is None:
         return None
     try:
         return int(value)
@@ -461,35 +430,14 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _finding_sort_key(finding: ReplyUnansweredFollowupFinding) -> tuple[Any, ...]:
-    return (
-        -finding.unanswered_question_count,
-        -finding.question_count,
-        finding.platform,
-        finding.mention_id or "",
-    )
+def _str_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
-def _order_clause(columns: set[str]) -> str:
-    parts = []
-    if "detected_at" in columns:
-        parts.append("datetime(detected_at) DESC")
-    if "id" in columns:
-        parts.append("id DESC")
-    else:
-        parts.append("rowid DESC")
-    return ", ".join(parts)
-
-
-def _placeholders(values: Sequence[Any]) -> str:
-    return ",".join("?" for _ in values)
-
-
-def _quote_identifier(value: str) -> str:
-    return '"' + value.replace('"', '""') + '"'
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+def _shorten(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."

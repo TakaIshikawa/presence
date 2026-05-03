@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report reply drafts that don't answer follow-up questions from the source message."""
+"""Report reply drafts where follow-up questions remain unanswered."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from engagement.reply_unanswered_followup_prompt import (  # noqa: E402
     DEFAULT_DAYS,
-    build_reply_unanswered_followup_report,
-    format_reply_unanswered_followup_json,
-    format_reply_unanswered_followup_text,
+    build_reply_unanswered_followup_prompt_report,
+    format_reply_unanswered_followup_prompt_json,
+    format_reply_unanswered_followup_prompt_text,
 )
 from runner import script_context  # noqa: E402
 
@@ -39,16 +39,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Lookback window in days for reply drafts (default: {DEFAULT_DAYS}).",
     )
     parser.add_argument(
-        "--status",
-        action="append",
-        default=None,
-        help="Reply status to include (default: pending). Can be repeated.",
-    )
-    parser.add_argument(
-        "--platform",
-        action="append",
-        default=None,
-        help="Platform to filter by (e.g., x, bluesky). Can be repeated.",
+        "--limit",
+        type=_positive_int,
+        default=100,
+        help="Maximum number of reply drafts to analyze (default: 100).",
     )
     parser.add_argument(
         "--format",
@@ -69,28 +63,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.db:
             with sqlite3.connect(args.db) as conn:
                 conn.row_factory = sqlite3.Row
-                report = build_reply_unanswered_followup_report(
+                report = build_reply_unanswered_followup_prompt_report(
                     conn,
                     days=args.days,
-                    status=args.status or ("pending",),
-                    platform=args.platform,
+                    limit=args.limit,
                 )
         else:
             with script_context() as (_config, db):
-                report = build_reply_unanswered_followup_report(
+                report = build_reply_unanswered_followup_prompt_report(
                     db,
                     days=args.days,
-                    status=args.status or ("pending",),
-                    platform=args.platform,
+                    limit=args.limit,
                 )
     except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     if args.format == "text":
-        print(format_reply_unanswered_followup_text(report))
+        print(format_reply_unanswered_followup_prompt_text(report))
     else:
-        print(format_reply_unanswered_followup_json(report))
+        print(format_reply_unanswered_followup_prompt_json(report))
     return 0
 
 
