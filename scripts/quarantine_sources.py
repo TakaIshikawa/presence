@@ -21,6 +21,13 @@ from runner import script_context  # noqa: E402
 SOURCE_TYPES = ["x_account", "blog", "newsletter"]
 
 
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
+
+
 def _source_label(source: dict) -> str:
     identifier = source.get("identifier") or ""
     return f"@{identifier}" if source.get("source_type") == "x_account" else identifier
@@ -91,16 +98,38 @@ def _print_mutation(report: dict, noun: str) -> None:
         )
 
 
+def _risk_score(source: dict) -> int:
+    if source.get("classification") == "quarantine":
+        return 100
+    if source.get("classification") == "watch":
+        return 50
+    return 0
+
+
+def _json_report(report: dict) -> dict:
+    return {
+        **report,
+        "sources": [
+            {
+                **source,
+                "risk": source.get("classification", "unknown"),
+                "score": _risk_score(source),
+            }
+            for source in report.get("sources", [])
+        ],
+    }
+
+
 def _add_report_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--failure-threshold",
-        type=int,
+        type=_non_negative_int,
         default=3,
         help="Consecutive failures required for quarantine (default: 3).",
     )
     parser.add_argument(
         "--stale-days",
-        type=int,
+        type=_non_negative_int,
         default=30,
         help="Days since last successful fetch required for quarantine (default: 30).",
     )
@@ -162,9 +191,9 @@ def _targets_from_args(args: argparse.Namespace) -> list[str]:
     return [*(str(item) for item in args.source_ids), *args.identifiers, *args.targets]
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     command = args.command or "report"
 
     with script_context() as (_config, db):
@@ -206,7 +235,7 @@ def main() -> None:
             )
 
     if args.json:
-        print(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(_json_report(report), indent=2, sort_keys=True))
     elif command in {"report", "pause"}:
         _print_report(report)
     elif command == "resume":
