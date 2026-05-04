@@ -26,12 +26,12 @@ class ContentMixPlanner:
 
     def __init__(
         self,
-        db,
+        db: Any,
         thread_token_threshold: int = 1400,
         recent_limit: int = 6,
         visual_token_threshold: int = 1800,
         blog_token_threshold: int = 3600,
-    ):
+    ) -> None:
         self.db = db
         self.thread_token_threshold = thread_token_threshold
         self.recent_limit = recent_limit

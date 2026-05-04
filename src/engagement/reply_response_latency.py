@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 from statistics import mean, median
-from typing import Any
+from typing import Any, cast
 
 
 DEFAULT_DAYS = 14
@@ -154,7 +154,8 @@ def format_reply_response_latency_text(report: dict[str, Any]) -> str:
 
 
 def _connection(db_or_conn: Any) -> sqlite3.Connection:
-    return db_or_conn.conn if hasattr(db_or_conn, "conn") else db_or_conn
+    conn = db_or_conn.conn if hasattr(db_or_conn, "conn") else db_or_conn
+    return cast(sqlite3.Connection, conn)
 
 
 def _looks_like_rows(value: Any) -> bool:
