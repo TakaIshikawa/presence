@@ -4,16 +4,131 @@ This directory contains the comprehensive test suite for the Presence content sy
 
 ## Table of Contents
 
-1. [Test Organization](#test-organization)
-2. [Fixture Library](#fixture-library)
-3. [Custom Assertion Helpers](#custom-assertion-helpers)
-4. [Mock Helpers](#mock-helpers)
-5. [Parametrized Testing](#parametrized-testing)
-6. [Test Performance Guidelines](#test-performance-guidelines)
-7. [TDD Workflow](#tdd-workflow)
-8. [Test Debugging Tips](#test-debugging-tips)
-9. [Test Coverage Standards](#test-coverage-standards)
-10. [Quick Reference Guide](#quick-reference-guide)
+1. [Helper Discovery](#helper-discovery)
+2. [Test Organization](#test-organization)
+3. [Fixture Library](#fixture-library)
+4. [Custom Assertion Helpers](#custom-assertion-helpers)
+5. [Mock Helpers](#mock-helpers)
+6. [Parametrized Testing](#parametrized-testing)
+7. [Test Performance Guidelines](#test-performance-guidelines)
+8. [TDD Workflow](#tdd-workflow)
+9. [Test Debugging Tips](#test-debugging-tips)
+10. [Test Coverage Standards](#test-coverage-standards)
+11. [Quick Reference Guide](#quick-reference-guide)
+
+## Helper Discovery
+
+The `tests.helpers` package provides easy-to-discover test utilities and assertions. All helpers are properly organized and documented for quick access.
+
+### Importing Helpers
+
+Import helpers directly from the package for convenience:
+
+```python
+from tests.helpers import assert_valid_post, assert_valid_thread
+
+def test_content_generation():
+    result = generate_content()
+    assert_valid_post(result.content, char_limit=280)
+```
+
+Or import from specific modules:
+
+```python
+from tests.helpers.assertions import (
+    assert_valid_candidate,
+    assert_evaluation_scores_valid,
+    compose_assertions
+)
+```
+
+### Package Structure
+
+The helpers package is organized by category:
+
+- **`tests.helpers.assertions`** - Domain-specific assertion helpers with detailed error messages
+- **`tests.helpers.__version__`** - Version information for the helpers library
+
+### Available Helpers Quick Reference
+
+All assertion helpers:
+- `assert_valid_post()` - Validate post content
+- `assert_valid_thread()` - Validate thread structure
+- `assert_valid_candidate()` - Validate candidate objects
+- `assert_engagement_above_threshold()` - Validate engagement metrics
+- `assert_dedup_detected()` - Validate deduplication
+- `assert_evaluation_scores_valid()` - Validate model scores
+- `assert_database_state()` - Validate database state
+- `assert_no_data_leakage()` - Validate train/test split
+- `compose_assertions()` - Combine multiple assertions
+
+### Discovering Available Helpers
+
+Use the helper inventory script to see all available helpers:
+
+```bash
+# List all helpers with descriptions
+python scripts/list_test_helpers.py
+
+# Generate JSON output
+python scripts/list_test_helpers.py --format json
+
+# Generate markdown documentation
+python scripts/list_test_helpers.py --format markdown
+
+# Find unused helpers
+python scripts/list_test_helpers.py --detect-orphans
+```
+
+Example output:
+
+```
+Test Helpers Inventory
+================================================================================
+Total Helpers: 9
+Version: 1.0.0
+
+Module: assertions
+--------------------------------------------------------------------------------
+Path: tests/helpers/assertions.py
+Functions: 9
+
+  assert_valid_post()
+    Assert that a post is valid for publication.
+    Parameters: content: str, char_limit: int, banned_words: Optional[list[str]], ...
+    Used in: test_content_generation.py, test_synthesis.py, test_publish.py
+
+  assert_valid_thread()
+    Assert that a thread is valid.
+    Parameters: tweets: list[str], min_tweets: int, max_tweets: int, ...
+    Used in: test_thread_generation.py, test_synthesis.py
+```
+
+### Helper Documentation
+
+View package documentation programmatically:
+
+```python
+import tests.helpers
+
+# View package docstring with usage examples
+print(tests.helpers.__doc__)
+
+# List all available helpers
+print(tests.helpers.__all__)
+
+# View specific helper documentation
+from tests.helpers import assert_valid_post
+print(assert_valid_post.__doc__)
+```
+
+### Checking Helper Version
+
+```python
+from tests.helpers import __version__
+
+print(f"Test helpers version: {__version__}")
+```
 
 ## Test Organization
 
