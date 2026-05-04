@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -121,14 +122,16 @@ class ContentMixPlanner:
             if not callable(method):
                 return []
             try:
-                rows = method(limit=self.recent_limit)
+                method_rows: Any = method(limit=self.recent_limit)
             except Exception:
                 return []
-            return [
-                row.get("content_type")
-                for row in rows
-                if isinstance(row, dict) and row.get("content_type") in self.CONTENT_TYPES
-            ]
+            result = []
+            for row in method_rows:
+                if isinstance(row, dict):
+                    content_type = row.get("content_type")
+                    if isinstance(content_type, str) and content_type in self.CONTENT_TYPES:
+                        result.append(content_type)
+            return result
 
         placeholders = ",".join("?" for _ in self.CONTENT_TYPES)
         try:
@@ -141,18 +144,19 @@ class ContentMixPlanner:
                     LIMIT ?""",
                 (*self.CONTENT_TYPES, self.recent_limit),
             )
-            rows = cursor.fetchall()
+            cursor_rows: Any = cursor.fetchall()
         except Exception:
             return []
 
-        def _content_type(row: object) -> str | None:
+        def _content_type(row: Any) -> str | None:
+            value: Any = None
             if isinstance(row, dict):
                 value = row.get("content_type")
             else:
                 try:
-                    value = row["content_type"]  # type: ignore[index]
-                except Exception:
+                    value = row["content_type"]
+                except (KeyError, TypeError, IndexError, AttributeError):
                     value = None
-            return value if value in self.CONTENT_TYPES else None
+            return value if isinstance(value, str) and value in self.CONTENT_TYPES else None
 
-        return [content_type for row in rows if (content_type := _content_type(row))]
+        return [content_type for row in cursor_rows if (content_type := _content_type(row))]
