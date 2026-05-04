@@ -27,6 +27,7 @@ class SessionInsightQuote:
     quote: str
     confidence: float
     reason: str
+    category: str
     session_id: str
     session_path: str | None
     project_path: str | None
@@ -44,6 +45,7 @@ class _QuoteSignal:
     quote: str
     confidence: float
     reason: str
+    category: str
 
 
 def extract_session_insight_quotes_from_text(
@@ -120,12 +122,12 @@ def format_session_insight_quotes_csv(
     quotes: list[SessionInsightQuote],
 ) -> str:
     if not quotes:
-        return "quote_id,quote,confidence,reason,session_id,timestamp\n"
+        return "quote_id,quote,confidence,reason,category,session_id,timestamp\n"
 
     output = io.StringIO()
     writer = csv.DictWriter(
         output,
-        fieldnames=["quote_id", "quote", "confidence", "reason", "session_id", "timestamp"],
+        fieldnames=["quote_id", "quote", "confidence", "reason", "category", "session_id", "timestamp"],
         extrasaction="ignore",
     )
     writer.writeheader()
@@ -149,6 +151,123 @@ def format_session_insight_quotes_text(
             f"{_shorten(quote.session_id, 16):16s}  "
             f"{_shorten(quote.quote, 80)}"
         )
+    return "\n".join(lines)
+
+
+def format_session_insight_quotes_markdown(
+    quotes: list[SessionInsightQuote],
+) -> str:
+    """Format quotes as markdown with grouping by category."""
+    if not quotes:
+        return "# Session Insight Quotes\n\nNo insight quotes found.\n"
+
+    lines = ["# Session Insight Quotes\n"]
+
+    # Group by category
+    by_category: dict[str, list[SessionInsightQuote]] = {}
+    for quote in quotes:
+        category = quote.category or "general"
+        if category not in by_category:
+            by_category[category] = []
+        by_category[category].append(quote)
+
+    # Output each category
+    for category in sorted(by_category.keys()):
+        category_quotes = by_category[category]
+        lines.append(f"## {category.title()} Insights ({len(category_quotes)})\n")
+
+        for quote in category_quotes:
+            lines.append(f"### Quote (confidence: {quote.confidence:.2f})\n")
+            lines.append(f"> {quote.quote}\n")
+            lines.append(f"- **Session**: `{quote.session_id}`")
+            if quote.timestamp:
+                lines.append(f"- **Time**: {quote.timestamp}")
+            if quote.project_path:
+                lines.append(f"- **Project**: `{quote.project_path}`")
+            lines.append(f"- **Reason**: {quote.reason}\n")
+
+    return "\n".join(lines)
+
+
+def format_session_insight_quotes_html(
+    quotes: list[SessionInsightQuote],
+) -> str:
+    """Format quotes as HTML with styling and category grouping."""
+    if not quotes:
+        return """<!DOCTYPE html>
+<html>
+<head>
+    <title>Session Insight Quotes</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; }
+        h1 { color: #333; border-bottom: 3px solid #4CAF50; padding-bottom: 10px; }
+        h2 { color: #555; margin-top: 30px; }
+        .quote { background: #f9f9f9; border-left: 4px solid #4CAF50; padding: 15px; margin: 15px 0; }
+        .quote-text { font-size: 1.1em; font-style: italic; margin-bottom: 10px; }
+        .metadata { font-size: 0.9em; color: #666; }
+        .confidence { font-weight: bold; color: #4CAF50; }
+        .category { display: inline-block; background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.8em; }
+    </style>
+</head>
+<body>
+    <h1>Session Insight Quotes</h1>
+    <p>No insight quotes found.</p>
+</body>
+</html>"""
+
+    # Group by category
+    by_category: dict[str, list[SessionInsightQuote]] = {}
+    for quote in quotes:
+        category = quote.category or "general"
+        if category not in by_category:
+            by_category[category] = []
+        by_category[category].append(quote)
+
+    lines = ["""<!DOCTYPE html>
+<html>
+<head>
+    <title>Session Insight Quotes</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; }
+        h1 { color: #333; border-bottom: 3px solid #4CAF50; padding-bottom: 10px; }
+        h2 { color: #555; margin-top: 30px; border-bottom: 2px solid #ddd; padding-bottom: 8px; }
+        .quote { background: #f9f9f9; border-left: 4px solid #4CAF50; padding: 15px; margin: 15px 0; }
+        .quote-text { font-size: 1.1em; font-style: italic; margin-bottom: 10px; }
+        .metadata { font-size: 0.9em; color: #666; }
+        .metadata-item { margin: 3px 0; }
+        .confidence { font-weight: bold; color: #4CAF50; }
+        .category { display: inline-block; background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.8em; }
+        .technical { border-left-color: #2196F3; }
+        .workflow { border-left-color: #FF9800; }
+        .debugging { border-left-color: #F44336; }
+        code { background: #eee; padding: 2px 5px; border-radius: 3px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h1>Session Insight Quotes</h1>"""]
+
+    for category in sorted(by_category.keys()):
+        category_quotes = by_category[category]
+        lines.append(f"    <h2>{category.title()} Insights ({len(category_quotes)})</h2>")
+
+        for quote in category_quotes:
+            css_class = f"quote {category}"
+            lines.append(f'    <div class="{css_class}">')
+            lines.append(f'        <div class="quote-text">"{quote.quote}"</div>')
+            lines.append(f'        <div class="metadata">')
+            lines.append(f'            <div class="metadata-item"><span class="confidence">Confidence: {quote.confidence:.2f}</span> &bull; <span class="category">{quote.category}</span></div>')
+            lines.append(f'            <div class="metadata-item">Session: <code>{_shorten(quote.session_id, 50)}</code></div>')
+            if quote.timestamp:
+                lines.append(f'            <div class="metadata-item">Time: {quote.timestamp}</div>')
+            if quote.project_path:
+                lines.append(f'            <div class="metadata-item">Project: <code>{quote.project_path}</code></div>')
+            lines.append(f'            <div class="metadata-item">Reason: {quote.reason}</div>')
+            lines.append(f'        </div>')
+            lines.append(f'    </div>')
+
+    lines.append("""</body>
+</html>""")
+
     return "\n".join(lines)
 
 
@@ -264,6 +383,7 @@ def _score_quote_candidate(sentence: str) -> _QuoteSignal | None:
     lowered = sentence.lower()
     confidence = 0.5
     reasons: list[str] = []
+    category_scores = {"technical": 0.0, "workflow": 0.0, "debugging": 0.0}
 
     # First-person technical observation markers (strongest signal)
     first_person_patterns = [
@@ -278,20 +398,49 @@ def _score_quote_candidate(sentence: str) -> _QuoteSignal | None:
             confidence += boost
             reasons.append(reason)
 
-    # Technical substance indicators
+    # Technical substance indicators with category hints
     technical_patterns = [
-        (r'\b(pattern|approach|strategy|technique|method|implementation|architecture|logic)\b', 0.12, "technical concept"),
-        (r'\b(performance|optimization|efficiency|bottleneck|latency)\b', 0.12, "performance insight"),
-        (r'\b(bug|issue|problem|error|failure|edge case|flaw|flawed)\b', 0.10, "problem identification"),
-        (r'\b(solution|fix|workaround|alternative)\b', 0.10, "solution insight"),
-        (r'\b(trade-?off|balance|compromise)\b', 0.14, "tradeoff awareness"),
-        (r'\b(cache|caching|database|query|api|algorithm)\b', 0.08, "technical domain"),
+        (r'\b(pattern|approach|strategy|technique|method|implementation|architecture|logic)\b', 0.12, "technical concept", "technical"),
+        (r'\b(performance|optimization|efficiency|bottleneck|latency)\b', 0.12, "performance insight", "technical"),
+        (r'\b(bug|issue|problem|error|failure|edge case|flaw|flawed)\b', 0.10, "problem identification", "debugging"),
+        (r'\b(solution|fix|workaround|alternative)\b', 0.10, "solution insight", "debugging"),
+        (r'\b(trade-?off|balance|compromise)\b', 0.14, "tradeoff awareness", "technical"),
+        (r'\b(cache|caching|database|query|api|algorithm)\b', 0.08, "technical domain", "technical"),
     ]
 
-    for pattern, boost, reason in technical_patterns:
+    for pattern, boost, reason, cat in technical_patterns:
         if re.search(pattern, lowered):
             confidence += boost
             reasons.append(reason)
+            category_scores[cat] += boost
+
+    # Workflow indicators
+    workflow_patterns = [
+        (r'\b(workflow|process|habit|routine|practice)\b', 0.12, "workflow insight", "workflow"),
+        (r'\b(always|never|usually|typically|generally)\s+(use|do|check|verify|test)', 0.10, "habit pattern", "workflow"),
+        (r'\b(before|after|when)\s+\w+ing', 0.08, "sequential practice", "workflow"),
+        (r'\b(prefer|recommend|suggest|advise)\b', 0.09, "recommendation", "workflow"),
+    ]
+
+    for pattern, boost, reason, cat in workflow_patterns:
+        if re.search(pattern, lowered):
+            confidence += boost
+            reasons.append(reason)
+            category_scores[cat] += boost
+
+    # Debugging indicators
+    debugging_patterns = [
+        (r'\b(debug|debugging|troubleshoot|investigate|diagnose)\b', 0.15, "debugging activity", "debugging"),
+        (r'\b(trace|stack trace|backtrace|log|logging)\b', 0.10, "debugging technique", "debugging"),
+        (r'\b(breakpoint|step through|inspect|examine)\b', 0.12, "debugging method", "debugging"),
+        (r'\b(root cause|underlying|actual issue|real problem)\b', 0.13, "root cause analysis", "debugging"),
+    ]
+
+    for pattern, boost, reason, cat in debugging_patterns:
+        if re.search(pattern, lowered):
+            confidence += boost
+            reasons.append(reason)
+            category_scores[cat] += boost
 
     # Deductions for generic/low-value content
     if re.search(r'\b(just|simply|basically|essentially)\b', lowered):
@@ -316,10 +465,15 @@ def _score_quote_candidate(sentence: str) -> _QuoteSignal | None:
     if confidence <= 0 or not reasons:
         return None
 
+    # Determine primary category based on scores
+    primary_category = max(category_scores.items(), key=lambda x: x[1])
+    category = primary_category[0] if primary_category[1] > 0 else "general"
+
     return _QuoteSignal(
         quote=sentence,
         confidence=confidence,
         reason=", ".join(reasons),
+        category=category,
     )
 
 
@@ -344,6 +498,7 @@ def _candidate_from_signal(
         "quote": quote,
         "confidence": signal.confidence,
         "reason": signal.reason,
+        "category": signal.category,
         "session_id": session_id,
         "session_path": session_path,
         "project_path": project_path,
@@ -357,6 +512,7 @@ def _candidate_from_signal(
         quote=quote,
         confidence=signal.confidence,
         reason=signal.reason,
+        category=signal.category,
         session_id=session_id,
         session_path=session_path,
         project_path=project_path,
