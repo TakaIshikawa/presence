@@ -68,12 +68,13 @@ def build_reply_response_latency_report(
         _build_item(row, columns, threshold_minutes=threshold_minutes)
         for row in raw_rows
     ]
-    items = [
-        item
-        for item in items
-        if item["detected_at"]
-        and cutoff <= _parse_datetime(item["detected_at"]) <= generated_at  # type: ignore[operator]
-    ]
+    filtered_items = []
+    for item in items:
+        if item["detected_at"]:
+            detected = _parse_datetime(item["detected_at"])
+            if detected is not None and cutoff <= detected <= generated_at:
+                filtered_items.append(item)
+    items = filtered_items
     items.sort(key=_item_sort_key)
     flagged = [item for item in items if item["flagged"]]
     flagged.sort(key=_flagged_sort_key)
