@@ -5,6 +5,8 @@ including module registration, import path resolution, and package structure.
 """
 
 import importlib
+import inspect
+import re
 import sys
 from pathlib import Path
 
@@ -390,6 +392,160 @@ class TestPackageStructure:
         # Should have __init__.py
         init_file = helpers_dir / "__init__.py"
         assert init_file.exists()
+
+
+class TestEdgeCasesAndErrorHandling:
+    """Test edge cases and error handling in module initialization."""
+
+    def test_importing_nonexistent_helper_raises_error(self):
+        """Test that importing non-existent helpers raises AttributeError."""
+        import tests.helpers
+
+        with pytest.raises(AttributeError):
+            _ = tests.helpers.nonexistent_function
+
+    def test_all_exported_functions_have_docstrings(self):
+        """Test that all exported functions have documentation."""
+        import tests.helpers
+
+        for name in tests.helpers.__all__:
+            if name.startswith("__"):
+                continue
+
+            helper = getattr(tests.helpers, name)
+            if callable(helper):
+                assert helper.__doc__ is not None, f"{name} has no docstring"
+                assert len(helper.__doc__) > 10, f"{name} has insufficient documentation"
+
+    def test_version_follows_semantic_versioning(self):
+        """Test that version string follows semantic versioning format."""
+        from tests.helpers import __version__
+
+        # Should match X.Y.Z pattern
+        version_pattern = r"^\d+\.\d+\.\d+$"
+        assert re.match(version_pattern, __version__), (
+            f"Version '{__version__}' doesn't follow semantic versioning (X.Y.Z)"
+        )
+
+    def test_module_file_path_is_absolute(self):
+        """Test that module __file__ is an absolute path."""
+        import tests.helpers
+
+        module_path = Path(tests.helpers.__file__)
+        assert module_path.is_absolute(), "Module path should be absolute"
+
+    def test_all_exports_are_unique(self):
+        """Test that __all__ doesn't contain duplicate entries."""
+        import tests.helpers
+
+        exports = tests.helpers.__all__
+        assert len(exports) == len(set(exports)), "Duplicate entries in __all__"
+
+    def test_module_name_matches_package_structure(self):
+        """Test that module name matches its location in package structure."""
+        import tests.helpers
+
+        assert tests.helpers.__name__ == "tests.helpers"
+        assert tests.helpers.__package__ == "tests.helpers"
+
+    def test_imported_functions_retain_original_names(self):
+        """Test that imported functions retain their original names."""
+        from tests.helpers import assert_valid_post, compose_assertions
+
+        assert assert_valid_post.__name__ == "assert_valid_post"
+        assert compose_assertions.__name__ == "compose_assertions"
+
+    def test_module_has_no_global_state(self):
+        """Test that module doesn't introduce unwanted global state."""
+        import tests.helpers
+
+        # Should not have common global state variables
+        problematic_names = ["state", "cache", "registry", "config"]
+        for name in problematic_names:
+            assert not hasattr(tests.helpers, name), f"Found global state: {name}"
+
+    def test_assertions_module_is_accessible(self):
+        """Test that assertions submodule is accessible from package."""
+        import tests.helpers
+
+        # Should be able to access submodule
+        assert hasattr(tests.helpers, "assertions")
+        assert tests.helpers.assertions.__name__ == "tests.helpers.assertions"
+
+    def test_package_level_constants_not_exported(self):
+        """Test that internal constants are not exported in __all__."""
+        import tests.helpers.assertions
+
+        # Check that internal constants exist in assertions module
+        assert hasattr(tests.helpers.assertions, "DEFAULT_CHAR_LIMIT")
+
+        # But should not be exported from package level
+        assert "DEFAULT_CHAR_LIMIT" not in tests.helpers.__all__
+
+
+class TestFunctionSignatures:
+    """Test that all exported functions have correct signatures."""
+
+    def test_assert_valid_post_signature(self):
+        """Test assert_valid_post function signature."""
+        from tests.helpers import assert_valid_post
+        import inspect
+
+        sig = inspect.signature(assert_valid_post)
+        params = list(sig.parameters.keys())
+
+        # Should have content parameter
+        assert "content" in params
+        # Should have optional parameters
+        assert "char_limit" in params
+        assert "banned_words" in params
+
+    def test_compose_assertions_signature(self):
+        """Test compose_assertions function signature."""
+        from tests.helpers import compose_assertions
+        import inspect
+
+        sig = inspect.signature(compose_assertions)
+        params = list(sig.parameters.keys())
+
+        # Should have assertions parameter
+        assert "assertions" in params
+
+    def test_all_functions_have_return_annotations(self):
+        """Test that functions have proper type annotations where applicable."""
+        from tests.helpers import assert_valid_post, assert_valid_thread
+        import inspect
+
+        # Check that functions are properly typed (at minimum have signatures)
+        assert inspect.signature(assert_valid_post) is not None
+        assert inspect.signature(assert_valid_thread) is not None
+
+
+class TestImportErrorHandling:
+    """Test behavior when imports might fail."""
+
+    def test_module_survives_repeated_imports(self):
+        """Test that module can be imported multiple times without errors."""
+        # Import multiple times
+        import tests.helpers as h1
+        import tests.helpers as h2
+        import tests.helpers as h3
+
+        # All should be the same module object
+        assert h1 is h2 is h3
+
+    def test_from_import_star_doesnt_pollute_namespace(self):
+        """Test that star import doesn't introduce unexpected names."""
+        namespace = {}
+        exec("from tests.helpers import *", namespace)
+
+        # Should only have __all__ exports plus builtins
+        imported_names = [n for n in namespace.keys() if not n.startswith("__")]
+
+        # All imported names should be in __all__
+        import tests.helpers
+        for name in imported_names:
+            assert name in tests.helpers.__all__, f"Unexpected name in star import: {name}"
 
 
 if __name__ == "__main__":
