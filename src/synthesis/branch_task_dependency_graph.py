@@ -75,7 +75,8 @@ def _dependencies_for(task: object) -> list[str]:
     if isinstance(value, str):
         return [value]
     if isinstance(value, list):
-        return [str(item) for item in value if item]
+        dependencies = [str(item) for item in value if item]
+        return list(dict.fromkeys(dependencies))
     return []
 
 

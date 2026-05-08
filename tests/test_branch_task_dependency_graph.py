@@ -56,6 +56,43 @@ def test_self_dependencies_are_reported():
     assert report["has_violations"]
 
 
+def test_duplicate_dependencies_emit_one_edge_and_preserve_order():
+    report = analyze_branch_task_dependency_graph(
+        [
+            {"title": "A"},
+            {"title": "B"},
+            {"title": "C", "dependsOn": ["A", "A", "B", "A"]},
+        ]
+    )
+
+    assert report["edge_count"] == 2
+    assert report["edges"] == [{"from": "A", "to": "C"}, {"from": "B", "to": "C"}]
+    assert report["dependent_task_count"] == 1
+    assert report["dependency_depths"] == {"A": 0, "B": 0, "C": 1}
+    assert report["max_dependency_depth"] == 1
+
+
+def test_duplicate_missing_dependencies_report_one_example_per_task_dependency_pair():
+    report = analyze_branch_task_dependency_graph(
+        [
+            {"title": "A"},
+            {"title": "B", "dependsOn": ["A", "Missing", "Missing", "A"]},
+        ]
+    )
+
+    assert report["edge_count"] == 2
+    assert report["missing_dependencies"] == [{"task": "B", "dependency": "Missing"}]
+    assert report["edges"] == [{"from": "A", "to": "B"}, {"from": "Missing", "to": "B"}]
+    assert report["dependency_depths"] == {"A": 0, "B": 1}
+
+
+def test_string_depends_on_values_continue_to_work():
+    report = analyze_branch_task_dependency_graph([{"title": "A"}, {"title": "B", "dependsOn": "A"}])
+
+    assert report["edges"] == [{"from": "A", "to": "B"}]
+    assert report["dependency_depths"] == {"A": 0, "B": 1}
+
+
 def test_simple_cycle_is_detected():
     report = analyze_branch_task_dependency_graph(
         [{"title": "A", "dependsOn": ["B"]}, {"title": "B", "dependsOn": ["A"]}]

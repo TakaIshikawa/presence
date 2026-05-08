@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -49,8 +50,10 @@ def analyze_pack_verification_summary(tasks: object) -> dict[str, Any]:
 
 
 def _pack_key(task: dict[str, Any]) -> str:
-    for key in ("execution_pack", "pack", "pack_key"):
+    for key in ("execution_pack", "executionPack", "pack", "pack_key"):
         value = task.get(key)
+        if isinstance(value, Mapping) and key in {"execution_pack", "executionPack"}:
+            value = value.get("key")
         if value:
             return str(value)
     return "unpackaged"

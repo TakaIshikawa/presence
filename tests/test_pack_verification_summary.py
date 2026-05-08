@@ -69,3 +69,70 @@ def test_pack_summary_uses_unpacked_fallback_for_tasks_without_metadata():
     assert set(report["packs"]) == {"unpackaged"}
     assert report["packs"]["unpackaged"]["task_count"] == 2
     assert report["packs"]["unpackaged"]["missing"] == 2
+
+
+def test_uses_nested_execution_pack_key_metadata():
+    report = analyze_pack_verification_summary(
+        [
+            {
+                "task_id": "a",
+                "execution_pack": {"key": "exports-reports"},
+                "verification_command": "pytest a",
+                "verification_status": "passed",
+            },
+            {
+                "task_id": "b",
+                "executionPack": {"key": "workflow-hygiene"},
+                "verification_command": "pytest b",
+                "verification_status": "failed",
+            },
+        ]
+    )
+
+    assert report["packs"]["exports-reports"]["passed"] == 1
+    assert report["packs"]["workflow-hygiene"]["failed"] == 1
+
+
+def test_nested_pack_metadata_without_key_falls_back_to_unpackaged():
+    report = analyze_pack_verification_summary(
+        [
+            {
+                "task_id": "a",
+                "execution_pack": {"id": "exports-reports"},
+                "verification_command": "pytest a",
+                "verification_status": "passed",
+            },
+            {
+                "task_id": "b",
+                "executionPack": {"name": "workflow-hygiene"},
+                "verification_command": "pytest b",
+                "verification_status": "failed",
+            },
+        ]
+    )
+
+    assert set(report["packs"]) == {"unpackaged"}
+    assert report["packs"]["unpackaged"]["passed"] == 1
+    assert report["packs"]["unpackaged"]["failed"] == 1
+
+
+def test_plain_pack_key_and_pack_string_metadata_still_group_normally():
+    report = analyze_pack_verification_summary(
+        [
+            {
+                "task_id": "a",
+                "pack": "pack-a",
+                "verification_command": "pytest a",
+                "verification_status": "passed",
+            },
+            {
+                "task_id": "b",
+                "pack_key": "pack-b",
+                "verification_command": "pytest b",
+                "verification_status": "passed",
+            },
+        ]
+    )
+
+    assert report["packs"]["pack-a"]["passed"] == 1
+    assert report["packs"]["pack-b"]["passed"] == 1
