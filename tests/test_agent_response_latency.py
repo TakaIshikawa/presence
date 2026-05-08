@@ -117,6 +117,28 @@ def test_slow_and_missing_examples_are_capped_at_five():
     assert len(result.examples) == 5
 
 
+def test_duplicate_turn_indexes_raise_value_error():
+    with pytest.raises(ValueError, match="strictly increasing turn_index"):
+        analyze_agent_response_latency(
+            [
+                _event(ROLE_USER, 0, 0),
+                _event(ROLE_ASSISTANT, 0, 0),
+            ]
+        )
+
+
+def test_same_timestamp_events_are_valid_when_turn_indexes_increase():
+    result = analyze_agent_response_latency(
+        [
+            _event(ROLE_USER, 0, 0),
+            _event(ROLE_ASSISTANT, 0, 1),
+        ]
+    )
+
+    assert result.metrics.responded_prompts == 1
+    assert result.metrics.average_latency_seconds == 0.0
+
+
 @pytest.mark.parametrize(
     ("events", "message"),
     [

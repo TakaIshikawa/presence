@@ -41,6 +41,7 @@ class SessionVerificationOutcomeMetrics:
     verification_attempts: int
     passing_verifications: int
     failing_verifications: int
+    unverified_implementations: int
     unresolved_failures: int
     recovered_failures: int
     average_turns_to_first_verification: float
@@ -64,7 +65,7 @@ def analyze_session_verification_outcome(
         index for index, event in enumerate(events) if event.event_type == EVENT_IMPLEMENTATION
     ]
     if not implementation_indexes:
-        metrics = SessionVerificationOutcomeMetrics(0, 0, 0, 0, 0, 0, 0.0)
+        metrics = SessionVerificationOutcomeMetrics(0, 0, 0, 0, 0, 0, 0, 0.0)
         return SessionVerificationOutcomeAnalysis(
             metrics,
             (),
@@ -110,6 +111,9 @@ def analyze_session_verification_outcome(
     unresolved = sum(
         1 for outcome in outcomes if outcome.final_verification_status == STATUS_FAIL
     )
+    unverified = sum(
+        1 for outcome in outcomes if outcome.final_verification_status is None
+    )
     recovered = sum(
         1
         for outcome in outcomes
@@ -126,6 +130,7 @@ def analyze_session_verification_outcome(
         verification_attempts=len(attempts),
         passing_verifications=passing,
         failing_verifications=failing,
+        unverified_implementations=unverified,
         unresolved_failures=unresolved,
         recovered_failures=recovered,
         average_turns_to_first_verification=round(sum(latencies) / len(latencies), 2)
@@ -170,7 +175,7 @@ def _validate_events(events: Sequence[SessionVerificationEvent]) -> None:
 def _classify_quality(metrics: SessionVerificationOutcomeMetrics) -> str:
     if metrics.implemented_changes == 0:
         return QUALITY_NO_IMPLEMENTATION
-    if metrics.unresolved_failures:
+    if metrics.unresolved_failures or metrics.unverified_implementations:
         return QUALITY_UNRESOLVED
     if metrics.recovered_failures:
         return QUALITY_RECOVERED
@@ -187,6 +192,8 @@ def _generate_insights(
     ]
     if metrics.recovered_failures:
         insights.append(f"{metrics.recovered_failures} failed verification paths recovered later.")
+    if metrics.unverified_implementations:
+        insights.append(f"{metrics.unverified_implementations} implementation clusters had no verification attempt.")
     if metrics.unresolved_failures:
         insights.append(f"{metrics.unresolved_failures} implementation clusters ended with unresolved failures.")
     return tuple(insights)

@@ -101,6 +101,20 @@ def test_drift_rate_rounds_for_mixed_stable_and_changed_transitions():
     assert result.metrics.drift_rate == 0.667
 
 
+def test_drift_rate_half_boundary_is_reported_exactly():
+    result = analyze_session_prompt_drift(
+        [
+            PromptInstructionRecord("a", "one", 0),
+            PromptInstructionRecord("a", "one", 1),
+            PromptInstructionRecord("b", "one", 2),
+        ]
+    )
+
+    assert result.metrics.comparable_transitions == 2
+    assert result.metrics.drift_events == 1
+    assert result.metrics.drift_rate == 0.5
+
+
 def test_examples_are_capped_at_five_entries():
     records = [
         PromptInstructionRecord(f"topic-{index}", f"instruction-{index}", index)

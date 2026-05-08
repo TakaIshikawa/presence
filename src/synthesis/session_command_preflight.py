@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Sequence
 
 
-READ_COMMANDS = ("cat", "sed", "nl", "head", "tail", "less", "rg", "grep", "find", "ls", "git status", "git diff")
-TEST_COMMANDS = ("pytest", "uv run pytest", "npm test", "pnpm test", "yarn test", "go test", "cargo test")
+READ_COMMANDS = ("cat", "sed", "nl", "head", "tail", "less", "rg", "grep", "find", "ls", "git status", "git diff", "git show")
+TEST_COMMANDS = ("pytest", "python -m pytest", "uv run pytest", "uv run python -m pytest", "npm test", "pnpm test", "yarn test", "go test", "cargo test")
 EDIT_EVENTS = {"edit", "write", "patch"}
 
 
@@ -83,8 +83,24 @@ def _validate_events(events: Sequence[SessionCommandEvent]) -> None:
 
 
 def _is_preflight_command(command: str) -> bool:
+    return any(
+        _matches_preflight_segment(segment)
+        for segment in _command_segments(command)
+    )
+
+
+def _command_segments(command: str) -> tuple[str, ...]:
     normalized = " ".join(command.lower().split())
-    return any(normalized.startswith(prefix) or prefix in normalized for prefix in (*READ_COMMANDS, *TEST_COMMANDS))
+    for operator in ("&&", "||", ";"):
+        normalized = normalized.replace(operator, "\n")
+    return tuple(segment.strip() for segment in normalized.splitlines() if segment.strip())
+
+
+def _matches_preflight_segment(segment: str) -> bool:
+    return any(
+        segment == prefix or segment.startswith(f"{prefix} ")
+        for prefix in (*READ_COMMANDS, *TEST_COMMANDS)
+    )
 
 
 def _classify_quality(preflight_count: int, pre_edit_count: int, first_edit_turn: int | None) -> str:

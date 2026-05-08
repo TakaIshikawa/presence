@@ -34,6 +34,7 @@ class FinalAnswerAlignmentMetrics:
     omitted_completed_count: int
     overstated_failed_count: int
     unmentioned_deferred_count: int
+    mentioned_skipped_count: int
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ def analyze_session_final_answer_alignment(
 
     _validate_outcomes(outcomes)
     if not outcomes:
-        metrics = FinalAnswerAlignmentMetrics(0, 0, 0, 0, 0, 0, 0)
+        metrics = FinalAnswerAlignmentMetrics(0, 0, 0, 0, 0, 0, 0, 0)
         return FinalAnswerAlignmentAnalysis(
             metrics, QUALITY_NO_ITEMS, ("No tracked work outcomes supplied.",)
         )
@@ -58,6 +59,7 @@ def analyze_session_final_answer_alignment(
     completed = [item for item in outcomes if item.status == STATUS_COMPLETED]
     failed = [item for item in outcomes if item.status == STATUS_FAILED]
     deferred = [item for item in outcomes if item.status == STATUS_DEFERRED]
+    skipped = [item for item in outcomes if item.status == STATUS_SKIPPED]
     metrics = FinalAnswerAlignmentMetrics(
         completed_items=len(completed),
         failed_items=len(failed),
@@ -66,6 +68,7 @@ def analyze_session_final_answer_alignment(
         omitted_completed_count=sum(1 for item in completed if not item.mentioned_in_final),
         overstated_failed_count=sum(1 for item in failed if item.mentioned_in_final),
         unmentioned_deferred_count=sum(1 for item in deferred if not item.mentioned_in_final),
+        mentioned_skipped_count=sum(1 for item in skipped if item.mentioned_in_final),
     )
     return FinalAnswerAlignmentAnalysis(
         metrics,
@@ -100,11 +103,16 @@ def _classify_quality(metrics: FinalAnswerAlignmentMetrics) -> str:
         metrics.completed_items == 0
         and metrics.failed_items == 0
         and metrics.deferred_items == 0
+        and metrics.mentioned_skipped_count == 0
     ):
         return QUALITY_NO_ITEMS
     if metrics.overstated_failed_count:
         return QUALITY_MISLEADING
-    if metrics.omitted_completed_count or metrics.unmentioned_deferred_count:
+    if (
+        metrics.omitted_completed_count
+        or metrics.unmentioned_deferred_count
+        or metrics.mentioned_skipped_count
+    ):
         return QUALITY_INCOMPLETE
     return QUALITY_ALIGNED
 
@@ -114,10 +122,13 @@ def _generate_insights(metrics: FinalAnswerAlignmentMetrics) -> tuple[str, ...]:
         metrics.completed_items == 0
         and metrics.failed_items == 0
         and metrics.deferred_items == 0
+        and metrics.mentioned_skipped_count == 0
     ):
         return ("No tracked work outcomes supplied.",)
     if metrics.overstated_failed_count:
         return (f"{metrics.overstated_failed_count} failed items were mentioned as final work.",)
+    if metrics.mentioned_skipped_count:
+        return (f"{metrics.mentioned_skipped_count} skipped items were mentioned in the final answer.",)
     if metrics.omitted_completed_count:
         return (f"{metrics.omitted_completed_count} completed items were omitted from the final answer.",)
     if metrics.unmentioned_deferred_count:

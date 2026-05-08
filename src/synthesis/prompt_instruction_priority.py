@@ -56,11 +56,15 @@ def analyze_prompt_instruction_priority(records: Sequence[PromptInstructionRecor
 def _validate_records(records: Sequence[PromptInstructionRecord]) -> None:
     if not isinstance(records, (list, tuple)):
         raise ValueError("records must be a list or tuple")
+    seen_prompt_ids: set[str] = set()
     for index, record in enumerate(records):
         if not isinstance(record, PromptInstructionRecord):
             raise ValueError(f"records[{index}] must be a PromptInstructionRecord")
         if not isinstance(record.prompt_id, str) or not record.prompt_id.strip():
             raise ValueError("prompt_id must be a non-empty string")
+        if record.prompt_id in seen_prompt_ids:
+            raise ValueError(f"duplicate prompt ids are not supported: {record.prompt_id}")
+        seen_prompt_ids.add(record.prompt_id)
         if not isinstance(record.text, str):
             raise ValueError("text must be a string")
 

@@ -132,8 +132,8 @@ def _validate_events(events: Sequence[SessionEvent]) -> None:
             or event.turn_index < 0
         ):
             raise ValueError("turn_index must be a non-negative integer")
-        if event.turn_index < last_turn:
-            raise ValueError("events must be ordered by turn_index")
+        if event.turn_index <= last_turn:
+            raise ValueError("events must have strictly increasing turn_index values")
         if last_timestamp is not None and event.timestamp < last_timestamp:
             raise ValueError("events must be ordered by timestamp")
         if event.content is not None and not isinstance(event.content, str):
