@@ -72,6 +72,47 @@ def test_single_preflight_command_is_thin():
     assert report.preflight_quality == "thin"
 
 
+def test_chained_read_command_counts_as_preflight():
+    report = analyze_session_command_preflight(
+        [
+            SessionCommandEvent(0, "command", "cd repo && rg pattern src"),
+            SessionCommandEvent(1, "edit", file_path="src/app.py"),
+        ]
+    )
+
+    assert report.preflight_commands == 1
+    assert report.preflight_quality == "thin"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest tests/test_app.py",
+        "uv run python -m pytest tests/test_app.py",
+    ],
+)
+def test_python_module_pytest_counts_as_test_preflight(command):
+    report = analyze_session_command_preflight(
+        [
+            SessionCommandEvent(0, "command", command),
+            SessionCommandEvent(1, "edit", file_path="src/app.py"),
+        ]
+    )
+
+    assert report.preflight_commands == 1
+
+
+def test_git_show_counts_as_read_preflight():
+    report = analyze_session_command_preflight(
+        [
+            SessionCommandEvent(0, "command", "git show --stat"),
+            SessionCommandEvent(1, "edit", file_path="src/app.py"),
+        ]
+    )
+
+    assert report.preflight_commands == 1
+
+
 def test_invalid_records_raise_value_error():
     with pytest.raises(ValueError, match="SessionCommandEvent"):
         analyze_session_command_preflight([{"turn_index": 0}])

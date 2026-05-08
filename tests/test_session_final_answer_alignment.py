@@ -19,6 +19,7 @@ def test_empty_input_returns_no_items():
     result = analyze_session_final_answer_alignment([])
 
     assert result.metrics.completed_items == 0
+    assert result.metrics.mentioned_skipped_count == 0
     assert result.alignment_quality == "no_items"
     assert "No tracked" in result.insights[0]
 
@@ -33,6 +34,16 @@ def test_perfect_alignment():
 
     assert result.metrics.mentioned_completed_count == 1
     assert result.alignment_quality == QUALITY_ALIGNED
+
+
+def test_mentioned_skipped_work_is_incomplete():
+    result = analyze_session_final_answer_alignment(
+        [FinalAnswerOutcome("a", "optional", STATUS_SKIPPED, True)]
+    )
+
+    assert result.metrics.mentioned_skipped_count == 1
+    assert result.alignment_quality == QUALITY_INCOMPLETE
+    assert "skipped" in result.insights[0]
 
 
 def test_omitted_completed_work_is_incomplete():
@@ -69,10 +80,12 @@ def test_mixed_outcomes_prioritize_misleading_insight():
             FinalAnswerOutcome("a", "module", STATUS_COMPLETED, False),
             FinalAnswerOutcome("b", "test", STATUS_FAILED, True),
             FinalAnswerOutcome("c", "followup", STATUS_DEFERRED, False),
+            FinalAnswerOutcome("d", "optional", STATUS_SKIPPED, True),
         ]
     )
 
     assert result.alignment_quality == QUALITY_MISLEADING
+    assert result.metrics.mentioned_skipped_count == 1
     assert "failed" in result.insights[0]
 
 

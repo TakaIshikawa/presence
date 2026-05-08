@@ -54,3 +54,25 @@ def test_case_normalization_is_deterministic():
 def test_invalid_prompt_records_raise_value_error():
     with pytest.raises(ValueError, match="PromptInstructionRecord"):
         analyze_prompt_instruction_priority([{"prompt_id": "p1"}])
+
+
+def test_duplicate_prompt_ids_raise_value_error():
+    with pytest.raises(ValueError, match="duplicate prompt ids"):
+        analyze_prompt_instruction_priority(
+            [
+                PromptInstructionRecord("p1", "Must test."),
+                PromptInstructionRecord("p1", "Prefer review."),
+            ]
+        )
+
+
+def test_distinct_prompt_ids_can_repeat_text():
+    report = analyze_prompt_instruction_priority(
+        [
+            PromptInstructionRecord("p1", "Must test."),
+            PromptInstructionRecord("p2", "Must test."),
+        ]
+    )
+
+    assert report.total_prompts == 2
+    assert report.hard_constraints == 2

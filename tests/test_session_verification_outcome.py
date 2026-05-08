@@ -18,6 +18,7 @@ def test_empty_input_returns_stable_zero_state():
     result = analyze_session_verification_outcome([])
 
     assert result.metrics.implemented_changes == 0
+    assert result.metrics.unverified_implementations == 0
     assert result.metrics.average_turns_to_first_verification == 0.0
     assert "No implementation" in result.insights[0]
 
@@ -32,6 +33,7 @@ def test_passing_verification_counts_verified_change():
 
     assert result.metrics.implemented_changes == 1
     assert result.metrics.passing_verifications == 1
+    assert result.metrics.unverified_implementations == 0
     assert result.metrics.unresolved_failures == 0
     assert result.metrics.average_turns_to_first_verification == 1.0
 
@@ -58,7 +60,26 @@ def test_implementation_without_verification_is_unresolved():
 
     assert result.metrics.implemented_changes == 1
     assert result.metrics.verification_attempts == 0
+    assert result.metrics.unverified_implementations == 1
     assert result.quality == QUALITY_UNRESOLVED
+    assert any("1 implementation clusters had no verification attempt" in insight for insight in result.insights)
+
+
+def test_mixed_clusters_with_pass_and_missing_verification_are_unresolved():
+    result = analyze_session_verification_outcome(
+        [
+            SessionVerificationEvent(0, EVENT_IMPLEMENTATION),
+            SessionVerificationEvent(1, EVENT_VERIFICATION, "pytest a", STATUS_PASS),
+            SessionVerificationEvent(3, EVENT_IMPLEMENTATION),
+        ]
+    )
+
+    assert result.metrics.implemented_changes == 2
+    assert result.metrics.passing_verifications == 1
+    assert result.metrics.unverified_implementations == 1
+    assert result.metrics.unresolved_failures == 0
+    assert result.quality == QUALITY_UNRESOLVED
+    assert any("1 implementation clusters had no verification attempt" in insight for insight in result.insights)
 
 
 def test_multiple_implementation_clusters_round_latency():

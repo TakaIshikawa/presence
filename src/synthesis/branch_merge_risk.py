@@ -61,11 +61,15 @@ def analyze_branch_merge_risk(records: Sequence[BranchTouchRecord]) -> BranchMer
 def _validate_records(records: Sequence[BranchTouchRecord]) -> None:
     if not isinstance(records, (list, tuple)):
         raise ValueError("records must be a list or tuple")
+    seen_branch_names: set[str] = set()
     for index, record in enumerate(records):
         if not isinstance(record, BranchTouchRecord):
             raise ValueError(f"records[{index}] must be a BranchTouchRecord")
         if not isinstance(record.branch_name, str) or not record.branch_name.strip():
             raise ValueError("branch_name must be a non-empty string")
+        if record.branch_name in seen_branch_names:
+            raise ValueError(f"duplicate branch_name values are not supported: {record.branch_name}")
+        seen_branch_names.add(record.branch_name)
         for attr in ("changed_files", "test_files"):
             value = getattr(record, attr)
             if not isinstance(value, tuple) or any(not isinstance(path, str) or not path.strip() for path in value):

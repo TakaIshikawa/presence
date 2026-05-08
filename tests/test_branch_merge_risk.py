@@ -5,6 +5,10 @@ import pytest
 from synthesis.branch_merge_risk import BranchTouchRecord, analyze_branch_merge_risk
 
 
+class NotBranchTouchRecord:
+    branch_name = "a"
+
+
 def test_independent_branches_with_companion_tests_are_low_risk():
     report = analyze_branch_merge_risk(
         [
@@ -56,6 +60,16 @@ def test_hotspot_sorting_is_deterministic_for_equal_counts():
 
 def test_invalid_records_raise_value_error():
     with pytest.raises(ValueError, match="BranchTouchRecord"):
-        analyze_branch_merge_risk([{"branch_name": "a"}])
+        analyze_branch_merge_risk([NotBranchTouchRecord()])
     with pytest.raises(ValueError, match="changed_files"):
-        analyze_branch_merge_risk([BranchTouchRecord("a", ["src/foo.py"])])  # type: ignore[arg-type]
+        analyze_branch_merge_risk([BranchTouchRecord("a", ["src/foo.py"])])
+
+
+def test_duplicate_branch_names_raise_value_error():
+    with pytest.raises(ValueError, match="duplicate branch_name"):
+        analyze_branch_merge_risk(
+            [
+                BranchTouchRecord("feature/a", ("src/foo.py",), ("tests/test_foo.py",)),
+                BranchTouchRecord("feature/a", ("src/bar.py",), ("tests/test_bar.py",)),
+            ]
+        )
