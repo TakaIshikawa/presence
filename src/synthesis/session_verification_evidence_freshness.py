@@ -6,7 +6,11 @@ from typing import Any, Mapping
 
 
 def analyze_session_verification_evidence_freshness(records: object) -> dict[str, Any]:
+<<<<<<< HEAD
     """Measure whether verification commands were run after the last edit they claim to validate."""
+=======
+    """Measure whether verification commands were run after the last edit."""
+>>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
     if records is None:
         records = []
     if not isinstance(records, list):
@@ -17,6 +21,7 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
     stale_verifications = 0
     missing_verifications = 0
     examples: list[dict[str, Any]] = []
+<<<<<<< HEAD
     seen_artifacts: set[str] = set()
 
     for record in records:
@@ -43,6 +48,24 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
 
         if status and status not in ("pass", "fail", "skip"):
             raise ValueError("status must be one of: pass, fail, skip, or empty")
+=======
+
+    seen_artifacts: set[str] = set()
+
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            raise ValueError(f"record at index {index} is not a dictionary")
+
+        artifact_id = _artifact_id(record, index)
+        if artifact_id in seen_artifacts:
+            raise ValueError(f"duplicate artifact_id '{artifact_id}' at index {index}")
+        seen_artifacts.add(artifact_id)
+
+        last_edit_turn = _turn(record.get("last_edit_turn"), index, "last_edit_turn")
+        verification_turn = record.get("verification_turn")
+        command = _string(record.get("command"))
+        status = _status(record.get("status"), index)
+>>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 
         total_artifacts += 1
 
@@ -50,6 +73,7 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
             missing_verifications += 1
             continue
 
+<<<<<<< HEAD
         if not isinstance(verification_turn, int) or isinstance(verification_turn, bool):
             raise ValueError("verification_turn must be an integer")
         if verification_turn < 0:
@@ -69,6 +93,17 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
             )
 
     freshness_rate = _percentage(fresh_verifications, total_artifacts, decimals=3)
+=======
+        verification_turn_value = _turn(verification_turn, index, "verification_turn")
+
+        if verification_turn_value < last_edit_turn:
+            stale_verifications += 1
+            _example(examples, artifact_id, last_edit_turn, verification_turn_value, command, status)
+        else:
+            fresh_verifications += 1
+
+    freshness_rate = _freshness_rate(fresh_verifications, total_artifacts)
+>>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 
     return {
         "total_artifacts": total_artifacts,
@@ -80,6 +115,36 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
     }
 
 
+<<<<<<< HEAD
+=======
+def _artifact_id(record: Mapping[str, Any], index: int) -> str:
+    value = record.get("artifact_id")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"record at index {index} has invalid artifact_id")
+    return value.strip()
+
+
+def _turn(value: object, index: int, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"record at index {index} has invalid {field_name}")
+    if value < 0:
+        raise ValueError(f"record at index {index} has negative {field_name}")
+    return value
+
+
+def _status(value: object, index: int) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"record at index {index} has invalid status")
+    normalized = value.strip().lower()
+    valid_statuses = {"passed", "failed", "skipped", ""}
+    if normalized and normalized not in valid_statuses:
+        raise ValueError(f"record at index {index} has invalid status '{value}'")
+    return normalized
+
+
+>>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -93,6 +158,7 @@ def _example(
     status: str,
 ) -> None:
     if len(examples) < 5:
+<<<<<<< HEAD
         examples.append(
             {
                 "artifact_id": artifact_id,
@@ -108,3 +174,18 @@ def _percentage(numerator: int, denominator: int, decimals: int = 2) -> float:
     if denominator <= 0:
         return 0.0
     return round((numerator / denominator) * 100.0, decimals)
+=======
+        examples.append({
+            "artifact_id": artifact_id,
+            "last_edit_turn": last_edit_turn,
+            "verification_turn": verification_turn,
+            "command": command,
+            "status": status,
+        })
+
+
+def _freshness_rate(fresh: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((fresh / total) * 100.0, 3)
+>>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
