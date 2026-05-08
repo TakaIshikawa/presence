@@ -1,4 +1,4 @@
-"""Tests for final answer changed file summary analyzer."""
+"""Tests for final answer changed file summary analysis."""
 
 import pytest
 
@@ -8,7 +8,7 @@ from synthesis.final_answer_changed_file_summary import (
 
 
 def test_empty_changed_files_returns_zeroed_metrics():
-    report = analyze_final_answer_changed_file_summary([], "Files modified successfully")
+    report = analyze_final_answer_changed_file_summary([], "Some final answer text")
 
     assert report["changed_file_count"] == 0
     assert report["mentioned_file_count"] == 0
@@ -19,8 +19,8 @@ def test_empty_changed_files_returns_zeroed_metrics():
 
 def test_full_path_mentions_count_as_mentioned():
     report = analyze_final_answer_changed_file_summary(
-        ["src/utils.py", "tests/test_utils.py"],
-        "Updated src/utils.py and tests/test_utils.py with the new logic.",
+        ["src/main.py", "tests/test_main.py"],
+        "Updated src/main.py and added tests/test_main.py",
     )
 
     assert report["changed_file_count"] == 2
@@ -32,95 +32,118 @@ def test_full_path_mentions_count_as_mentioned():
 
 def test_basename_only_mentions_count_as_mentioned():
     report = analyze_final_answer_changed_file_summary(
-        ["src/analysis/validator.py", "tests/test_validator.py"],
-        "Modified validator.py and test_validator.py to add the new checks.",
+        ["src/utils/helper.py", "tests/test_helper.py"],
+        "Modified helper.py and test_helper.py",
     )
 
     assert report["changed_file_count"] == 2
     assert report["mentioned_file_count"] == 2
     assert report["omitted_file_count"] == 0
     assert report["mention_rate"] == 100.0
+    assert report["omitted_files"] == []
 
 
-def test_unmentioned_changed_files_are_listed_in_stable_sorted_order():
+def test_unmentioned_changed_files_listed_in_stable_sorted_order():
     report = analyze_final_answer_changed_file_summary(
-        ["src/z_last.py", "src/a_first.py", "src/middle.py"],
-        "Updated the core module",
-    )
-
-    assert report["omitted_file_count"] == 3
-    assert report["omitted_files"] == ["src/a_first.py", "src/middle.py", "src/z_last.py"]
-
-
-def test_mixed_mentioned_and_omitted_files():
-    report = analyze_final_answer_changed_file_summary(
-        ["src/config.py", "src/parser.py", "tests/test_config.py"],
-        "Updated config.py and test_config.py with new logic",
+        ["z_file.py", "a_file.py", "m_file.py"],
+        "Updated something",
     )
 
     assert report["changed_file_count"] == 3
-    assert report["mentioned_file_count"] == 2  # config.py and test_config.py
+    assert report["mentioned_file_count"] == 0
+    assert report["omitted_file_count"] == 3
+    assert report["mention_rate"] == 0.0
+    assert report["omitted_files"] == ["a_file.py", "m_file.py", "z_file.py"]
+
+
+def test_partial_mentions():
+    report = analyze_final_answer_changed_file_summary(
+        ["src/main.py", "src/utils.py", "tests/test_main.py"],
+        "Updated main.py and test_main.py",
+    )
+
+    assert report["changed_file_count"] == 3
+    assert report["mentioned_file_count"] == 2  # main.py and test_main.py
     assert report["omitted_file_count"] == 1
     assert report["mention_rate"] == 66.67
-    assert report["omitted_files"] == ["src/parser.py"]
+    assert report["omitted_files"] == ["src/utils.py"]
 
 
 def test_whitespace_normalization_in_final_answer():
     report = analyze_final_answer_changed_file_summary(
-        ["src/handler.py"],
-        "Modified   src/handler.py   with\n\nmultiple   spaces",
+        ["src/main.py"],
+        "Updated   src/main.py   with\n\nmultiple    spaces",
     )
 
     assert report["mentioned_file_count"] == 1
     assert report["omitted_file_count"] == 0
 
 
-def test_empty_final_answer():
+def test_duplicate_file_paths_are_normalized():
     report = analyze_final_answer_changed_file_summary(
-        ["src/example.py"],
+        ["src/main.py", "src/main.py", "tests/test.py"],
+        "Updated main.py",
+    )
+
+    assert report["changed_file_count"] == 2  # Duplicates removed
+    assert report["mentioned_file_count"] == 1
+    assert report["omitted_file_count"] == 1
+
+
+def test_invalid_changed_files_non_list_raises_error():
+    with pytest.raises(ValueError, match="changed_files must be a list of file paths"):
+        analyze_final_answer_changed_file_summary("not a list", "Some text")
+
+
+def test_invalid_changed_files_non_string_item_raises_error():
+    with pytest.raises(ValueError, match="changed_files must be a list of file paths"):
+        analyze_final_answer_changed_file_summary(
+            ["valid.py", 123, "another.py"],
+            "Some text",
+        )
+
+
+def test_invalid_final_answer_non_string_raises_error():
+    with pytest.raises(ValueError, match="final_answer must be a string"):
+        analyze_final_answer_changed_file_summary(["file.py"], 123)
+
+
+def test_empty_final_answer_string():
+    report = analyze_final_answer_changed_file_summary(
+        ["src/main.py"],
         "",
     )
 
+    assert report["changed_file_count"] == 1
     assert report["mentioned_file_count"] == 0
     assert report["omitted_file_count"] == 1
-    assert report["omitted_files"] == ["src/example.py"]
 
 
-def test_none_changed_files_treated_as_empty():
-    report = analyze_final_answer_changed_file_summary(None, "No changes made")
+def test_none_changed_files_treated_as_empty_list():
+    report = analyze_final_answer_changed_file_summary(None, "Some text")
 
     assert report["changed_file_count"] == 0
     assert report["mentioned_file_count"] == 0
+    assert report["omitted_file_count"] == 0
 
 
-def test_string_changed_files_raises_error():
-    with pytest.raises(ValueError, match="changed_files must be a list, not a string"):
-        analyze_final_answer_changed_file_summary("src/utils.py", "Updated utils")
-
-
-def test_non_list_changed_files_raises_error():
-    with pytest.raises(ValueError, match="changed_files must be a list"):
-        analyze_final_answer_changed_file_summary({"file": "src/utils.py"}, "Updated utils")
-
-
-def test_non_string_final_answer_raises_error():
-    with pytest.raises(ValueError, match="final_answer must be a string"):
-        analyze_final_answer_changed_file_summary(["src/utils.py"], None)
-
-    with pytest.raises(ValueError, match="final_answer must be a string"):
-        analyze_final_answer_changed_file_summary(["src/utils.py"], 123)
-
-
-def test_changed_files_with_non_string_items_raises_error():
-    with pytest.raises(ValueError, match="changed_files must contain only strings"):
-        analyze_final_answer_changed_file_summary(["src/utils.py", 123, "tests/test.py"], "Updated files")
-
-
-def test_empty_strings_in_changed_files_are_filtered():
+def test_empty_string_file_paths_are_filtered():
     report = analyze_final_answer_changed_file_summary(
-        ["src/utils.py", "", "  ", "tests/test.py"],
-        "Updated utils.py and test.py",
+        ["src/main.py", "", "  ", "tests/test.py"],
+        "Updated main.py",
     )
 
-    assert report["changed_file_count"] == 2
+    assert report["changed_file_count"] == 2  # Empty strings filtered
+    assert report["mentioned_file_count"] == 1
+
+
+def test_basename_collision_handling():
+    # If multiple files have the same basename, mentioning the basename
+    # should count for all of them
+    report = analyze_final_answer_changed_file_summary(
+        ["src/utils.py", "lib/utils.py"],
+        "Modified utils.py",
+    )
+
     assert report["mentioned_file_count"] == 2
+    assert report["omitted_file_count"] == 0

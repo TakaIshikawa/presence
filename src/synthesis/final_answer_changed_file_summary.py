@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import re
 from typing import Any
 
 
@@ -11,70 +11,71 @@ def analyze_final_answer_changed_file_summary(
     final_answer: object,
 ) -> dict[str, Any]:
     """Check whether changed files are mentioned in a final answer summary."""
+    if changed_files is None:
+        changed_files = []
+
+    if not isinstance(changed_files, list):
+        raise ValueError("changed_files must be a list of file paths")
+
     if not isinstance(final_answer, str):
         raise ValueError("final_answer must be a string")
 
-    files = _normalize_changed_files(changed_files)
-    normalized_answer = _normalize_text(final_answer)
+    normalized_files = _normalize_file_list(changed_files)
+    normalized_answer = _normalize_whitespace(final_answer)
 
-    mentioned_files: set[str] = set()
+    mentioned_files: list[str] = []
     omitted_files: list[str] = []
 
-    for file_path in files:
+    for file_path in normalized_files:
         if _is_mentioned(file_path, normalized_answer):
-            mentioned_files.add(file_path)
+            mentioned_files.append(file_path)
         else:
             omitted_files.append(file_path)
 
+    changed_file_count = len(normalized_files)
+    mentioned_file_count = len(mentioned_files)
+    omitted_file_count = len(omitted_files)
+    mention_rate = _percentage(mentioned_file_count, changed_file_count)
+
     return {
-        "changed_file_count": len(files),
-        "mentioned_file_count": len(mentioned_files),
-        "omitted_file_count": len(omitted_files),
-        "mention_rate": _percentage(len(mentioned_files), len(files)),
+        "changed_file_count": changed_file_count,
+        "mentioned_file_count": mentioned_file_count,
+        "omitted_file_count": omitted_file_count,
+        "mention_rate": mention_rate,
         "omitted_files": sorted(omitted_files),
     }
 
 
-def _normalize_changed_files(value: object) -> list[str]:
-    """Convert changed_files input to a normalized list of paths."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        if not value.strip():
-            return []
-        raise ValueError("changed_files must be a list, not a string")
-    if not isinstance(value, list):
-        raise ValueError("changed_files must be a list")
-
+def _normalize_file_list(files: list[object]) -> list[str]:
+    """Normalize and deduplicate file paths."""
     normalized: list[str] = []
-    for item in value:
+    seen: set[str] = set()
+
+    for item in files:
         if not isinstance(item, str):
-            raise ValueError("changed_files must contain only strings")
-        if item.strip():
-            normalized.append(item.strip())
+            raise ValueError("changed_files must be a list of file paths")
+        path = item.strip()
+        if path and path not in seen:
+            normalized.append(path)
+            seen.add(path)
 
     return normalized
 
 
-def _normalize_text(text: str) -> str:
-    """Normalize whitespace in text for matching."""
-    import re
-
-    return re.sub(r"\s+", " ", text.strip())
+def _normalize_whitespace(text: str) -> str:
+    """Normalize repeated whitespace to single spaces."""
+    return re.sub(r"\s+", " ", text)
 
 
-def _is_mentioned(file_path: str, normalized_answer: str) -> bool:
-    """Check if file_path is mentioned either as full path or basename."""
-    if not normalized_answer:
-        return False
-
-    # Check full path
-    if file_path in normalized_answer:
+def _is_mentioned(file_path: str, text: str) -> bool:
+    """Check if file path or basename is mentioned in text."""
+    # Check full path mention
+    if file_path in text:
         return True
 
-    # Check basename
-    basename = os.path.basename(file_path)
-    if basename and basename in normalized_answer:
+    # Check basename mention
+    basename = file_path.split("/")[-1]
+    if basename and basename in text:
         return True
 
     return False
