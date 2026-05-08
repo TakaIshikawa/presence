@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from numbers import Real
 from typing import Optional, Sequence
 
 
@@ -112,17 +113,7 @@ def analyze_idea_realization_lag(
     Raises:
         ValueError: If chains contains invalid data
     """
-    if not isinstance(chains, (list, tuple)):
-        raise ValueError("chains must be a sequence (list or tuple)")
-
-    # Validate chains
-    for chain in chains:
-        if not isinstance(chain, IdeaRealizationChain):
-            raise ValueError("chains must contain IdeaRealizationChain instances")
-        if chain.captured_at.tzinfo is None:
-            raise ValueError("captured_at must be timezone-aware")
-        if chain.published_at is not None and chain.published_at.tzinfo is None:
-            raise ValueError("published_at must be timezone-aware or None")
+    _validate_inputs(chains, observation_start, observation_end)
 
     # Separate published and orphaned ideas
     published = [c for c in chains if c.published_at is not None]
@@ -160,6 +151,60 @@ def analyze_idea_realization_lag(
         orphaned_count=len(orphaned),
         tier_counts=tier_counts,
         insights=insights,
+    )
+
+
+def _validate_inputs(
+    chains: Sequence[IdeaRealizationChain],
+    observation_start: Optional[datetime],
+    observation_end: Optional[datetime],
+) -> None:
+    """Validate runtime inputs before analysis."""
+    if not isinstance(chains, (list, tuple)):
+        raise ValueError("chains must be a list or tuple")
+
+    _validate_observation_datetime(observation_start, "observation_start")
+    _validate_observation_datetime(observation_end, "observation_end")
+    if (
+        observation_start is not None
+        and observation_end is not None
+        and observation_end < observation_start
+    ):
+        raise ValueError("observation_end must be on or after observation_start")
+
+    for chain in chains:
+        if not isinstance(chain, IdeaRealizationChain):
+            raise ValueError("chains must contain only IdeaRealizationChain instances")
+        if not isinstance(chain.idea_id, str) or not chain.idea_id.strip():
+            raise ValueError("idea_id must be a non-empty string")
+        if not _is_timezone_aware(chain.captured_at):
+            raise ValueError("captured_at must be timezone-aware")
+        if chain.published_at is None:
+            if chain.lag_days is not None:
+                raise ValueError("lag_days must be None for unpublished ideas")
+            continue
+        if not _is_timezone_aware(chain.published_at):
+            raise ValueError("published_at must be timezone-aware when present")
+        if chain.published_at < chain.captured_at:
+            raise ValueError("published_at must be on or after captured_at")
+        if (
+            not isinstance(chain.lag_days, Real)
+            or isinstance(chain.lag_days, bool)
+            or chain.lag_days < 0
+        ):
+            raise ValueError("lag_days must be a non-negative number for published ideas")
+
+
+def _validate_observation_datetime(value: Optional[datetime], field_name: str) -> None:
+    if value is not None and not _is_timezone_aware(value):
+        raise ValueError(f"{field_name} must be timezone-aware when provided")
+
+
+def _is_timezone_aware(value: object) -> bool:
+    return (
+        isinstance(value, datetime)
+        and value.tzinfo is not None
+        and value.utcoffset() is not None
     )
 
 
