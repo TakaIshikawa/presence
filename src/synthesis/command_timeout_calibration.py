@@ -18,6 +18,7 @@ def analyze_command_timeout_calibration(records: object) -> dict[str, Any]:
 
     category_counts: Counter[str] = Counter({name: 0 for name in CATEGORIES})
     missing_timeout = 0
+    missing_duration = 0
     timed_out = 0
     near_timeout = 0
     excessive_timeout = 0
@@ -39,13 +40,17 @@ def analyze_command_timeout_calibration(records: object) -> dict[str, Any]:
             missing_timeout += 1
             _append_example(examples, command, _turn_index(record, index), "missing_timeout")
             continue
+        if duration is None:
+            missing_duration += 1
+            _append_example(examples, command, _turn_index(record, index), "missing_duration")
+            continue
         if exit_code == "timeout" or exit_code == 124 or record.get("timed_out") is True:
             timed_out += 1
             _append_example(examples, command, _turn_index(record, index), "timed_out")
-        if duration is not None and duration >= timeout * 0.9:
+        if duration >= timeout * 0.9:
             near_timeout += 1
             _append_example(examples, command, _turn_index(record, index), "near_timeout")
-        if duration is not None and duration > 0 and timeout >= duration * 5:
+        if duration > 0 and timeout >= duration * 5:
             excessive_timeout += 1
             _append_example(examples, command, _turn_index(record, index), "excessive_timeout")
 
@@ -54,6 +59,7 @@ def analyze_command_timeout_calibration(records: object) -> dict[str, Any]:
     return {
         "total_commands": total,
         "missing_timeout_count": missing_timeout,
+        "missing_duration_count": missing_duration,
         "timed_out_count": timed_out,
         "near_timeout_count": near_timeout,
         "excessive_timeout_count": excessive_timeout,
