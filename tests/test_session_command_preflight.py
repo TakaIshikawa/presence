@@ -126,3 +126,37 @@ def test_unordered_turn_indexes_raise_value_error():
                 SessionCommandEvent(1, "edit", file_path="src/app.py"),
             ]
         )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uv run ruff check .",
+        "python -m mypy src",
+        "npm run typecheck",
+        "tsc --noEmit",
+        "mypy src tests",
+        "uv run mypy .",
+    ],
+)
+def test_lint_and_typecheck_commands_count_as_preflight(command):
+    report = analyze_session_command_preflight(
+        [
+            SessionCommandEvent(0, "command", command),
+            SessionCommandEvent(1, "edit", file_path="src/app.py"),
+        ]
+    )
+
+    assert report.preflight_commands == 1
+    assert report.preflight_quality == "thin"
+
+
+def test_chained_lint_command_counts_as_preflight():
+    report = analyze_session_command_preflight(
+        [
+            SessionCommandEvent(0, "command", "cd src && uv run ruff check ."),
+            SessionCommandEvent(1, "edit", file_path="src/app.py"),
+        ]
+    )
+
+    assert report.preflight_commands == 1

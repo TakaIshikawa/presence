@@ -137,3 +137,18 @@ def test_unresolved_examples_are_capped_at_five():
 def test_invalid_verification_repair_records_raise_value_error(events, message):
     with pytest.raises(ValueError, match=message):
         analyze_session_verification_repair(events)
+
+
+def test_one_pass_repairs_only_one_failure():
+    result = analyze_session_verification_repair(
+        [
+            VerificationRepairEvent(EVENT_VERIFICATION, STATUS_FAILED, 0, "pytest"),
+            VerificationRepairEvent(EVENT_VERIFICATION, STATUS_FAILED, 1, "pytest"),
+            VerificationRepairEvent(EVENT_REPAIR, STATUS_ATTEMPTED, 2, summary="fix issue"),
+            VerificationRepairEvent(EVENT_VERIFICATION, STATUS_PASSED, 3, "pytest"),
+        ]
+    )
+
+    assert result.metrics.repaired_failures == 1
+    assert result.metrics.unresolved_failures == 1
+    assert result.metrics.median_repair_latency == 3.0

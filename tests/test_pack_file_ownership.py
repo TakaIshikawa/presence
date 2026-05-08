@@ -75,3 +75,15 @@ def test_malformed_expected_files_and_invalid_top_level_input():
 
     with pytest.raises(ValueError, match="records must be a list"):
         analyze_pack_file_ownership({"title": "A"})
+
+
+def test_windows_backslash_paths_are_normalized_to_forward_slashes():
+    report = analyze_pack_file_ownership(
+        [
+            {"title": "A", "executionPack": "pack", "expectedFiles": ["src\\foo.py"]},
+            {"title": "B", "executionPack": "pack", "expectedFiles": ["./src/foo.py"]},
+        ]
+    )
+
+    assert report["per_pack"]["pack"]["overlapping_file_count"] == 1
+    assert report["conflict_pairs"] == [{"pack": "pack", "tasks": ["A", "B"], "files": ["src/foo.py"]}]

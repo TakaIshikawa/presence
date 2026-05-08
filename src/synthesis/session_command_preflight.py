@@ -8,6 +8,7 @@ from typing import Sequence
 
 READ_COMMANDS = ("cat", "sed", "nl", "head", "tail", "less", "rg", "grep", "find", "ls", "git status", "git diff", "git show")
 TEST_COMMANDS = ("pytest", "python -m pytest", "uv run pytest", "uv run python -m pytest", "npm test", "pnpm test", "yarn test", "go test", "cargo test")
+LINT_COMMANDS = ("ruff check", "uv run ruff check", "python -m mypy", "uv run mypy", "mypy", "tsc", "npm run typecheck", "pnpm run typecheck", "yarn typecheck")
 EDIT_EVENTS = {"edit", "write", "patch"}
 
 
@@ -99,7 +100,7 @@ def _command_segments(command: str) -> tuple[str, ...]:
 def _matches_preflight_segment(segment: str) -> bool:
     return any(
         segment == prefix or segment.startswith(f"{prefix} ")
-        for prefix in (*READ_COMMANDS, *TEST_COMMANDS)
+        for prefix in (*READ_COMMANDS, *TEST_COMMANDS, *LINT_COMMANDS)
     )
 
 

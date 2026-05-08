@@ -67,3 +67,17 @@ def test_malformed_records_are_missing_quality_examples():
 def test_non_list_input_raises_clear_value_error():
     with pytest.raises(ValueError, match="records must be a list"):
         analyze_command_timeout_calibration({"command": "pytest"})
+
+
+def test_missing_duration_is_counted_separately_from_missing_timeout():
+    report = analyze_command_timeout_calibration(
+        [
+            {"command": "pytest", "timeout_seconds": 30},
+            {"command": "npm test", "timeout_seconds": 60, "duration_seconds": None},
+            {"command": "git status"},
+        ]
+    )
+
+    assert report["missing_duration_count"] == 2
+    assert report["missing_timeout_count"] == 1
+    assert any(ex["reason"] == "missing_duration" for ex in report["examples"])

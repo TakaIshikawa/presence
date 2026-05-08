@@ -35,20 +35,28 @@ def analyze_tool_result_followup_latency(
     result_indices = [i for i, event in enumerate(events) if event.event_type == "result"]
     latencies: list[int] = []
     stale_by_tool: dict[str, int] = {}
+    consumed_action_indices: set[int] = set()
 
     for index in result_indices:
         result = events[index]
-        followup = next(
-            (
-                event
-                for event in events[index + 1 :]
-                if event.event_type == "action" and event.tool_name == result.tool_name and event.topic == result.topic
-            ),
-            None,
-        )
-        if followup is None:
+        followup_index = None
+        for i in range(index + 1, len(events)):
+            event = events[i]
+            if (
+                i not in consumed_action_indices
+                and event.event_type == "action"
+                and event.tool_name == result.tool_name
+                and event.topic == result.topic
+            ):
+                followup_index = i
+                break
+
+        if followup_index is None:
             stale_by_tool[result.tool_name] = stale_by_tool.get(result.tool_name, 0) + 1
             continue
+
+        consumed_action_indices.add(followup_index)
+        followup = events[followup_index]
         latency = followup.turn_index - result.turn_index
         if latency > stale_threshold:
             stale_by_tool[result.tool_name] = stale_by_tool.get(result.tool_name, 0) + 1

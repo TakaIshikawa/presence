@@ -57,18 +57,19 @@ def analyze_session_verification_repair(
     unresolved_examples: list[UnresolvedVerificationExample] = []
     total_failures = 0
     repaired_failures = 0
+    consumed_pass_indices: set[int] = set()
 
     for index, event in enumerate(events):
         if event.event_type != EVENT_VERIFICATION or event.status != STATUS_FAILED:
             continue
         total_failures += 1
         repair_index = _first_repair_index(events, index)
-        pass_event = (
-            _first_passing_verification(events, repair_index)
+        pass_index = (
+            _first_passing_verification_index(events, repair_index, consumed_pass_indices)
             if repair_index is not None
             else None
         )
-        if pass_event is None:
+        if pass_index is None:
             if len(unresolved_examples) < 5:
                 unresolved_examples.append(
                     UnresolvedVerificationExample(
@@ -78,6 +79,8 @@ def analyze_session_verification_repair(
                     )
                 )
             continue
+        consumed_pass_indices.add(pass_index)
+        pass_event = events[pass_index]
         repaired_failures += 1
         latencies.append(pass_event.turn_index - event.turn_index)
 
@@ -142,15 +145,21 @@ def _first_repair_index(
     return None
 
 
-def _first_passing_verification(
+def _first_passing_verification_index(
     events: Sequence[VerificationRepairEvent],
     repair_index: int | None,
-) -> VerificationRepairEvent | None:
+    consumed_indices: set[int],
+) -> int | None:
     if repair_index is None:
         return None
-    for later in events[repair_index + 1 :]:
-        if later.event_type == EVENT_VERIFICATION and later.status == STATUS_PASSED:
-            return later
+    for later_index in range(repair_index + 1, len(events)):
+        later = events[later_index]
+        if (
+            later_index not in consumed_indices
+            and later.event_type == EVENT_VERIFICATION
+            and later.status == STATUS_PASSED
+        ):
+            return later_index
     return None
 
 

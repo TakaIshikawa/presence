@@ -113,3 +113,10 @@ def test_multiple_implementation_clusters_round_latency():
 def test_invalid_inputs_raise_clear_errors(events, message):
     with pytest.raises(ValueError, match=message):
         analyze_session_verification_outcome(events)
+
+
+def test_boolean_turn_index_is_rejected():
+    with pytest.raises(ValueError, match="turn_index"):
+        analyze_session_verification_outcome([SessionVerificationEvent(True, EVENT_IMPLEMENTATION)])
+    with pytest.raises(ValueError, match="turn_index"):
+        analyze_session_verification_outcome([SessionVerificationEvent(False, EVENT_IMPLEMENTATION)])
