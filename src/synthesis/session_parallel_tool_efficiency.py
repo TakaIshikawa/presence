@@ -1,56 +1,48 @@
-"""Session parallel tool call efficiency analyzer for optimization detection.
+"""Session parallel tool call efficiency analyzer for parallelization patterns.
 
 Analyzes how effectively agents use parallel tool calls within single messages.
-Tracks parallelization patterns, calculates efficiency metrics, and identifies
-missed opportunities where independent sequential calls could be parallelized.
+Tracks frequency of parallel invocations, identifies missed parallelization
+opportunities, and measures efficiency gains from parallel execution.
 
-Efficiency metrics:
-- Parallelization rate: Percentage of turns with parallel tool calls
+Parallel execution metrics:
+- Parallelization rate: Percentage of tool calls made in parallel
 - Average parallel group size: Mean number of tools called together
-- Sequential groups: Consecutive tool calls that could be parallelized
-- Common parallel patterns: Frequently parallelized tool combinations
-
-Parallel execution benefits:
-- Reduced latency through concurrent operations
-- Better resource utilization
-- Faster session completion
+- Common parallel patterns: Frequent combinations (multiple Reads, etc.)
+- Missed opportunities: Sequential independent calls that could be parallel
+- Parallel success rate: Percentage of parallel calls that succeed
+- Efficiency score: Overall parallelization effectiveness
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Mapping
+from typing import Any
 
 
 def analyze_session_parallel_tool_efficiency(records: object) -> dict[str, Any]:
-    """Analyze parallel tool call patterns and efficiency in a session.
+    """Analyze parallel tool call usage patterns and efficiency.
 
-    Detects parallel tool invocations within single turns, calculates
-    parallelization metrics, and identifies missed opportunities for
-    parallel execution.
+    Evaluates how effectively agents use parallel tool calls within single
+    messages, identifies opportunities for parallelization, and calculates
+    efficiency metrics.
 
     Args:
-        records: List of turn dictionaries with keys:
-            - turn_index: Turn number
-            - tool_calls: List of tool call dicts with:
-                - tool_name: Name of the tool
-                - parallel_group_id: Optional ID grouping parallel calls
-            OR
-            - tool_call_count: Number of tool calls (backward compat)
-            - is_parallel: Whether turn has parallel calls (backward compat)
+        records: List of message dictionaries with keys:
+            - message_index: Message number
+            - tool_calls: List of tool calls in this message (parallel if > 1)
+            - Each tool call has: tool_name, success (bool), file_path (optional)
 
     Returns:
         Dict with:
-            - total_turns: Total number of turns analyzed
-            - turns_with_tool_calls: Number of turns containing tool calls
-            - parallel_turns: Number of turns with parallel tool calls
-            - sequential_turns: Number of turns with only sequential calls
-            - parallelization_rate: Percentage of tool-using turns with parallel calls
-            - total_parallel_groups: Total number of parallel execution groups
-            - average_group_size: Mean number of tools per parallel group
-            - max_group_size: Largest parallel group observed
-            - common_parallel_patterns: Most frequent tool combinations
-            - missed_opportunities: Estimated sequential groups that could parallelize
+            - total_messages: Total number of messages analyzed
+            - messages_with_parallel_calls: Count of messages with parallel calls
+            - parallelization_rate: Percentage of tool calls made in parallel
+            - avg_parallel_group_size: Average number of tools in parallel groups
+            - total_parallel_calls: Total number of parallel tool invocations
+            - parallel_patterns: Common parallel tool combinations
+            - missed_opportunities: Potential parallelization opportunities
+            - parallel_success_rate: Success rate of parallel calls
+            - efficiency_score: Overall parallelization effectiveness (0-100)
 
     Raises:
         ValueError: If records is not a list
@@ -58,164 +50,165 @@ def analyze_session_parallel_tool_efficiency(records: object) -> dict[str, Any]:
     if records is None:
         records = []
     if not isinstance(records, list):
-        raise ValueError("records must be a list of turn dictionaries")
+        raise ValueError("records must be a list of message dictionaries")
 
-    total_turns = len(records)
-    turns_with_tool_calls = 0
-    parallel_turns = 0
-    sequential_turns = 0
-    parallel_groups: list[int | float] = []
+    total_messages = 0
+    messages_with_parallel = 0
+    total_tool_calls = 0
+    total_parallel_calls = 0
+    parallel_group_sizes: list[int] = []
     parallel_patterns: Counter[tuple[str, ...]] = Counter()
-    missed_opportunities = 0
+    missed_opportunities: list[dict[str, Any]] = []
+    parallel_successes = 0
+    total_parallel_groups = 0
+
+    # Track sequential calls that could be parallelized
+    sequential_reads: list[dict[str, Any]] = []
 
     for record in records:
-        if not isinstance(record, Mapping):
+        if not isinstance(record, dict):
             continue
 
-        tool_calls = _extract_tool_calls(record)
-        if not tool_calls:
+        tool_calls = record.get("tool_calls", [])
+        if not isinstance(tool_calls, list):
             continue
 
-        turns_with_tool_calls += 1
+        total_messages += 1
+        num_tools = len(tool_calls)
+        total_tool_calls += num_tools
 
-        # Analyze parallel groups in this turn
-        groups = _identify_parallel_groups(tool_calls)
+        # Analyze parallel calls
+        if num_tools > 1:
+            messages_with_parallel += 1
+            total_parallel_calls += num_tools
+            parallel_group_sizes.append(num_tools)
+            total_parallel_groups += 1
 
-        # Check if any parallel execution occurred
-        has_parallel = any(len(group) > 1 for group in groups)
+            # Extract tool names for pattern analysis
+            tool_names = tuple(sorted([
+                _string(call.get("tool_name"))
+                for call in tool_calls
+                if isinstance(call, dict) and call.get("tool_name")
+            ]))
+            if tool_names:
+                parallel_patterns[tool_names] += 1
 
-        if has_parallel:
-            # Turn has at least one parallel group
-            parallel_turns += 1
-            # Record parallel group sizes and patterns
-            for group in groups:
-                if len(group) > 1:
-                    parallel_groups.append(len(group))
-                    # Record pattern (sorted tool names)
-                    pattern = tuple(sorted(tool["tool_name"] for tool in group))
-                    parallel_patterns[pattern] += 1
-        else:
-            # All tool calls are sequential
-            sequential_turns += 1
-            # Check if they could have been parallelized
-            if len(tool_calls) > 1 and _could_be_parallelized(tool_calls):
-                missed_opportunities += 1
+            # Calculate success rate
+            successful_calls = sum(
+                1 for call in tool_calls
+                if isinstance(call, dict) and call.get("success", True)
+            )
+            parallel_successes += successful_calls
+
+        # Track sequential calls for missed opportunity detection
+        elif num_tools == 1:
+            tool_call = tool_calls[0]
+            if isinstance(tool_call, dict):
+                sequential_reads.append({
+                    "message_index": record.get("message_index"),
+                    "tool_name": _string(tool_call.get("tool_name")),
+                    "file_path": _string(tool_call.get("file_path")) if "file_path" in tool_call else None,
+                })
+
+    # Detect missed parallelization opportunities
+    missed_opportunities = _detect_missed_opportunities(sequential_reads)
 
     # Calculate metrics
-    parallelization_rate = _percentage(parallel_turns, turns_with_tool_calls)
-    average_group_size = _average(parallel_groups)
-    max_group_size = max(parallel_groups) if parallel_groups else 0
+    parallelization_rate = round(
+        (total_parallel_calls / total_tool_calls * 100.0) if total_tool_calls > 0 else 0.0,
+        2
+    )
 
-    # Format common patterns
-    common_patterns = [
-        {
-            "tools": list(pattern),
-            "count": count,
-        }
-        for pattern, count in parallel_patterns.most_common(5)
+    avg_parallel_group_size = round(
+        sum(parallel_group_sizes) / len(parallel_group_sizes) if parallel_group_sizes else 0.0,
+        2
+    )
+
+    parallel_success_rate = round(
+        (parallel_successes / total_parallel_calls * 100.0) if total_parallel_calls > 0 else 100.0,
+        2
+    )
+
+    # Calculate efficiency score (0-100)
+    # Based on: parallelization rate (50%), avg group size (30%), success rate (20%)
+    # Only include success rate if there were actually parallel calls
+    if total_parallel_calls > 0:
+        efficiency_score = round(
+            (parallelization_rate * 0.5) +
+            (min(avg_parallel_group_size / 5.0, 1.0) * 30.0) +
+            (parallel_success_rate * 0.2),
+            2
+        )
+    else:
+        efficiency_score = 0.0
+
+    # Format parallel patterns
+    top_patterns = [
+        {"tools": list(pattern), "count": count}
+        for pattern, count in parallel_patterns.most_common(10)
     ]
 
     return {
-        "total_turns": total_turns,
-        "turns_with_tool_calls": turns_with_tool_calls,
-        "parallel_turns": parallel_turns,
-        "sequential_turns": sequential_turns,
+        "total_messages": total_messages,
+        "messages_with_parallel_calls": messages_with_parallel,
         "parallelization_rate": parallelization_rate,
-        "total_parallel_groups": len(parallel_groups),
-        "average_group_size": average_group_size,
-        "max_group_size": max_group_size,
-        "common_parallel_patterns": common_patterns,
-        "missed_opportunities": missed_opportunities,
+        "avg_parallel_group_size": avg_parallel_group_size,
+        "total_parallel_calls": total_parallel_calls,
+        "parallel_patterns": top_patterns,
+        "missed_opportunities": missed_opportunities[:10],  # Limit to 10
+        "parallel_success_rate": parallel_success_rate,
+        "efficiency_score": efficiency_score,
     }
 
 
-def _extract_tool_calls(record: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Extract tool calls from turn record.
+def _string(value: object) -> str:
+    """Convert value to string, stripping whitespace."""
+    return value.strip() if isinstance(value, str) else ""
 
-    Supports multiple formats:
-    - tool_calls: List of tool call dicts
-    - tool_call_count + is_parallel: Backward compatibility
+
+def _detect_missed_opportunities(
+    sequential_calls: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Detect missed parallelization opportunities.
+
+    Looks for:
+    - Consecutive Read calls (could be parallelized)
+    - Consecutive Grep calls (could be parallelized)
+    - Consecutive Glob calls (could be parallelized)
     """
-    # Primary format: tool_calls list
-    tool_calls = record.get("tool_calls")
-    if isinstance(tool_calls, list):
-        result = []
-        for call in tool_calls:
-            if isinstance(call, Mapping) and "tool_name" in call:
-                result.append(dict(call))
-        return result
+    opportunities: list[dict[str, Any]] = []
 
-    # Backward compatibility: tool_call_count
-    tool_count = record.get("tool_call_count")
-    if isinstance(tool_count, int) and tool_count > 0:
-        is_parallel = record.get("is_parallel") is True
-        # Synthetic tool calls
-        return [
-            {"tool_name": f"Tool{i}", "parallel_group_id": 0 if is_parallel else i}
-            for i in range(tool_count)
-        ]
+    # Group consecutive calls by tool type
+    i = 0
+    while i < len(sequential_calls):
+        current_tool = sequential_calls[i]["tool_name"]
 
-    return []
+        # Only check Read, Grep, Glob (naturally parallelizable)
+        if current_tool not in ("Read", "Grep", "Glob"):
+            i += 1
+            continue
 
+        # Find consecutive calls of same tool type
+        consecutive = [sequential_calls[i]]
+        j = i + 1
+        while j < len(sequential_calls) and sequential_calls[j]["tool_name"] == current_tool:
+            # Only consider truly consecutive (adjacent messages)
+            if (sequential_calls[j].get("message_index", 0) -
+                sequential_calls[j - 1].get("message_index", 0) == 1):
+                consecutive.append(sequential_calls[j])
+                j += 1
+            else:
+                break
 
-def _identify_parallel_groups(tool_calls: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Identify parallel execution groups within tool calls.
+        # If we found 2+ consecutive calls of same type, it's a missed opportunity
+        if len(consecutive) >= 2:
+            opportunities.append({
+                "type": f"consecutive_{current_tool.lower()}",
+                "count": len(consecutive),
+                "start_message": consecutive[0].get("message_index"),
+                "tool_name": current_tool,
+            })
 
-    Tool calls with the same parallel_group_id are in the same parallel group.
-    If no parallel_group_id, each call is its own sequential group.
-    """
-    if not tool_calls:
-        return []
+        i = j if j > i + 1 else i + 1
 
-    # Group by parallel_group_id
-    groups_by_id: dict[Any, list[dict[str, Any]]] = {}
-    sequential_index = 0
-
-    for call in tool_calls:
-        group_id = call.get("parallel_group_id")
-        if group_id is None:
-            # Sequential call - unique group
-            groups_by_id[f"seq_{sequential_index}"] = [call]
-            sequential_index += 1
-        else:
-            # Parallel call - group by ID
-            if group_id not in groups_by_id:
-                groups_by_id[group_id] = []
-            groups_by_id[group_id].append(call)
-
-    return list(groups_by_id.values())
-
-
-def _could_be_parallelized(tool_calls: list[dict[str, Any]]) -> bool:
-    """Heuristic to detect if sequential tool calls could be parallelized.
-
-    Common patterns that can be parallelized:
-    - Multiple Read calls
-    - Multiple Grep calls
-    - Multiple Glob calls
-    - Mix of Read/Grep/Glob (information gathering)
-    """
-    if len(tool_calls) < 2:
-        return False
-
-    tool_names = [call.get("tool_name", "").lower() for call in tool_calls]
-
-    # All reads, greps, or globs
-    parallelizable_tools = {"read", "grep", "glob", "webfetch"}
-    all_parallelizable = all(name in parallelizable_tools for name in tool_names)
-
-    return all_parallelizable
-
-
-def _percentage(numerator: int, denominator: int) -> float:
-    """Calculate percentage, handling zero denominator."""
-    if denominator <= 0:
-        return 0.0
-    return round((numerator / denominator) * 100.0, 2)
-
-
-def _average(values: list[int | float]) -> float:
-    """Calculate average of numeric values."""
-    if not values:
-        return 0.0
-    return round(sum(values) / len(values), 2)
+    return opportunities

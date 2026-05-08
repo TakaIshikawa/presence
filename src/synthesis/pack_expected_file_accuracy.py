@@ -1,54 +1,52 @@
-"""Pack expected file accuracy analyzer for prediction quality assessment.
+"""Pack expected file accuracy analyzer for execution pack predictions.
 
-Measures how accurately execution packs predict the files they will modify.
-Compares expectedFiles arrays against actual changed files from pack outcomes,
-using precision, recall, and F1 metrics to evaluate prediction quality.
+Analyzes how accurately execution packs predict the files they will modify by
+comparing expectedFiles arrays against actual changed files from pack outcomes.
+Calculates precision, recall, and F1 score metrics to measure prediction quality.
 
-Accuracy metrics:
-- Precision: What percentage of expected files were actually changed
-- Recall: What percentage of changed files were in expected list
-- F1 score: Harmonic mean of precision and recall
-- False positives: Expected files that weren't changed
-- False negatives: Changed files that weren't expected
+Prediction accuracy metrics:
+- Precision: Percentage of expected files that were actually modified
+- Recall: Percentage of actually modified files that were expected
+- F1 Score: Harmonic mean of precision and recall
+- False Positives: Expected files that were not modified
+- False Negatives: Modified files that were not expected
 
-Common prediction patterns:
-- Over-prediction: Many expected files not changed (low precision)
-- Under-prediction: Many changed files not expected (low recall)
-- Balanced: Good precision and recall (high F1)
-- Category misses: Commonly missed file types (tests, configs, types)
+File type patterns:
+- Commonly missed: Tests, configs, types, documentation
+- False positives: Over-estimated scope
+- Directory drift: Modified files in unexpected directories
+- Related module drift: Changes to related but unplanned modules
 """
 
 from __future__ import annotations
 
-from collections import Counter
-from pathlib import Path
 from typing import Any, Mapping
 
 
 def analyze_pack_expected_file_accuracy(records: object) -> dict[str, Any]:
-    """Analyze accuracy of expected file predictions in execution packs.
+    """Analyze accuracy of file predictions in execution packs.
 
-    Compares expectedFiles to actual changed files, calculating precision,
-    recall, and F1 scores to measure prediction accuracy.
+    Compares expectedFiles arrays to actual changed files from pack outcomes,
+    calculating precision, recall, and F1 score metrics.
 
     Args:
         records: List of pack execution dictionaries with keys:
             - pack_id: Execution pack identifier
             - expected_files: List of files expected to be modified
-            - changed_files: List of files actually changed during execution
+            - actual_files: List of files actually modified during execution
             - task_title: Optional task title for context
 
     Returns:
         Dict with:
             - total_packs: Total number of pack executions analyzed
-            - perfect_predictions: Number of packs with perfect prediction
-            - average_precision: Mean precision across all packs
-            - average_recall: Mean recall across all packs
-            - average_f1: Mean F1 score across all packs
-            - total_false_positives: Count of expected but unchanged files
-            - total_false_negatives: Count of changed but unexpected files
-            - commonly_missed_categories: File categories often missed
-            - prediction_examples: Examples of prediction accuracy patterns
+            - avg_precision: Average precision across all packs
+            - avg_recall: Average recall across all packs
+            - avg_f1_score: Average F1 score across all packs
+            - perfect_predictions_count: Packs with perfect predictions (F1 = 1.0)
+            - total_false_positives: Total count of false positive predictions
+            - total_false_negatives: Total count of false negative predictions
+            - commonly_missed_categories: File categories often not predicted
+            - prediction_examples: Examples of prediction accuracy/inaccuracy
 
     Raises:
         ValueError: If records is not a list
@@ -59,13 +57,15 @@ def analyze_pack_expected_file_accuracy(records: object) -> dict[str, Any]:
         raise ValueError("records must be a list of pack execution dictionaries")
 
     total_packs = 0
-    perfect_predictions = 0
+    perfect_predictions_count = 0
     precision_sum = 0.0
     recall_sum = 0.0
     f1_sum = 0.0
     total_false_positives = 0
     total_false_negatives = 0
-    missed_categories: Counter[str] = Counter()
+
+    # Track missed file categories
+    missed_categories: dict[str, int] = {}
     prediction_examples: list[dict[str, Any]] = []
 
     for index, record in enumerate(records):
@@ -74,77 +74,75 @@ def analyze_pack_expected_file_accuracy(records: object) -> dict[str, Any]:
 
         pack_id = _string(record.get("pack_id")) or f"pack_{index}"
         expected_files = _normalize_files(record.get("expected_files"))
-        changed_files = _normalize_files(record.get("changed_files"))
+        actual_files = _normalize_files(record.get("actual_files"))
         task_title = _string(record.get("task_title"))
-
-        if not expected_files and not changed_files:
-            # Skip packs with no files
-            continue
 
         total_packs += 1
 
         # Calculate sets
         expected_set = set(expected_files)
-        changed_set = set(changed_files)
+        actual_set = set(actual_files)
 
-        true_positives = expected_set & changed_set
-        false_positives_set = expected_set - changed_set
-        false_negatives_set = changed_set - expected_set
+        true_positives = expected_set & actual_set
+        false_positives_set = expected_set - actual_set
+        false_negatives_set = actual_set - expected_set
 
         # Calculate metrics
         precision = _calculate_precision(len(true_positives), len(expected_set))
-        recall = _calculate_recall(len(true_positives), len(changed_set))
-        f1 = _calculate_f1(precision, recall)
+        recall = _calculate_recall(len(true_positives), len(actual_set))
+        f1_score = _calculate_f1_score(precision, recall)
 
         precision_sum += precision
         recall_sum += recall
-        f1_sum += f1
+        f1_sum += f1_score
 
+        if f1_score == 1.0 and len(expected_set) > 0:
+            perfect_predictions_count += 1
+
+        # Track false positives and negatives
         total_false_positives += len(false_positives_set)
         total_false_negatives += len(false_negatives_set)
 
-        # Track missed categories
-        for file in false_negatives_set:
-            category = _categorize_file(file)
-            missed_categories[category] += 1
+        # Categorize missed files
+        for missed_file in false_negatives_set:
+            category = _categorize_file(missed_file)
+            missed_categories[category] = missed_categories.get(category, 0) + 1
 
-        # Check for perfect prediction
-        if precision == 1.0 and recall == 1.0:
-            perfect_predictions += 1
+        # Collect examples
+        if f1_score < 1.0 or len(prediction_examples) < 3:
+            _add_prediction_example(
+                prediction_examples,
+                pack_id,
+                task_title,
+                precision,
+                recall,
+                f1_score,
+                sorted(false_positives_set),
+                sorted(false_negatives_set),
+                sorted(true_positives),
+            )
 
-        # Collect examples of interesting patterns
-        if len(prediction_examples) < 5 and (precision < 0.75 or recall < 0.75):
-            prediction_examples.append({
-                "pack_id": pack_id,
-                "task_title": task_title or "unknown",
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "false_positives": sorted(false_positives_set)[:3],
-                "false_negatives": sorted(false_negatives_set)[:3],
-            })
+    avg_precision = _average(precision_sum, total_packs)
+    avg_recall = _average(recall_sum, total_packs)
+    avg_f1_score = _average(f1_sum, total_packs)
 
-    # Calculate averages
-    average_precision = _average(precision_sum, total_packs)
-    average_recall = _average(recall_sum, total_packs)
-    average_f1 = _average(f1_sum, total_packs)
-
-    # Format commonly missed categories
-    commonly_missed = [
-        {"category": category, "count": count}
-        for category, count in missed_categories.most_common(5)
-    ]
+    # Sort missed categories by frequency
+    commonly_missed_categories = sorted(
+        [{"category": cat, "count": count} for cat, count in missed_categories.items()],
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:5]
 
     return {
         "total_packs": total_packs,
-        "perfect_predictions": perfect_predictions,
-        "average_precision": average_precision,
-        "average_recall": average_recall,
-        "average_f1": average_f1,
+        "avg_precision": avg_precision,
+        "avg_recall": avg_recall,
+        "avg_f1_score": avg_f1_score,
+        "perfect_predictions_count": perfect_predictions_count,
         "total_false_positives": total_false_positives,
         "total_false_negatives": total_false_negatives,
-        "commonly_missed_categories": commonly_missed,
-        "prediction_examples": prediction_examples,
+        "commonly_missed_categories": commonly_missed_categories,
+        "prediction_examples": prediction_examples[:5],
     }
 
 
@@ -156,8 +154,10 @@ def _string(value: object) -> str:
 def _normalize_files(value: object) -> list[str]:
     """Normalize file list, handling various input types."""
     if isinstance(value, str):
+        # Single file as string
         files = [value]
     elif isinstance(value, (list, tuple)):
+        # List or tuple of files
         files = [f for f in value if isinstance(f, str)]
     else:
         return []
@@ -168,9 +168,9 @@ def _normalize_files(value: object) -> list[str]:
         file = file.strip()
         if not file:
             continue
-        # Convert backslashes to forward slashes
+        # Convert backslashes to forward slashes for Windows paths
         file = file.replace("\\", "/")
-        # Remove leading ./
+        # Remove leading ./ if present
         if file.startswith("./"):
             file = file[2:]
         normalized.append(file)
@@ -181,72 +181,89 @@ def _normalize_files(value: object) -> list[str]:
 def _calculate_precision(true_positives: int, total_expected: int) -> float:
     """Calculate precision: TP / (TP + FP) = TP / total_expected.
 
-    Precision measures: Of all expected files, what percentage were actually changed?
-    Returns 1.0 if no files expected (no false predictions possible).
+    Precision measures what percentage of expected files were actually modified.
+    Returns 1.0 if no files expected (edge case).
     """
-    if total_expected <= 0:
+    if total_expected == 0:
         return 1.0
     return round(true_positives / total_expected, 3)
 
 
-def _calculate_recall(true_positives: int, total_changed: int) -> float:
-    """Calculate recall: TP / (TP + FN) = TP / total_changed.
+def _calculate_recall(true_positives: int, total_actual: int) -> float:
+    """Calculate recall: TP / (TP + FN) = TP / total_actual.
 
-    Recall measures: Of all changed files, what percentage were in expected list?
-    Returns 1.0 if no files changed (no files missed).
+    Recall measures what percentage of actually modified files were expected.
+    Returns 1.0 if no files modified (edge case).
     """
-    if total_changed <= 0:
+    if total_actual == 0:
         return 1.0
-    return round(true_positives / total_changed, 3)
+    return round(true_positives / total_actual, 3)
 
 
-def _calculate_f1(precision: float, recall: float) -> float:
-    """Calculate F1 score: 2 * (precision * recall) / (precision + recall).
+def _calculate_f1_score(precision: float, recall: float) -> float:
+    """Calculate F1 score: harmonic mean of precision and recall.
 
-    F1 is the harmonic mean of precision and recall.
-    Returns 0.0 if both precision and recall are 0.
+    F1 = 2 * (precision * recall) / (precision + recall)
+    Returns 0.0 if both precision and recall are 0.0.
     """
-    if precision + recall <= 0:
+    if precision + recall == 0.0:
         return 0.0
     return round(2 * (precision * recall) / (precision + recall), 3)
 
 
 def _categorize_file(file_path: str) -> str:
-    """Categorize a file based on path patterns.
+    """Categorize file by type for missed file analysis.
 
     Categories:
     - test: Test files
     - config: Configuration files
     - types: Type definition files
     - docs: Documentation files
-    - source: Regular source code files
+    - other: Other files
     """
-    path = Path(file_path)
-    name = path.name.lower()
-    parts = [p.lower() for p in path.parts]
+    file_lower = file_path.lower()
 
-    # Test files
-    if "test" in parts or name.startswith("test_") or name.endswith("_test.py"):
+    if "test" in file_lower or file_lower.endswith("_test.py"):
         return "test"
-
-    # Config files
-    config_patterns = [
-        "config", ".json", ".yaml", ".yml", ".toml", ".ini",
-        "package.json", "tsconfig", "pyproject", "setup.py"
-    ]
-    if any(pattern in name for pattern in config_patterns):
+    elif any(
+        file_lower.endswith(ext)
+        for ext in [".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".config"]
+    ):
         return "config"
-
-    # Type definition files
-    if name.endswith(".d.ts") or "types" in parts or name.endswith("_types.py"):
+    elif file_lower.endswith((".d.ts", ".pyi")) or "/types/" in file_lower:
         return "types"
-
-    # Documentation
-    if name.endswith(".md") or "docs" in parts or name == "readme":
+    elif any(
+        file_lower.endswith(ext)
+        for ext in [".md", ".rst", ".txt", ".adoc"]
+    ):
         return "docs"
+    else:
+        return "other"
 
-    # Default to source
-    return "source"
+
+def _add_prediction_example(
+    examples: list[dict[str, Any]],
+    pack_id: str,
+    task_title: str,
+    precision: float,
+    recall: float,
+    f1_score: float,
+    false_positives: list[str],
+    false_negatives: list[str],
+    true_positives: list[str],
+) -> None:
+    """Add a prediction example if we have fewer than 5."""
+    if len(examples) < 5:
+        examples.append({
+            "pack_id": pack_id,
+            "task_title": task_title or "unknown",
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1_score,
+            "false_positives": false_positives[:5],  # Limit to 5 files
+            "false_negatives": false_negatives[:5],  # Limit to 5 files
+            "true_positives_count": len(true_positives),
+        })
 
 
 def _average(total: float, count: int) -> float:

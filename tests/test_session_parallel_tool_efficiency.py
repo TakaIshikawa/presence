@@ -2,450 +2,615 @@
 
 import pytest
 
-from synthesis.session_parallel_tool_efficiency import analyze_session_parallel_tool_efficiency
+from synthesis.session_parallel_tool_efficiency import (
+    analyze_session_parallel_tool_efficiency,
+    _detect_missed_opportunities,
+)
 
 
 class TestAnalyzeSessionParallelToolEfficiency:
     """Test main analyzer function."""
 
-    def test_empty_session_returns_zeroed_metrics(self):
-        """Verify empty session returns zero metrics."""
+    def test_empty_input_returns_zeroed_metrics(self):
+        """Verify empty input returns zero metrics."""
         result = analyze_session_parallel_tool_efficiency([])
 
-        assert result["total_turns"] == 0
-        assert result["turns_with_tool_calls"] == 0
-        assert result["parallel_turns"] == 0
-        assert result["sequential_turns"] == 0
+        assert result["total_messages"] == 0
+        assert result["messages_with_parallel_calls"] == 0
         assert result["parallelization_rate"] == 0.0
-        assert result["total_parallel_groups"] == 0
-        assert result["average_group_size"] == 0.0
-        assert result["max_group_size"] == 0
-        assert result["common_parallel_patterns"] == []
-        assert result["missed_opportunities"] == 0
+        assert result["avg_parallel_group_size"] == 0.0
+        assert result["total_parallel_calls"] == 0
+        assert result["parallel_patterns"] == []
+        assert result["missed_opportunities"] == []
+        assert result["parallel_success_rate"] == 100.0  # Edge case
+        assert result["efficiency_score"] == 0.0
 
     def test_none_input_treated_as_empty_list(self):
         """Verify None input is treated as empty list."""
         result = analyze_session_parallel_tool_efficiency(None)
-        assert result["total_turns"] == 0
+        assert result["total_messages"] == 0
 
     def test_invalid_input_type_raises_error(self):
         """Verify non-list input raises ValueError."""
         with pytest.raises(ValueError, match="records must be a list"):
             analyze_session_parallel_tool_efficiency("not a list")
 
-    def test_single_tool_call_is_sequential(self):
-        """Verify single tool call is counted as sequential."""
+    def test_single_sequential_call_no_parallelization(self):
+        """Verify single sequential call shows no parallelization."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": None}
-                ]
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Read", "success": True}]
             }
         ])
 
-        assert result["total_turns"] == 1
-        assert result["turns_with_tool_calls"] == 1
-        assert result["parallel_turns"] == 0
-        assert result["sequential_turns"] == 1
+        assert result["total_messages"] == 1
+        assert result["messages_with_parallel_calls"] == 0
         assert result["parallelization_rate"] == 0.0
+        assert result["total_parallel_calls"] == 0
 
-    def test_parallel_tool_calls_detected(self):
-        """Verify parallel tool calls are detected correctly."""
+    def test_parallel_calls_detected(self):
+        """Verify parallel calls are detected."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
                 ]
             }
         ])
 
-        assert result["parallel_turns"] == 1
-        assert result["sequential_turns"] == 0
+        assert result["messages_with_parallel_calls"] == 1
+        assert result["total_parallel_calls"] == 2
         assert result["parallelization_rate"] == 100.0
-        assert result["total_parallel_groups"] == 1
-        assert result["average_group_size"] == 2.0
-        assert result["max_group_size"] == 2
+        assert result["avg_parallel_group_size"] == 2.0
 
-    def test_multiple_parallel_groups_in_single_turn(self):
-        """Verify multiple parallel groups in one turn."""
+    def test_mixed_sequential_and_parallel(self):
+        """Verify mixed sequential and parallel calls calculated correctly."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Read", "success": True}]
+            },
+            {
+                "message_index": 2,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Edit", "parallel_group_id": 1},
-                    {"tool_name": "Edit", "parallel_group_id": 1},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
+                ]
+            },
+        ])
+
+        # 3 total calls, 2 in parallel -> 66.67% parallelization rate
+        assert result["total_messages"] == 2
+        assert result["messages_with_parallel_calls"] == 1
+        assert result["total_parallel_calls"] == 2
+        assert result["parallelization_rate"] == 66.67
+
+    def test_parallel_patterns_tracked(self):
+        """Verify parallel patterns are tracked."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
                 ]
             }
         ])
 
-        assert result["parallel_turns"] == 1
-        assert result["total_parallel_groups"] == 2
-        assert result["average_group_size"] == 2.0
+        patterns = result["parallel_patterns"]
+        assert len(patterns) == 1
+        assert patterns[0]["tools"] == ["Read", "Read"]
+        assert patterns[0]["count"] == 1
 
-    def test_sequential_tool_calls_no_parallel(self):
-        """Verify sequential tool calls without parallel groups."""
+    def test_parallel_patterns_sorted(self):
+        """Verify parallel patterns are sorted by tools (alphabetically)."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": None},
-                    {"tool_name": "Edit", "parallel_group_id": None},
+                    {"tool_name": "Edit"},
+                    {"tool_name": "Bash"},
+                    {"tool_name": "Read"},
                 ]
             }
         ])
 
-        assert result["parallel_turns"] == 0
-        assert result["sequential_turns"] == 1
-        assert result["total_parallel_groups"] == 0
+        patterns = result["parallel_patterns"]
+        # Tools should be sorted alphabetically
+        assert patterns[0]["tools"] == ["Bash", "Edit", "Read"]
 
-    def test_missed_opportunity_detected(self):
-        """Verify missed parallelization opportunity is detected."""
+    def test_parallel_patterns_counted(self):
+        """Verify parallel patterns are counted correctly."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": None},
-                    {"tool_name": "Read", "parallel_group_id": None},
-                ]
-            }
-        ])
-
-        assert result["missed_opportunities"] == 1
-        assert result["sequential_turns"] == 1
-
-    def test_common_parallel_patterns_tracked(self):
-        """Verify common parallel patterns are tracked."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Grep", "parallel_group_id": 0},
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
                 ]
             },
             {
-                "turn_index": 1,
+                "message_index": 2,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Grep", "parallel_group_id": 0},
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
+                ]
+            },
+        ])
+
+        patterns = result["parallel_patterns"]
+        assert patterns[0]["count"] == 2
+
+    def test_parallel_success_rate_calculated(self):
+        """Verify parallel success rate is calculated correctly."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": False},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
                 ]
             }
         ])
 
-        assert len(result["common_parallel_patterns"]) == 1
-        pattern = result["common_parallel_patterns"][0]
-        assert set(pattern["tools"]) == {"Read", "Grep"}
-        assert pattern["count"] == 2
+        # 3 out of 4 succeeded = 75%
+        assert result["parallel_success_rate"] == 75.0
 
-    def test_mixed_parallel_and_sequential_turns(self):
-        """Verify sessions with mixed parallel and sequential turns."""
+    def test_parallel_success_rate_default_true(self):
+        """Verify success defaults to True when not specified."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
+                ]
+            }
+        ])
+
+        # Both should count as successful
+        assert result["parallel_success_rate"] == 100.0
+
+    def test_avg_parallel_group_size_calculated(self):
+        """Verify average parallel group size is calculated correctly."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
                 ]
             },
             {
-                "turn_index": 1,
+                "message_index": 2,
                 "tool_calls": [
-                    {"tool_name": "Edit", "parallel_group_id": None},
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
+                    {"tool_name": "Read"},
+                ]
+            },
+        ])
+
+        # Average of 2 and 4 = 3.0
+        assert result["avg_parallel_group_size"] == 3.0
+
+    def test_efficiency_score_calculated(self):
+        """Verify efficiency score is calculated."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
                 ]
             }
         ])
 
-        assert result["parallel_turns"] == 1
-        assert result["sequential_turns"] == 1
-        assert result["parallelization_rate"] == 50.0
+        # Should have non-zero efficiency score
+        assert result["efficiency_score"] > 0.0
+        assert result["efficiency_score"] <= 100.0
 
-    def test_large_parallel_group(self):
-        """Verify large parallel groups are tracked."""
+    def test_efficiency_score_perfect_session(self):
+        """Verify efficiency score for perfect parallelization."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
                 ]
             }
         ])
 
-        assert result["max_group_size"] == 5
-        assert result["average_group_size"] == 5.0
+        # Perfect: 100% parallelization, group size 5, 100% success
+        # Score = 100 * 0.5 + min(5/5, 1) * 30 + 100 * 0.2 = 50 + 30 + 20 = 100
+        assert result["efficiency_score"] == 100.0
 
-    def test_turns_without_tool_calls_ignored(self):
-        """Verify turns without tool calls are excluded from metrics."""
+    def test_missed_opportunity_consecutive_reads(self):
+        """Verify missed opportunity for consecutive reads."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
-                "tool_calls": []
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Read"}]
             },
             {
-                "turn_index": 1,
-                "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": None}
-                ]
-            }
+                "message_index": 2,
+                "tool_calls": [{"tool_name": "Read"}]
+            },
         ])
 
-        assert result["total_turns"] == 2
-        assert result["turns_with_tool_calls"] == 1
+        opportunities = result["missed_opportunities"]
+        assert len(opportunities) > 0
+        assert opportunities[0]["type"] == "consecutive_read"
+        assert opportunities[0]["count"] == 2
+
+    def test_missed_opportunity_consecutive_greps(self):
+        """Verify missed opportunity for consecutive greps."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Grep"}]
+            },
+            {
+                "message_index": 2,
+                "tool_calls": [{"tool_name": "Grep"}]
+            },
+        ])
+
+        opportunities = result["missed_opportunities"]
+        assert any(opp["type"] == "consecutive_grep" for opp in opportunities)
+
+    def test_no_missed_opportunity_non_adjacent_messages(self):
+        """Verify non-adjacent messages don't trigger missed opportunities."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Read"}]
+            },
+            {
+                "message_index": 3,  # Skipped message 2
+                "tool_calls": [{"tool_name": "Read"}]
+            },
+        ])
+
+        # Should not detect opportunity since messages aren't adjacent
+        opportunities = result["missed_opportunities"]
+        assert len(opportunities) == 0
+
+    def test_no_missed_opportunity_different_tools(self):
+        """Verify different tools don't trigger missed opportunities."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Read"}]
+            },
+            {
+                "message_index": 2,
+                "tool_calls": [{"tool_name": "Edit"}]
+            },
+        ])
+
+        # Different tools shouldn't trigger missed opportunity
+        opportunities = result["missed_opportunities"]
+        assert len(opportunities) == 0
+
+    def test_no_missed_opportunity_for_non_parallelizable_tools(self):
+        """Verify non-parallelizable tools don't trigger missed opportunities."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Edit"}]
+            },
+            {
+                "message_index": 2,
+                "tool_calls": [{"tool_name": "Edit"}]
+            },
+        ])
+
+        # Edit calls typically depend on each other
+        opportunities = result["missed_opportunities"]
+        assert len(opportunities) == 0
+
+    def test_missed_opportunities_limited_to_ten(self):
+        """Verify missed opportunities are limited to 10."""
+        # Create many consecutive reads
+        records = [
+            {
+                "message_index": i,
+                "tool_calls": [{"tool_name": "Read"}]
+            }
+            for i in range(30)
+        ]
+
+        result = analyze_session_parallel_tool_efficiency(records)
+        assert len(result["missed_opportunities"]) <= 10
+
+    def test_parallel_patterns_limited_to_ten(self):
+        """Verify parallel patterns are limited to 10."""
+        # Create many different parallel patterns
+        records = []
+        for i in range(20):
+            records.append({
+                "message_index": i,
+                "tool_calls": [
+                    {"tool_name": f"Tool{i}A"},
+                    {"tool_name": f"Tool{i}B"},
+                ]
+            })
+
+        result = analyze_session_parallel_tool_efficiency(records)
+        assert len(result["parallel_patterns"]) <= 10
 
     def test_malformed_record_skipped(self):
         """Verify non-dict records are skipped."""
         result = analyze_session_parallel_tool_efficiency([
             "not a dict",
             {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": None}
-                ]
-            }
-        ])
-
-        assert result["total_turns"] == 2
-        assert result["turns_with_tool_calls"] == 1
-
-    def test_backward_compat_tool_call_count(self):
-        """Verify backward compatibility with tool_call_count format."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_call_count": 3,
-                "is_parallel": True,
-            }
-        ])
-
-        assert result["parallel_turns"] == 1
-        assert result["total_parallel_groups"] == 1
-        assert result["average_group_size"] == 3.0
-
-    def test_backward_compat_sequential_calls(self):
-        """Verify backward compatibility for sequential calls."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_call_count": 3,
-                "is_parallel": False,
-            }
-        ])
-
-        assert result["parallel_turns"] == 0
-        assert result["sequential_turns"] == 1
-
-    def test_parallelizable_tools_detected(self):
-        """Verify parallelizable tool patterns are detected."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "Grep", "parallel_group_id": None},
-                    {"tool_name": "Glob", "parallel_group_id": None},
-                ]
-            }
-        ])
-
-        assert result["missed_opportunities"] == 1
-
-    def test_non_parallelizable_tools_not_flagged(self):
-        """Verify non-parallelizable tool sequences aren't flagged."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": None},
-                    {"tool_name": "Edit", "parallel_group_id": None},
-                ]
-            }
-        ])
-
-        assert result["missed_opportunities"] == 0
-
-    def test_multiple_distinct_parallel_patterns(self):
-        """Verify multiple different parallel patterns are tracked."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                ]
+                "message_index": 1,
+                "tool_calls": [{"tool_name": "Read"}]
             },
-            {
-                "turn_index": 1,
-                "tool_calls": [
-                    {"tool_name": "Grep", "parallel_group_id": 0},
-                    {"tool_name": "Glob", "parallel_group_id": 0},
-                ]
-            }
         ])
 
-        assert len(result["common_parallel_patterns"]) == 2
+        assert result["total_messages"] == 1
 
-    def test_pattern_normalization(self):
-        """Verify parallel patterns are normalized (sorted)."""
+    def test_missing_tool_calls_skipped(self):
+        """Verify records without tool_calls are skipped."""
+        result = analyze_session_parallel_tool_efficiency([
+            {"message_index": 1},
+            {
+                "message_index": 2,
+                "tool_calls": [{"tool_name": "Read"}]
+            },
+        ])
+
+        assert result["total_messages"] == 2  # Counted but no tool calls
+
+    def test_empty_tool_calls_list(self):
+        """Verify records with empty tool_calls list."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "Grep", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                ]
-            },
-            {
-                "turn_index": 1,
-                "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Grep", "parallel_group_id": 0},
-                ]
+                "message_index": 1,
+                "tool_calls": []
             }
         ])
 
-        # Both should be counted as same pattern
-        assert len(result["common_parallel_patterns"]) == 1
-        assert result["common_parallel_patterns"][0]["count"] == 2
+        assert result["total_messages"] == 1
+        assert result["messages_with_parallel_calls"] == 0
+
+    def test_non_list_tool_calls_skipped(self):
+        """Verify non-list tool_calls are skipped."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": "not a list"
+            }
+        ])
+
+        assert result["total_messages"] == 0  # Skipped
+
+
+class TestDetectMissedOpportunities:
+    """Test missed opportunity detection helper."""
+
+    def test_empty_input_returns_empty(self):
+        """Verify empty input returns no opportunities."""
+        opportunities = _detect_missed_opportunities([])
+        assert opportunities == []
+
+    def test_consecutive_reads_detected(self):
+        """Verify consecutive reads are detected."""
+        calls = [
+            {"message_index": 1, "tool_name": "Read"},
+            {"message_index": 2, "tool_name": "Read"},
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 1
+        assert opportunities[0]["type"] == "consecutive_read"
+        assert opportunities[0]["count"] == 2
+
+    def test_consecutive_greps_detected(self):
+        """Verify consecutive greps are detected."""
+        calls = [
+            {"message_index": 1, "tool_name": "Grep"},
+            {"message_index": 2, "tool_name": "Grep"},
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 1
+        assert opportunities[0]["type"] == "consecutive_grep"
+
+    def test_consecutive_globs_detected(self):
+        """Verify consecutive globs are detected."""
+        calls = [
+            {"message_index": 1, "tool_name": "Glob"},
+            {"message_index": 2, "tool_name": "Glob"},
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 1
+        assert opportunities[0]["type"] == "consecutive_glob"
+
+    def test_three_consecutive_reads_detected(self):
+        """Verify three consecutive reads are detected."""
+        calls = [
+            {"message_index": 1, "tool_name": "Read"},
+            {"message_index": 2, "tool_name": "Read"},
+            {"message_index": 3, "tool_name": "Read"},
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 1
+        assert opportunities[0]["count"] == 3
+
+    def test_non_adjacent_messages_not_detected(self):
+        """Verify non-adjacent messages don't trigger detection."""
+        calls = [
+            {"message_index": 1, "tool_name": "Read"},
+            {"message_index": 3, "tool_name": "Read"},  # Skipped 2
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 0
+
+    def test_different_tools_not_detected(self):
+        """Verify different tools don't trigger detection."""
+        calls = [
+            {"message_index": 1, "tool_name": "Read"},
+            {"message_index": 2, "tool_name": "Edit"},
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 0
+
+    def test_non_parallelizable_tools_not_detected(self):
+        """Verify non-parallelizable tools don't trigger detection."""
+        calls = [
+            {"message_index": 1, "tool_name": "Edit"},
+            {"message_index": 2, "tool_name": "Edit"},
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 0
+
+    def test_single_call_not_detected(self):
+        """Verify single call doesn't trigger detection."""
+        calls = [
+            {"message_index": 1, "tool_name": "Read"},
+        ]
+        opportunities = _detect_missed_opportunities(calls)
+
+        assert len(opportunities) == 0
+
+
+class TestIntegrationScenarios:
+    """Test realistic integration scenarios."""
+
+    def test_fully_sequential_session(self):
+        """Simulate fully sequential session with no parallelization."""
+        result = analyze_session_parallel_tool_efficiency([
+            {"message_index": i, "tool_calls": [{"tool_name": "Read"}]}
+            for i in range(10)
+        ])
+
+        assert result["parallelization_rate"] == 0.0
+        assert result["messages_with_parallel_calls"] == 0
+        # Should detect missed opportunities
+        assert len(result["missed_opportunities"]) > 0
 
     def test_fully_parallel_session(self):
-        """Verify session with all parallel tool calls."""
+        """Simulate fully parallel session."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                ]
-            },
-            {
-                "turn_index": 1,
-                "tool_calls": [
-                    {"tool_name": "Grep", "parallel_group_id": 0},
-                    {"tool_name": "Grep", "parallel_group_id": 0},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
                 ]
             }
         ])
 
         assert result["parallelization_rate"] == 100.0
-        assert result["sequential_turns"] == 0
+        assert result["messages_with_parallel_calls"] == 1
+        assert result["missed_opportunities"] == []
 
-    def test_fully_sequential_session(self):
-        """Verify session with only sequential tool calls."""
+    def test_mixed_session_with_opportunities(self):
+        """Simulate mixed session with both parallel and missed opportunities."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": None},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
                 ]
             },
             {
-                "turn_index": 1,
-                "tool_calls": [
-                    {"tool_name": "Edit", "parallel_group_id": None},
-                ]
-            }
+                "message_index": 2,
+                "tool_calls": [{"tool_name": "Edit"}]
+            },
+            {
+                "message_index": 3,
+                "tool_calls": [{"tool_name": "Read"}]
+            },
+            {
+                "message_index": 4,
+                "tool_calls": [{"tool_name": "Read"}]
+            },
         ])
 
-        assert result["parallelization_rate"] == 0.0
-        assert result["parallel_turns"] == 0
+        # Should have parallelization
+        assert result["messages_with_parallel_calls"] == 1
+        # Should detect missed opportunity for messages 3-4
+        assert len(result["missed_opportunities"]) > 0
 
-    def test_average_group_size_calculation(self):
-        """Verify average group size is calculated correctly."""
+    def test_high_efficiency_session(self):
+        """Simulate high efficiency session with good parallelization."""
         result = analyze_session_parallel_tool_efficiency([
             {
-                "turn_index": 0,
+                "message_index": 1,
                 "tool_calls": [
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": True},
                 ]
             },
             {
-                "turn_index": 1,
+                "message_index": 2,
                 "tool_calls": [
-                    {"tool_name": "Grep", "parallel_group_id": 0},
-                    {"tool_name": "Grep", "parallel_group_id": 0},
-                    {"tool_name": "Grep", "parallel_group_id": 0},
-                    {"tool_name": "Grep", "parallel_group_id": 0},
+                    {"tool_name": "Edit", "success": True},
+                    {"tool_name": "Write", "success": True},
                 ]
-            }
+            },
         ])
 
-        # (2 + 4) / 2 = 3.0
-        assert result["average_group_size"] == 3.0
+        # High parallelization rate and success
+        assert result["parallelization_rate"] == 100.0
+        assert result["parallel_success_rate"] == 100.0
+        assert result["efficiency_score"] > 80.0
 
-    def test_common_patterns_limited_to_five(self):
-        """Verify common patterns list is capped at 5."""
-        records = []
-        for i in range(10):
-            records.append({
-                "turn_index": i,
-                "tool_calls": [
-                    {"tool_name": f"Tool{i}", "parallel_group_id": 0},
-                    {"tool_name": f"Helper{i}", "parallel_group_id": 0},
-                ]
-            })
-
-        result = analyze_session_parallel_tool_efficiency(records)
-
-        assert len(result["common_parallel_patterns"]) <= 5
-
-    def test_webfetch_parallelizable(self):
-        """Verify WebFetch is recognized as parallelizable."""
+    def test_low_efficiency_session(self):
+        """Simulate low efficiency session with poor parallelization."""
         result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "WebFetch", "parallel_group_id": None},
-                    {"tool_name": "WebFetch", "parallel_group_id": None},
-                ]
-            }
+            {"message_index": i, "tool_calls": [{"tool_name": "Read"}]}
+            for i in range(10)
         ])
 
-        assert result["missed_opportunities"] == 1
-
-    def test_case_insensitive_tool_matching(self):
-        """Verify tool name matching is case-insensitive."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"tool_name": "READ", "parallel_group_id": None},
-                    {"tool_name": "read", "parallel_group_id": None},
-                ]
-            }
-        ])
-
-        assert result["missed_opportunities"] == 1
-
-    def test_tool_calls_without_tool_name_ignored(self):
-        """Verify tool calls without tool_name are handled gracefully."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": [
-                    {"parallel_group_id": 0},
-                    {"tool_name": "Read", "parallel_group_id": 0},
-                ]
-            }
-        ])
-
-        # Should still process the valid tool call
-        assert result["turns_with_tool_calls"] == 1
-
-    def test_zero_denominator_handled_gracefully(self):
-        """Verify zero denominator in percentage calculation."""
-        result = analyze_session_parallel_tool_efficiency([
-            {
-                "turn_index": 0,
-                "tool_calls": []
-            }
-        ])
-
+        # No parallelization
         assert result["parallelization_rate"] == 0.0
+        assert result["efficiency_score"] < 20.0
+
+    def test_empty_session(self):
+        """Simulate empty session."""
+        result = analyze_session_parallel_tool_efficiency([])
+
+        assert result["total_messages"] == 0
+        assert result["efficiency_score"] == 0.0
+
+    def test_session_with_failures(self):
+        """Simulate session with some parallel call failures."""
+        result = analyze_session_parallel_tool_efficiency([
+            {
+                "message_index": 1,
+                "tool_calls": [
+                    {"tool_name": "Read", "success": True},
+                    {"tool_name": "Read", "success": False},
+                    {"tool_name": "Read", "success": False},
+                    {"tool_name": "Read", "success": True},
+                ]
+            }
+        ])
+
+        # 50% success rate
+        assert result["parallel_success_rate"] == 50.0
+        # Efficiency should be impacted
+        assert result["efficiency_score"] < 100.0

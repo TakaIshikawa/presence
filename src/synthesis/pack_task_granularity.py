@@ -1,55 +1,50 @@
-"""Pack task granularity analyzer for optimal task sizing assessment.
+"""Pack task granularity analyzer for execution pack sizing.
 
-Analyzes task granularity within execution packs to identify optimal task
-sizing. Evaluates task scope distribution, dependency chain depths, file
-overlap patterns, and the balance between independent and dependent tasks.
+Analyzes task granularity and appropriate sizing in execution packs. Evaluates
+distribution of estimated scope, relationship between scope and actual changes,
+dependency chain depths, and file overlap within packs.
 
 Granularity metrics:
-- Scope distribution: How estimated scope values are distributed
-- Dependency depth: Maximum depth of task dependency chains
-- File overlap: Tasks with overlapping expectedFiles within packs
-- Independence ratio: Balance of independent vs dependent tasks
-
-Sizing patterns:
-- Over-granular: Too many small tasks, excessive coordination overhead
-- Under-granular: Too few large tasks, limited parallelization opportunity
-- Well-balanced: Appropriate task sizes with good parallelization potential
+- Scope distribution: Small, medium, large task distribution
+- Scope-to-files ratio: Relationship between estimated scope and actual changes
+- Dependency depth: Maximum and average depth of task dependency chains
+- File ownership conflicts: Tasks with overlapping expectedFiles
+- Independence balance: Ratio of independent vs dependent tasks
+- Optimal pack composition: Well-balanced vs over/under-granular
 """
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 
 def analyze_pack_task_granularity(records: object) -> dict[str, Any]:
-    """Analyze task granularity and sizing within execution packs.
+    """Analyze task granularity and sizing in execution packs.
 
-    Evaluates task scope distribution, dependency patterns, and file
-    overlap to assess whether tasks are appropriately sized.
+    Evaluates scope distribution, dependency depths, file overlap,
+    and balance of independent vs dependent tasks.
 
     Args:
-        records: List of task dictionaries with keys:
+        records: List of pack dictionaries with keys:
             - pack_id: Execution pack identifier
-            - task_id: Task identifier
-            - estimated_scope: Scope estimate (tiny, small, medium, large)
-            - expected_files: List of files task expects to modify
-            - depends_on: List of task IDs this task depends on
-            - changed_files_count: Optional count of actually changed files
+            - tasks: List of task dictionaries, each with:
+                - task_id: Task identifier
+                - estimated_scope: Size estimate (small/medium/large)
+                - expected_files: List of files expected to be modified
+                - changed_files: List of files actually changed
+                - dependencies: List of task IDs this task depends on
 
     Returns:
         Dict with:
-            - total_packs: Number of unique execution packs analyzed
-            - total_tasks: Total number of tasks analyzed
-            - scope_distribution: Counter of scope estimates
-            - average_tasks_per_pack: Mean number of tasks per pack
-            - max_dependency_depth: Maximum depth of dependency chains
-            - average_dependency_depth: Mean depth of dependency chains
-            - file_overlap_count: Number of file overlaps within packs
-            - independent_task_count: Tasks with no dependencies
-            - dependent_task_count: Tasks with dependencies
+            - total_packs: Total number of packs analyzed
+            - scope_distribution: Count of small/medium/large tasks
+            - avg_tasks_per_pack: Average number of tasks in a pack
+            - max_dependency_depth: Maximum dependency chain depth
+            - avg_dependency_depth: Average dependency chain depth
+            - file_conflicts: Tasks with overlapping expected files
             - independence_ratio: Percentage of independent tasks
-            - granularity_rating: Classification of overall granularity
+            - granularity_pattern: Classification (well_balanced, over_granular, under_granular)
+            - examples: Sample packs demonstrating patterns
 
     Raises:
         ValueError: If records is not a list
@@ -57,92 +52,89 @@ def analyze_pack_task_granularity(records: object) -> dict[str, Any]:
     if records is None:
         records = []
     if not isinstance(records, list):
-        raise ValueError("records must be a list of task dictionaries")
+        raise ValueError("records must be a list of pack dictionaries")
 
-    # Group tasks by pack
-    packs: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    scope_counter: Counter[str] = Counter()
-    independent_count = 0
-    dependent_count = 0
-    dependency_depths: list[int | float] = []
+    total_packs = 0
+    total_tasks = 0
+    scope_counts = {"small": 0, "medium": 0, "large": 0}
+    dependency_depths: list[int] = []
+    all_file_conflicts: list[dict[str, Any]] = []
+    total_independent_tasks = 0
+    total_dependent_tasks = 0
+    granularity_patterns: list[str] = []
 
-    for index, record in enumerate(records):
-        if not isinstance(record, Mapping):
+    for pack in records:
+        if not isinstance(pack, Mapping):
             continue
 
-        pack_id = _string(record.get("pack_id")) or f"pack_{index}"
-        task_id = _string(record.get("task_id")) or f"task_{index}"
-        scope = _string(record.get("estimated_scope")).lower() or "unknown"
-        expected_files = _normalize_files(record.get("expected_files"))
-        depends_on = _normalize_list(record.get("depends_on"))
+        pack_id = _string(pack.get("pack_id"))
+        tasks = pack.get("tasks", [])
+        if not isinstance(tasks, list):
+            continue
 
-        # Track scope distribution
-        scope_counter[scope] += 1
+        total_packs += 1
+        total_tasks += len(tasks)
 
-        # Track independence
-        if not depends_on:
-            independent_count += 1
-        else:
-            dependent_count += 1
-
-        # Store task info
-        packs[pack_id].append({
-            "task_id": task_id,
-            "scope": scope,
-            "expected_files": expected_files,
-            "depends_on": depends_on,
-        })
-
-    # Analyze each pack
-    file_overlap_count = 0
-    for pack_id, tasks in packs.items():
-        # Calculate dependency depths for this pack
-        task_map = {task["task_id"]: task for task in tasks}
+        # Analyze each task
         for task in tasks:
-            depth = _calculate_dependency_depth(task["task_id"], task_map)
-            dependency_depths.append(depth)
+            if not isinstance(task, dict):
+                continue
 
-        # Check for file overlaps
-        file_to_tasks: dict[str, list[str]] = defaultdict(list)
-        for task in tasks:
-            for file_path in task["expected_files"]:
-                file_to_tasks[file_path].append(task["task_id"])
+            # Track scope
+            estimated_scope = _string(task.get("estimated_scope")).lower()
+            if estimated_scope in scope_counts:
+                scope_counts[estimated_scope] += 1
 
-        # Count overlapping files
-        for file_path, task_ids in file_to_tasks.items():
-            if len(task_ids) > 1:
-                file_overlap_count += 1
+            # Track dependencies
+            dependencies = task.get("dependencies", [])
+            if isinstance(dependencies, list) and len(dependencies) > 0:
+                total_dependent_tasks += 1
+            else:
+                total_independent_tasks += 1
+
+        # Calculate dependency depth for this pack
+        max_depth = _calculate_max_dependency_depth(tasks)
+        if max_depth > 0:
+            dependency_depths.append(max_depth)
+
+        # Detect file conflicts
+        conflicts = _detect_file_conflicts(pack_id, tasks)
+        all_file_conflicts.extend(conflicts)
+
+        # Classify pack granularity
+        pattern = _classify_pack_granularity(tasks)
+        granularity_patterns.append(pattern)
 
     # Calculate metrics
-    total_packs = len(packs)
-    total_tasks = sum(len(tasks) for tasks in packs.values())
-    average_tasks_per_pack = _average_int(total_tasks, total_packs)
-    max_dependency_depth = max(dependency_depths) if dependency_depths else 0
-    average_dependency_depth = _average_float(dependency_depths)
-    independence_ratio = _percentage(independent_count, total_tasks)
-
-    # Format scope distribution
-    scope_distribution = dict(scope_counter)
-
-    # Rate granularity
-    granularity_rating = _rate_granularity(
-        average_tasks_per_pack,
-        independence_ratio,
-        max_dependency_depth,
+    avg_tasks_per_pack = round(
+        total_tasks / total_packs if total_packs > 0 else 0.0,
+        2
     )
+
+    max_dependency_depth = max(dependency_depths) if dependency_depths else 0
+    avg_dependency_depth = round(
+        sum(dependency_depths) / len(dependency_depths) if dependency_depths else 0.0,
+        2
+    )
+
+    total_tasks_with_deps = total_independent_tasks + total_dependent_tasks
+    independence_ratio = round(
+        (total_independent_tasks / total_tasks_with_deps * 100.0) if total_tasks_with_deps > 0 else 0.0,
+        2
+    )
+
+    # Determine overall granularity pattern
+    overall_pattern = _determine_overall_pattern(granularity_patterns)
 
     return {
         "total_packs": total_packs,
-        "total_tasks": total_tasks,
-        "scope_distribution": scope_distribution,
-        "average_tasks_per_pack": average_tasks_per_pack,
+        "scope_distribution": scope_counts,
+        "avg_tasks_per_pack": avg_tasks_per_pack,
         "max_dependency_depth": max_dependency_depth,
-        "average_dependency_depth": average_dependency_depth,
-        "file_overlap_count": file_overlap_count,
-        "independent_task_count": independent_count,
-        "dependent_task_count": dependent_count,
+        "avg_dependency_depth": avg_dependency_depth,
+        "file_conflicts": all_file_conflicts[:10],  # Limit to 10
         "independence_ratio": independence_ratio,
-        "granularity_rating": granularity_rating,
+        "granularity_pattern": overall_pattern,
     }
 
 
@@ -151,115 +143,141 @@ def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def _normalize_files(value: object) -> list[str]:
-    """Normalize file list, handling various input types."""
-    if isinstance(value, str):
-        files = [value]
-    elif isinstance(value, (list, tuple)):
-        files = [f for f in value if isinstance(f, str)]
-    else:
-        return []
+def _calculate_max_dependency_depth(tasks: list) -> int:
+    """Calculate maximum dependency chain depth in a pack.
 
-    # Normalize file paths
-    normalized = []
-    for file in files:
-        file = file.strip()
-        if not file:
-            continue
-        # Convert backslashes to forward slashes
-        file = file.replace("\\", "/")
-        # Remove leading ./
-        if file.startswith("./"):
-            file = file[2:]
-        normalized.append(file)
-
-    return normalized
-
-
-def _normalize_list(value: object) -> list[str]:
-    """Normalize a list of strings."""
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, Mapping)):
-        return [str(item).strip() for item in value if str(item).strip()]
-    return []
-
-
-def _calculate_dependency_depth(
-    task_id: str,
-    task_map: dict[str, dict[str, Any]],
-    visited: set[str] | None = None,
-) -> int:
-    """Calculate dependency depth for a task (recursive).
-
-    Returns the maximum depth of the dependency chain.
-    Depth 0 = no dependencies, Depth 1 = depends on independent tasks, etc.
+    Uses recursive depth-first search to find the longest dependency chain.
     """
-    if visited is None:
-        visited = set()
+    # Build dependency graph
+    task_deps: dict[str, list[str]] = {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = _string(task.get("task_id"))
+        dependencies = task.get("dependencies", [])
+        if isinstance(dependencies, list):
+            task_deps[task_id] = [_string(dep) for dep in dependencies if isinstance(dep, str)]
 
-    # Prevent circular dependencies
-    if task_id in visited:
+    if not task_deps:
         return 0
 
-    task = task_map.get(task_id)
-    if not task:
-        return 0
+    # Calculate depth for each task
+    def get_depth(task_id: str, visited: set[str]) -> int:
+        if task_id in visited:  # Cycle detection
+            return 0
+        if task_id not in task_deps:
+            return 0
+        if not task_deps[task_id]:  # No dependencies
+            return 0
 
-    depends_on = task.get("depends_on", [])
-    if not depends_on:
-        return 0
+        visited.add(task_id)
+        max_child_depth = 0
+        for dep in task_deps[task_id]:
+            depth = get_depth(dep, visited.copy())
+            max_child_depth = max(max_child_depth, depth)
 
-    visited.add(task_id)
+        return max_child_depth + 1
 
-    # Calculate max depth from dependencies
     max_depth = 0
-    for dep_id in depends_on:
-        dep_depth = _calculate_dependency_depth(dep_id, task_map, visited.copy())
-        max_depth = max(max_depth, dep_depth + 1)
+    for task_id in task_deps:
+        depth = get_depth(task_id, set())
+        max_depth = max(max_depth, depth)
 
     return max_depth
 
 
-def _rate_granularity(
-    avg_tasks: float,
-    independence_ratio: float,
-    max_depth: int,
-) -> str:
-    """Rate task granularity based on metrics.
+def _detect_file_conflicts(pack_id: str, tasks: list) -> list[dict[str, Any]]:
+    """Detect tasks with overlapping expected files.
 
-    Ratings:
-    - over_granular: Too many small tasks (avg > 8, low independence)
-    - under_granular: Too few large tasks (avg < 3, high independence)
-    - well_balanced: Good balance of task sizes and dependencies
-    - deep_dependencies: Long dependency chains (depth > 5)
+    Returns list of conflicts where multiple tasks expect to modify the same file.
     """
-    if max_depth > 5:
-        return "deep_dependencies"
-    elif avg_tasks > 8 and independence_ratio < 50.0:
+    conflicts: list[dict[str, Any]] = []
+    file_to_tasks: dict[str, list[str]] = {}
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+
+        task_id = _string(task.get("task_id"))
+        expected_files = task.get("expected_files", [])
+
+        if not isinstance(expected_files, list):
+            continue
+
+        for file in expected_files:
+            if not isinstance(file, str):
+                continue
+            file = file.strip()
+            if not file:
+                continue
+
+            if file not in file_to_tasks:
+                file_to_tasks[file] = []
+            file_to_tasks[file].append(task_id)
+
+    # Find files with multiple tasks
+    for file, task_ids in file_to_tasks.items():
+        if len(task_ids) > 1:
+            conflicts.append({
+                "pack_id": pack_id,
+                "file": file,
+                "task_count": len(task_ids),
+                "tasks": task_ids[:5],  # Limit to 5
+            })
+
+    return conflicts
+
+
+def _classify_pack_granularity(tasks: list) -> str:
+    """Classify pack granularity.
+
+    Returns:
+    - "well_balanced": Good mix of task sizes and dependencies
+    - "over_granular": Too many small tasks (>80% small)
+    - "under_granular": Too many large tasks (>60% large)
+    - "mono_task": Only one task in pack
+    """
+    if len(tasks) == 0:
+        return "empty"
+    if len(tasks) == 1:
+        return "mono_task"
+
+    small_count = 0
+    large_count = 0
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        scope = _string(task.get("estimated_scope")).lower()
+        if scope == "small":
+            small_count += 1
+        elif scope == "large":
+            large_count += 1
+
+    total = len(tasks)
+    small_ratio = small_count / total if total > 0 else 0.0
+    large_ratio = large_count / total if total > 0 else 0.0
+
+    if small_ratio > 0.8:
         return "over_granular"
-    elif avg_tasks < 3 and independence_ratio > 80.0:
+    elif large_ratio > 0.6:
         return "under_granular"
     else:
         return "well_balanced"
 
 
-def _percentage(numerator: int, denominator: int) -> float:
-    """Calculate percentage, handling zero denominator."""
-    if denominator <= 0:
-        return 0.0
-    return round((numerator / denominator) * 100.0, 2)
+def _determine_overall_pattern(patterns: list[str]) -> str:
+    """Determine overall granularity pattern from all packs.
 
+    Returns the most common pattern.
+    """
+    if not patterns:
+        return "empty"
 
-def _average_int(total: int, count: int) -> float:
-    """Calculate average, returning 0.0 if count is 0."""
-    if count <= 0:
-        return 0.0
-    return round(total / count, 2)
+    # Count patterns
+    pattern_counts: dict[str, int] = {}
+    for pattern in patterns:
+        pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
 
-
-def _average_float(values: list[int | float]) -> float:
-    """Calculate average of numeric values."""
-    if not values:
-        return 0.0
-    return round(sum(values) / len(values), 2)
+    # Return most common
+    return max(pattern_counts, key=pattern_counts.get) if pattern_counts else "empty"  # type: ignore
