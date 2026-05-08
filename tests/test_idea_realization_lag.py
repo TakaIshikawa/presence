@@ -273,13 +273,27 @@ class TestAnalyzeIdeaRealizationLag:
 
     def test_invalid_chains_type_raises(self):
         """Verify invalid chains type raises ValueError."""
-        with pytest.raises(ValueError, match="must be a sequence"):
-            analyze_idea_realization_lag("not a list")  # type: ignore
+        with pytest.raises(ValueError, match="chains must be a list or tuple"):
+            analyze_idea_realization_lag("not a list")
 
     def test_invalid_chain_instance_raises(self):
         """Verify invalid chain instance raises ValueError."""
-        with pytest.raises(ValueError, match="IdeaRealizationChain instances"):
-            analyze_idea_realization_lag([{"not": "a chain"}])  # type: ignore
+        with pytest.raises(ValueError, match="only IdeaRealizationChain instances"):
+            analyze_idea_realization_lag([{"not": "a chain"}])
+
+    def test_empty_idea_id_raises(self):
+        """Verify idea_id must be a non-empty string."""
+        now = datetime.now(timezone.utc)
+        chain = IdeaRealizationChain("", now, None, None)
+        with pytest.raises(ValueError, match="idea_id must be a non-empty string"):
+            analyze_idea_realization_lag([chain])
+
+    def test_non_string_idea_id_raises(self):
+        """Verify idea_id must be a string."""
+        now = datetime.now(timezone.utc)
+        chain = IdeaRealizationChain(123, now, None, None)
+        with pytest.raises(ValueError, match="idea_id must be a non-empty string"):
+            analyze_idea_realization_lag([chain])
 
     def test_naive_captured_at_raises(self):
         """Verify naive datetime for captured_at raises ValueError."""
@@ -295,6 +309,48 @@ class TestAnalyzeIdeaRealizationLag:
         chain = IdeaRealizationChain("1", now, naive_dt, 1.0)
         with pytest.raises(ValueError, match="published_at must be timezone-aware"):
             analyze_idea_realization_lag([chain])
+
+    def test_published_before_captured_at_raises(self):
+        """Verify published_at cannot be earlier than captured_at."""
+        now = datetime.now(timezone.utc)
+        chain = IdeaRealizationChain("1", now, now - timedelta(days=1), 1.0)
+        with pytest.raises(ValueError, match="published_at must be on or after captured_at"):
+            analyze_idea_realization_lag([chain])
+
+    def test_unpublished_chain_with_lag_days_raises(self):
+        """Verify unpublished ideas cannot carry lag values."""
+        now = datetime.now(timezone.utc)
+        chain = IdeaRealizationChain("1", now, None, 1.0)
+        with pytest.raises(ValueError, match="lag_days must be None for unpublished ideas"):
+            analyze_idea_realization_lag([chain])
+
+    @pytest.mark.parametrize("lag_days", [None, -1.0, "1"])
+    def test_published_chain_with_invalid_lag_days_raises(self, lag_days):
+        """Verify published ideas require non-negative numeric lag values."""
+        now = datetime.now(timezone.utc)
+        chain = IdeaRealizationChain("1", now, now + timedelta(days=1), lag_days)
+        with pytest.raises(ValueError, match="lag_days must be a non-negative number"):
+            analyze_idea_realization_lag([chain])
+
+    @pytest.mark.parametrize(
+        ("observation_start", "observation_end", "message"),
+        [
+            (datetime.now(), None, "observation_start must be timezone-aware"),
+            (None, datetime.now(), "observation_end must be timezone-aware"),
+        ],
+    )
+    def test_naive_observation_window_datetimes_raise(
+        self, observation_start, observation_end, message
+    ):
+        """Verify explicit observation datetimes must be timezone-aware."""
+        with pytest.raises(ValueError, match=message):
+            analyze_idea_realization_lag([], observation_start, observation_end)
+
+    def test_reversed_observation_window_raises(self):
+        """Verify observation_end cannot precede observation_start."""
+        now = datetime.now(timezone.utc)
+        with pytest.raises(ValueError, match="observation_end must be on or after observation_start"):
+            analyze_idea_realization_lag([], now, now - timedelta(days=1))
 
     def test_all_orphaned(self):
         """Verify all orphaned ideas analysis."""
