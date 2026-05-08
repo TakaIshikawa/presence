@@ -1,5 +1,7 @@
 """Tests for session summary evidence analysis."""
 
+from typing import Any
+
 import pytest
 
 from synthesis.session_summary_evidence import SessionEvidence, analyze_session_summary_evidence
@@ -57,7 +59,10 @@ def test_command_mention_normalization_detects_test_command_family():
 
 
 def test_invalid_inputs_raise_value_error():
+    invalid_summary: Any = None
+    invalid_evidence: Any = object()
+
     with pytest.raises(ValueError, match="summary"):
-        analyze_session_summary_evidence(None, SessionEvidence())  # type: ignore[arg-type]
+        analyze_session_summary_evidence(invalid_summary, SessionEvidence())
     with pytest.raises(ValueError, match="SessionEvidence"):
-        analyze_session_summary_evidence("done", object())  # type: ignore[arg-type]
+        analyze_session_summary_evidence("done", invalid_evidence)
