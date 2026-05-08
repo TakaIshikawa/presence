@@ -563,6 +563,25 @@ class TestEdgeCases:
         assert result.velocity is not None
         assert result.velocity.observation_days == 30
 
+    def test_timezone_aware_observation_window_is_valid(self):
+        """Verify timezone-aware observation bounds are accepted."""
+        tz = timezone(timedelta(hours=9))
+        start = datetime(2026, 1, 1, 9, tzinfo=tz)
+        end = datetime(2026, 1, 8, 9, tzinfo=tz)
+        chains = [
+            IdeaRealizationChain(
+                "1",
+                start,
+                start + timedelta(days=2),
+                2.0,
+            ),
+        ]
+
+        result = analyze_idea_realization_lag(chains, start, end)
+
+        assert result.velocity is not None
+        assert result.velocity.observation_days == 7
+
     def test_large_sample_size(self):
         """Verify handling of large number of chains."""
         now = datetime.now(timezone.utc)

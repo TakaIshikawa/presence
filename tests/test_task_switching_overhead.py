@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
+from math import inf, nan
 
 from synthesis.task_switching_overhead import (
     TaskSwitch,
@@ -459,6 +460,36 @@ class TestValidation:
         """Verify negative session duration raises ValueError."""
         with pytest.raises(ValueError, match="session_duration_minutes must be positive"):
             analyze_task_switching_overhead([], -60.0)
+
+    @pytest.mark.parametrize("duration", ["60", nan, inf, -inf, True])
+    def test_invalid_session_duration_type_raises(self, duration):
+        """Verify session duration must be a finite number."""
+        with pytest.raises(ValueError, match="session_duration_minutes must be a finite number"):
+            analyze_task_switching_overhead([], duration)  # type: ignore[arg-type]
+
+    def test_out_of_order_switch_timestamps_raise(self):
+        """Verify switch timestamps must be chronological."""
+        now = datetime.now(timezone.utc)
+        switches = [
+            TaskSwitch("a", "b", now + timedelta(minutes=5)),
+            TaskSwitch("b", "c", now),
+        ]
+        with pytest.raises(ValueError, match="chronological order"):
+            analyze_task_switching_overhead(switches, 60.0)
+
+    @pytest.mark.parametrize(
+        "switch",
+        [
+            TaskSwitch("", "b", datetime.now(timezone.utc)),
+            TaskSwitch("  ", "b", datetime.now(timezone.utc)),
+            TaskSwitch("a", "", datetime.now(timezone.utc)),
+            TaskSwitch("a", "  ", datetime.now(timezone.utc)),
+        ],
+    )
+    def test_blank_task_labels_raise(self, switch):
+        """Verify task identifiers cannot be blank."""
+        with pytest.raises(ValueError, match="task must be a non-empty string"):
+            analyze_task_switching_overhead([switch], 60.0)
 
 
 class TestInsightGeneration:

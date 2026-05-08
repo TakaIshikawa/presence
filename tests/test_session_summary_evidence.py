@@ -58,6 +58,42 @@ def test_command_mention_normalization_detects_test_command_family():
     assert report.mentioned_commands == ("pytest tests/test_app.py",)
 
 
+@pytest.mark.parametrize(
+    ("summary", "command"),
+    [
+        (
+            "Ran python -m pytest tests/test_app.py after the changes.",
+            "python -m pytest tests/test_app.py",
+        ),
+        (
+            "Ran python -m pytest tests/test_app.py after the changes.",
+            "uv run python -m pytest tests/test_app.py",
+        ),
+        (
+            "Ran   uv   run   python   -m   pytest   tests/test_app.py.",
+            "uv run python -m pytest tests/test_app.py",
+        ),
+    ],
+)
+def test_pytest_alias_commands_match_same_target(summary, command):
+    report = analyze_session_summary_evidence(
+        summary,
+        SessionEvidence(commands=(command,)),
+    )
+
+    assert report.mentioned_commands == (command,)
+
+
+def test_different_test_command_target_remains_unmentioned():
+    report = analyze_session_summary_evidence(
+        "Ran pytest tests/test_other.py.",
+        SessionEvidence(commands=("uv run python -m pytest tests/test_app.py",)),
+    )
+
+    assert report.mentioned_commands == ()
+    assert "verification" in report.missing_evidence_categories
+
+
 def test_invalid_inputs_raise_value_error():
     invalid_summary: Any = None
     invalid_evidence: Any = object()

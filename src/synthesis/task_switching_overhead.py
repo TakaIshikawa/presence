@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import isfinite
+from numbers import Real
 from typing import Optional
 
 
@@ -94,17 +96,31 @@ def analyze_task_switching_overhead(
     if not isinstance(switches, list):
         raise ValueError("switches must be a list")
 
+    if (
+        not isinstance(session_duration_minutes, Real)
+        or isinstance(session_duration_minutes, bool)
+        or not isfinite(session_duration_minutes)
+    ):
+        raise ValueError("session_duration_minutes must be a finite number")
     if session_duration_minutes <= 0:
         raise ValueError("session_duration_minutes must be positive")
 
     # Validate switch instances
+    previous_timestamp: datetime | None = None
     for switch in switches:
         if not isinstance(switch, TaskSwitch):
             raise ValueError("All switches must be TaskSwitch instances")
+        if not isinstance(switch.from_task, str) or not switch.from_task.strip():
+            raise ValueError("from_task must be a non-empty string")
+        if not isinstance(switch.to_task, str) or not switch.to_task.strip():
+            raise ValueError("to_task must be a non-empty string")
         if switch.timestamp.tzinfo is None:
             raise ValueError("TaskSwitch timestamp must be timezone-aware")
+        if previous_timestamp is not None and switch.timestamp < previous_timestamp:
+            raise ValueError("TaskSwitch timestamps must be in chronological order")
         if switch.interval_minutes is not None and switch.interval_minutes < 0:
             raise ValueError("interval_minutes must be non-negative or None")
+        previous_timestamp = switch.timestamp
 
     # Handle no-switch case
     if not switches:

@@ -238,9 +238,9 @@ class TestCalculateReactivationRate:
     def test_all_references(self):
         """Verify all turns with references returns 100%."""
         turns = [
-            SessionTurn(0, 0, []),  # Can reference self
             SessionTurn(1, 0, []),
             SessionTurn(2, 1, []),
+            SessionTurn(3, 2, []),
         ]
         assert _calculate_reactivation_rate(turns) == 1.0
 
@@ -364,6 +364,48 @@ class TestAnalyzeSessionContextRetention:
         turn = SessionTurn(1, -1, [])
         with pytest.raises(ValueError, match="references_turn must be non-negative"):
             analyze_session_context_retention([turn])
+
+    def test_duplicate_turn_numbers_raise(self):
+        """Verify duplicate turn numbers are rejected."""
+        turns = [
+            SessionTurn(0, None, []),
+            SessionTurn(0, None, []),
+        ]
+        with pytest.raises(ValueError, match="turn_number values must be unique"):
+            analyze_session_context_retention(turns)
+
+    def test_unordered_turns_raise(self):
+        """Verify turns must be ordered by turn_number."""
+        turns = [
+            SessionTurn(1, None, []),
+            SessionTurn(0, None, []),
+        ]
+        with pytest.raises(ValueError, match="ordered by turn_number"):
+            analyze_session_context_retention(turns)
+
+    def test_self_reference_raises(self):
+        """Verify turns cannot reference themselves."""
+        turns = [SessionTurn(0, 0, [])]
+        with pytest.raises(ValueError, match="earlier turn"):
+            analyze_session_context_retention(turns)
+
+    def test_future_reference_raises(self):
+        """Verify turns cannot reference future turns."""
+        turns = [
+            SessionTurn(0, 1, []),
+            SessionTurn(1, None, []),
+        ]
+        with pytest.raises(ValueError, match="future turn"):
+            analyze_session_context_retention(turns)
+
+    def test_missing_reference_raises(self):
+        """Verify references must point to a turn present in the session."""
+        turns = [
+            SessionTurn(0, None, []),
+            SessionTurn(2, 1, []),
+        ]
+        with pytest.raises(ValueError, match="existing turn"):
+            analyze_session_context_retention(turns)
 
     def test_coherent_session(self):
         """Verify coherent session gets high score."""
@@ -507,8 +549,8 @@ class TestInsightGeneration:
     def test_high_reactivation_insight(self):
         """Verify high reactivation generates positive insight."""
         turns = [
-            SessionTurn(i, 0, [])
-            for i in range(10)
+            SessionTurn(0, None, []),
+            *[SessionTurn(i, 0, []) for i in range(1, 10)],
         ]
         result = analyze_session_context_retention(turns)
         insights_text = " ".join(result.insights).lower()
@@ -546,24 +588,6 @@ class TestEdgeCases:
         result = analyze_session_context_retention(turns)
         assert 0.0 <= result.coherence_score <= 100.0
         assert result.quality_tier in [TIER_COHERENT, TIER_MODERATE, TIER_FRAGMENTED, TIER_DISCONNECTED]
-
-    def test_self_reference(self):
-        """Verify turn can reference itself."""
-        turns = [
-            SessionTurn(0, 0, []),  # Self-reference
-        ]
-        result = analyze_session_context_retention(turns)
-        assert result.metrics.reactivation_rate == 1.0
-
-    def test_forward_reference_invalid(self):
-        """Verify forward references don't break analysis."""
-        # This shouldn't happen in practice but should be handled
-        turns = [
-            SessionTurn(0, 5, []),  # References future turn
-        ]
-        result = analyze_session_context_retention(turns)
-        # Should still produce valid result
-        assert isinstance(result, SessionContextRetention)
 
     def test_large_session(self):
         """Verify handling of large session."""

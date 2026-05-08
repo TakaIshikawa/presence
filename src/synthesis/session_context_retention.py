@@ -89,13 +89,32 @@ def analyze_session_context_retention(
         raise ValueError("turns must be a sequence (list or tuple)")
 
     # Validate turns
+    seen_turn_numbers: set[int] = set()
+    last_turn_number = -1
     for turn in turns:
         if not isinstance(turn, SessionTurn):
             raise ValueError("turns must contain SessionTurn instances")
         if turn.turn_number < 0:
             raise ValueError("turn_number must be non-negative")
+        if turn.turn_number in seen_turn_numbers:
+            raise ValueError("turn_number values must be unique")
+        if turn.turn_number <= last_turn_number:
+            raise ValueError("turns must be ordered by turn_number")
         if turn.references_turn is not None and turn.references_turn < 0:
             raise ValueError("references_turn must be non-negative or None")
+        seen_turn_numbers.add(turn.turn_number)
+        last_turn_number = turn.turn_number
+
+    available_turn_numbers = seen_turn_numbers
+    for turn in turns:
+        if turn.references_turn is None:
+            continue
+        if turn.references_turn == turn.turn_number:
+            raise ValueError("references_turn must point to an earlier turn")
+        if turn.references_turn > turn.turn_number:
+            raise ValueError("references_turn cannot point to a future turn")
+        if turn.references_turn not in available_turn_numbers:
+            raise ValueError("references_turn must point to an existing turn")
 
     # Handle empty session
     if not turns:
