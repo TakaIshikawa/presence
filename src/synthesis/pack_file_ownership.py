@@ -65,7 +65,16 @@ def _files(value: object) -> list[str]:
         values = [item for item in value if isinstance(item, str)]
     else:
         values = []
-    return ["/".join(item.strip().split()).strip("./") for item in values if item.strip()]
+    normalized = []
+    for item in values:
+        if not item.strip():
+            continue
+        # Convert backslashes to forward slashes for Windows paths
+        item = item.replace("\\", "/")
+        # Normalize whitespace and strip leading ./ or ./
+        item = "/".join(item.strip().split()).strip("./")
+        normalized.append(item)
+    return normalized
 
 
 def _task_id(record: Mapping[str, Any], index: int) -> str:
