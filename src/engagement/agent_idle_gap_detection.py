@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,11 +33,13 @@ def analyze_agent_idle_gaps(events: object, threshold_seconds: float = 300.0) ->
 
     normalized.sort(key=lambda item: item["timestamp"])
     gaps: list[dict[str, Any]] = []
+    label_counts: Counter[str] = Counter()
     durations: list[float] = []
     for previous, current in zip(normalized, normalized[1:]):
         duration = (current["timestamp"] - previous["timestamp"]).total_seconds()
         durations.append(duration)
         if duration > threshold_seconds:
+            label_counts[_gap_label(previous, current)] += 1
             gaps.append(
                 {
                     "start_event": _event_summary(previous),
@@ -54,6 +57,7 @@ def analyze_agent_idle_gaps(events: object, threshold_seconds: float = 300.0) ->
         "max_gap_seconds": round(max(durations), 3) if durations else 0.0,
         "average_gap_seconds": round(sum(durations) / len(durations), 3) if durations else 0.0,
         "flagged_gap_count": len(gaps),
+        "flagged_gap_label_counts": dict(sorted(label_counts.items())),
         "flagged_intervals": gaps,
     }
 
@@ -81,3 +85,7 @@ def _event_summary(event: dict[str, Any]) -> dict[str, Any]:
         "timestamp": event["timestamp"].isoformat(),
         "label": event["label"],
     }
+
+
+def _gap_label(start_event: dict[str, Any], end_event: dict[str, Any]) -> str:
+    return f"{start_event['label']} -> {end_event['label']}"

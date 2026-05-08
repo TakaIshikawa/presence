@@ -10,6 +10,8 @@ def test_independent_tasks_are_roots():
     assert report["edge_count"] == 0
     assert report["root_task_count"] == 2
     assert report["dependent_task_count"] == 0
+    assert report["dependency_depths"] == {"A": 0, "B": 0}
+    assert report["max_dependency_depth"] == 0
     assert not report["has_violations"]
 
 
@@ -27,12 +29,16 @@ def test_valid_dependency_chain_reports_edges():
     assert {"from": "B", "to": "C"} in report["edges"]
     assert report["root_task_count"] == 1
     assert report["dependent_task_count"] == 2
+    assert report["dependency_depths"] == {"A": 0, "B": 1, "C": 2}
+    assert report["max_dependency_depth"] == 2
 
 
 def test_missing_dependencies_are_reported():
     report = analyze_branch_task_dependency_graph([{"title": "A", "dependsOn": ["Missing"]}])
 
     assert report["missing_dependencies"] == [{"task": "A", "dependency": "Missing"}]
+    assert report["dependency_depths"] == {"A": 0}
+    assert report["max_dependency_depth"] == 0
     assert report["has_violations"]
 
 

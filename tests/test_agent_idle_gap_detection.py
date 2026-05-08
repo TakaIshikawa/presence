@@ -64,3 +64,31 @@ def test_configurable_threshold_controls_flags():
 
     assert analyze_agent_idle_gaps(events, threshold_seconds=60)["flagged_gap_count"] == 1
     assert analyze_agent_idle_gaps(events, threshold_seconds=180)["flagged_gap_count"] == 0
+
+
+def test_flagged_gap_label_counts_repeated_transitions():
+    report = analyze_agent_idle_gaps(
+        [
+            {"timestamp": "2026-01-01T00:00:00Z", "label": "tool"},
+            {"timestamp": "2026-01-01T00:10:00Z", "label": "assistant"},
+            {"timestamp": "2026-01-01T00:11:00Z", "label": "tool"},
+            {"timestamp": "2026-01-01T00:25:00Z", "label": "assistant"},
+        ],
+        threshold_seconds=300,
+    )
+
+    assert report["flagged_gap_count"] == 2
+    assert report["flagged_gap_label_counts"] == {"tool -> assistant": 2}
+
+
+def test_flagged_gap_label_counts_uses_empty_label_fallback_and_skips_unflagged():
+    report = analyze_agent_idle_gaps(
+        [
+            {"timestamp": "2026-01-01T00:00:00Z"},
+            {"timestamp": "2026-01-01T00:10:00Z", "label": "resume"},
+            {"timestamp": "2026-01-01T00:11:00Z"},
+        ],
+        threshold_seconds=300,
+    )
+
+    assert report["flagged_gap_label_counts"] == {" -> resume": 1}
