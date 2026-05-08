@@ -6,11 +6,7 @@ from typing import Any, Mapping
 
 
 def analyze_session_verification_evidence_freshness(records: object) -> dict[str, Any]:
-<<<<<<< HEAD
-    """Measure whether verification commands were run after the last edit they claim to validate."""
-=======
     """Measure whether verification commands were run after the last edit."""
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
     if records is None:
         records = []
     if not isinstance(records, list):
@@ -21,34 +17,6 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
     stale_verifications = 0
     missing_verifications = 0
     examples: list[dict[str, Any]] = []
-<<<<<<< HEAD
-    seen_artifacts: set[str] = set()
-
-    for record in records:
-        if not isinstance(record, Mapping):
-            raise ValueError("records must be a list of verification record dictionaries")
-
-        artifact_id = _string(record.get("artifact_id"))
-        if not artifact_id:
-            raise ValueError("artifact_id must be a non-empty string")
-
-        if artifact_id in seen_artifacts:
-            raise ValueError("duplicate artifact_id found in records")
-        seen_artifacts.add(artifact_id)
-
-        last_edit_turn = record.get("last_edit_turn")
-        verification_turn = record.get("verification_turn")
-        command = _string(record.get("command"))
-        status = _string(record.get("status"))
-
-        if not isinstance(last_edit_turn, int) or isinstance(last_edit_turn, bool):
-            raise ValueError("last_edit_turn must be an integer")
-        if last_edit_turn < 0:
-            raise ValueError("last_edit_turn must be non-negative")
-
-        if status and status not in ("pass", "fail", "skip"):
-            raise ValueError("status must be one of: pass, fail, skip, or empty")
-=======
 
     seen_artifacts: set[str] = set()
 
@@ -65,7 +33,6 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
         verification_turn = record.get("verification_turn")
         command = _string(record.get("command"))
         status = _status(record.get("status"), index)
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 
         total_artifacts += 1
 
@@ -73,27 +40,6 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
             missing_verifications += 1
             continue
 
-<<<<<<< HEAD
-        if not isinstance(verification_turn, int) or isinstance(verification_turn, bool):
-            raise ValueError("verification_turn must be an integer")
-        if verification_turn < 0:
-            raise ValueError("verification_turn must be non-negative")
-
-        if verification_turn >= last_edit_turn:
-            fresh_verifications += 1
-        else:
-            stale_verifications += 1
-            _example(
-                examples,
-                artifact_id,
-                last_edit_turn,
-                verification_turn,
-                command,
-                status,
-            )
-
-    freshness_rate = _percentage(fresh_verifications, total_artifacts, decimals=3)
-=======
         verification_turn_value = _turn(verification_turn, index, "verification_turn")
 
         if verification_turn_value < last_edit_turn:
@@ -103,7 +49,6 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
             fresh_verifications += 1
 
     freshness_rate = _freshness_rate(fresh_verifications, total_artifacts)
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 
     return {
         "total_artifacts": total_artifacts,
@@ -115,8 +60,6 @@ def analyze_session_verification_evidence_freshness(records: object) -> dict[str
     }
 
 
-<<<<<<< HEAD
-=======
 def _artifact_id(record: Mapping[str, Any], index: int) -> str:
     value = record.get("artifact_id")
     if not isinstance(value, str) or not value.strip():
@@ -144,7 +87,6 @@ def _status(value: object, index: int) -> str:
     return normalized
 
 
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -158,23 +100,6 @@ def _example(
     status: str,
 ) -> None:
     if len(examples) < 5:
-<<<<<<< HEAD
-        examples.append(
-            {
-                "artifact_id": artifact_id,
-                "last_edit_turn": last_edit_turn,
-                "verification_turn": verification_turn,
-                "command": command,
-                "status": status,
-            }
-        )
-
-
-def _percentage(numerator: int, denominator: int, decimals: int = 2) -> float:
-    if denominator <= 0:
-        return 0.0
-    return round((numerator / denominator) * 100.0, decimals)
-=======
         examples.append({
             "artifact_id": artifact_id,
             "last_edit_turn": last_edit_turn,
@@ -188,4 +113,3 @@ def _freshness_rate(fresh: int, total: int) -> float:
     if total <= 0:
         return 0.0
     return round((fresh / total) * 100.0, 3)
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD

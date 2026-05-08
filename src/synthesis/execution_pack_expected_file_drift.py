@@ -2,17 +2,6 @@
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-from typing import Any, Mapping
-
-
-def analyze_execution_pack_expected_file_drift(records: object) -> dict[str, Any]:
-    """Compare each task's expected_files with actual changed_files and report drift."""
-    if records is None:
-        records = []
-    if not isinstance(records, list):
-        raise ValueError("records must be a list of task dictionaries")
-=======
 from typing import Any, Iterable, Mapping
 
 
@@ -22,7 +11,6 @@ def analyze_execution_pack_expected_file_drift(records: object) -> dict[str, Any
         records = []
     if not isinstance(records, list):
         raise ValueError("records must be a list of task record dictionaries")
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 
     task_count = 0
     tasks_with_unexpected_files = 0
@@ -30,28 +18,6 @@ def analyze_execution_pack_expected_file_drift(records: object) -> dict[str, Any
     missing_expected_file_count = 0
     examples: list[dict[str, Any]] = []
 
-<<<<<<< HEAD
-    for record in records:
-        if not isinstance(record, Mapping):
-            raise ValueError("records must be a list of task dictionaries")
-
-        task_id = _string(record.get("task_id"))
-        if not task_id:
-            raise ValueError("task_id must be a non-empty string")
-
-        expected_files = _normalize_file_list(record.get("expected_files"))
-        changed_files = _normalize_file_list(record.get("changed_files"))
-
-        task_count += 1
-
-        unexpected_files = [f for f in changed_files if f not in expected_files]
-        missing_expected_files = [f for f in expected_files if f not in changed_files]
-
-        if unexpected_files or missing_expected_files:
-            tasks_with_unexpected_files += 1
-
-        unexpected_file_count += len(unexpected_files)
-=======
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
             raise ValueError(f"record at index {index} is not a dictionary")
@@ -75,7 +41,6 @@ def analyze_execution_pack_expected_file_drift(records: object) -> dict[str, Any
             tasks_with_unexpected_files += 1
             unexpected_file_count += len(unexpected_files)
 
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
         missing_expected_file_count += len(missing_expected_files)
 
         if unexpected_files or missing_expected_files:
@@ -93,29 +58,6 @@ def analyze_execution_pack_expected_file_drift(records: object) -> dict[str, Any
     }
 
 
-<<<<<<< HEAD
-def _string(value: object) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _normalize_file_list(value: object) -> set[str]:
-    """Normalize file paths into a deduplicated set."""
-    if value is None:
-        return set()
-
-    if not isinstance(value, (list, tuple)):
-        raise ValueError("expected_files and changed_files must be sequences")
-
-    normalized: set[str] = set()
-    for item in value:
-        if not isinstance(item, str):
-            raise ValueError("file paths must be strings")
-        path = item.strip()
-        if path:
-            normalized.add(path)
-
-    return normalized
-=======
 def _task_id(record: Mapping[str, Any]) -> str:
     value = record.get("task_id")
     return value.strip() if isinstance(value, str) and value.strip() else ""
@@ -138,7 +80,6 @@ def _file_list(value: object, index: int, field_name: str) -> list[str]:
                 seen.add(normalized)
         return result
     raise ValueError(f"record at index {index} has invalid {field_name} type")
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 
 
 def _example(
@@ -148,21 +89,11 @@ def _example(
     missing_expected_files: list[str],
 ) -> None:
     if len(examples) < 5:
-<<<<<<< HEAD
-        examples.append(
-            {
-                "task_id": task_id,
-                "unexpected_files": unexpected_files,
-                "missing_expected_files": missing_expected_files,
-            }
-        )
-=======
         examples.append({
             "task_id": task_id,
             "unexpected_files": unexpected_files,
             "missing_expected_files": missing_expected_files,
         })
->>>>>>> relay/claude-code/add-execution-pack-expected-file-drift-analyzer-01KR3ATD
 
 
 def _percentage(numerator: int, denominator: int) -> float:
