@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 
 SEVERITY_LOW = "low"
@@ -17,6 +17,7 @@ SEVERITY_HIGH = "high"
 SEVERITY_CRITICAL = "critical"
 
 QUALITY_NO_UNCERTAINTIES = "no_uncertainties"
+QUALITY_NO_UNCERTAINTY = QUALITY_NO_UNCERTAINTIES
 QUALITY_STRONG = "strong"
 QUALITY_MODERATE = "moderate"
 QUALITY_WEAK = "weak"
@@ -42,12 +43,23 @@ class UncertaintyEvent:
     resolution_source: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ResolutionSourceCount:
     """Count of resolved uncertainties by evidence source."""
 
     source: str
     count: int
+
+    def __iter__(self):
+        yield self.source
+        yield self.count
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, ResolutionSourceCount):
+            return (self.source, self.count) == (other.source, other.count)
+        if isinstance(other, tuple):
+            return (self.source, self.count) == other
+        return False
 
 
 @dataclass(frozen=True)
@@ -70,6 +82,15 @@ class AgentUncertaintyResolution:
     metrics: AgentUncertaintyResolutionMetrics
     quality_tier: str
     insights: tuple[str, ...]
+
+    @property
+    def quality(self) -> str:
+        """Compatibility alias for callers that use ``quality``."""
+
+        return self.quality_tier
+
+
+AgentUncertaintyResolutionAnalysis = AgentUncertaintyResolution
 
 
 def analyze_agent_uncertainty_resolution(
@@ -150,7 +171,7 @@ def _validate_events(events: Sequence[UncertaintyEvent]) -> None:
             raise ValueError("turn_index must be a non-negative integer")
         if event.turn_index < last_index:
             raise ValueError("turn_index values must be ordered")
-        if not isinstance(event.uncertainty_type, str) or not event.uncertainty_type:
+        if not isinstance(event.uncertainty_type, str) or not event.uncertainty_type.strip():
             raise ValueError("uncertainty_type must be a non-empty string")
         if event.severity not in SUPPORTED_SEVERITIES:
             raise ValueError(
