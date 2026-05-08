@@ -83,12 +83,20 @@ def _validate_events(events: Sequence[ToolEvent]) -> None:
             raise ValueError("tool_name must be a non-empty string")
         if event.status not in {STATUS_ERROR, STATUS_SUCCESS}:
             raise ValueError("status must be 'error' or 'success'")
-        if not isinstance(event.turn_index, int) or event.turn_index < 0:
+        if (
+            not isinstance(event.turn_index, int)
+            or isinstance(event.turn_index, bool)
+            or event.turn_index < 0
+        ):
             raise ValueError("turn_index must be a non-negative integer")
         if event.turn_index < last_turn:
             raise ValueError("events must be ordered by turn_index")
         if event.error_message is not None and not isinstance(event.error_message, str):
             raise ValueError("error_message must be a string or None")
+        if isinstance(event.error_message, str) and not event.error_message.strip():
+            raise ValueError("error_message must be non-empty when provided")
+        if event.status == STATUS_SUCCESS and event.error_message is not None:
+            raise ValueError("error_message must be None for success events")
         last_turn = event.turn_index
 
 

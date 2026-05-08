@@ -140,16 +140,7 @@ def analyze_error_message_clarity(
     if not isinstance(errors, (list, tuple)):
         raise ValueError("errors must be a sequence (list or tuple)")
 
-    # Validate errors
-    for error in errors:
-        if not isinstance(error, ErrorMessage):
-            raise ValueError("errors must contain ErrorMessage instances")
-        if not error.error_id:
-            raise ValueError("error_id cannot be empty")
-        if error.specificity_level not in [SPECIFICITY_SPECIFIC, SPECIFICITY_PARTIAL, SPECIFICITY_GENERIC]:
-            raise ValueError(f"invalid specificity_level: {error.specificity_level}")
-        if error.actionability_level not in [ACTIONABILITY_HIGH, ACTIONABILITY_MODERATE, ACTIONABILITY_LOW]:
-            raise ValueError(f"invalid actionability_level: {error.actionability_level}")
+    _validate_errors(errors)
 
     # Handle empty errors
     if not errors:
@@ -179,6 +170,8 @@ def analyze_error_message_clarity(
                 "low_clarity_fix_rate": 0.0,
                 "correlation_strength": 0.0,
             },
+            "total_errors": 0,
+            "insights": ["No error messages analyzed."],
         }
 
     # Calculate clarity metrics
@@ -244,7 +237,34 @@ def analyze_error_message_clarity(
             "low_clarity_fix_rate": analysis.effectiveness_correlation.low_clarity_fix_rate,
             "correlation_strength": analysis.effectiveness_correlation.correlation_strength,
         },
+        "total_errors": analysis.total_errors,
+        "insights": analysis.insights,
     }
+
+
+def _validate_errors(errors: Sequence[ErrorMessage]) -> None:
+    for error in errors:
+        if not isinstance(error, ErrorMessage):
+            raise ValueError("errors must contain ErrorMessage instances")
+        if not isinstance(error.error_id, str) or not error.error_id.strip():
+            raise ValueError("error_id must be a non-empty string")
+        if not isinstance(error.message_text, str) or not error.message_text.strip():
+            raise ValueError("message_text must be a non-empty string")
+        for field_name in (
+            "has_line_number",
+            "has_error_value",
+            "has_stack_trace",
+            "has_file_path",
+            "has_resolution_hint",
+        ):
+            if not isinstance(getattr(error, field_name), bool):
+                raise ValueError(f"{field_name} must be a boolean")
+        if error.specificity_level not in [SPECIFICITY_SPECIFIC, SPECIFICITY_PARTIAL, SPECIFICITY_GENERIC]:
+            raise ValueError(f"invalid specificity_level: {error.specificity_level}")
+        if error.actionability_level not in [ACTIONABILITY_HIGH, ACTIONABILITY_MODERATE, ACTIONABILITY_LOW]:
+            raise ValueError(f"invalid actionability_level: {error.actionability_level}")
+        if error.was_fixed_successfully is not None and not isinstance(error.was_fixed_successfully, bool):
+            raise ValueError("was_fixed_successfully must be a boolean or None")
 
 
 def _calculate_clarity_metrics(errors: Sequence[ErrorMessage]) -> ClarityMetrics:

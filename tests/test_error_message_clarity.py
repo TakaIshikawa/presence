@@ -24,6 +24,32 @@ from engagement.error_message_clarity import (
 )
 
 
+def _error_message(
+    error_id="err_1",
+    message_text="text",
+    has_line_number=False,
+    has_error_value=False,
+    has_stack_trace=False,
+    has_file_path=False,
+    has_resolution_hint=False,
+    specificity_level=SPECIFICITY_GENERIC,
+    actionability_level=ACTIONABILITY_LOW,
+    was_fixed_successfully=None,
+):
+    return ErrorMessage(
+        error_id,
+        message_text,
+        has_line_number,
+        has_error_value,
+        has_stack_trace,
+        has_file_path,
+        has_resolution_hint,
+        specificity_level,
+        actionability_level,
+        was_fixed_successfully,
+    )
+
+
 class TestErrorMessage:
     """Test ErrorMessage dataclass."""
 
@@ -360,6 +386,66 @@ class TestAnalyzeErrorMessageClarity:
         assert result["actionability_distribution"]["total_count"] == 0
         assert result["context_scores"]["avg_context_elements"] == 0.0
         assert result["guidance_presence"] == 0.0
+        assert result["total_errors"] == 0
+        assert result["insights"] == ["No error messages analyzed."]
+
+    def test_actionable_file_path_and_command_scores_above_vague_message(self):
+        """Verify actionable path and command context score higher than vague text."""
+        actionable = analyze_error_message_clarity(
+            [
+                _error_message(
+                    message_text=(
+                        "src/app.py:42 failed; run `uv run pytest tests/test_app.py` "
+                        "after fixing expected int"
+                    ),
+                    has_line_number=True,
+                    has_error_value=True,
+                    has_stack_trace=True,
+                    has_file_path=True,
+                    has_resolution_hint=True,
+                    specificity_level=SPECIFICITY_SPECIFIC,
+                    actionability_level=ACTIONABILITY_HIGH,
+                    was_fixed_successfully=True,
+                )
+            ]
+        )
+        vague = analyze_error_message_clarity(
+            [
+                _error_message(
+                    message_text="Something went wrong",
+                    specificity_level=SPECIFICITY_GENERIC,
+                    actionability_level=ACTIONABILITY_LOW,
+                    was_fixed_successfully=False,
+                )
+            ]
+        )
+
+        assert (
+            actionable["clarity_metrics"]["avg_actionability_score"]
+            > vague["clarity_metrics"]["avg_actionability_score"]
+        )
+        assert (
+            actionable["clarity_metrics"]["avg_context_score"]
+            > vague["clarity_metrics"]["avg_context_score"]
+        )
+        assert actionable["guidance_presence"] > vague["guidance_presence"]
+
+    def test_duplicate_vague_messages_are_counted_consistently(self):
+        """Verify duplicate low-quality messages remain represented in metrics."""
+        result = analyze_error_message_clarity(
+            [
+                _error_message("err_1", "Unknown failure", was_fixed_successfully=False),
+                _error_message("err_2", "Unknown failure", was_fixed_successfully=False),
+            ]
+        )
+
+        assert result["total_errors"] == 2
+        assert result["actionability_distribution"]["low_count"] == 2
+        assert result["context_scores"]["missing_line_numbers"] == 2
+        assert any(
+            "2/2 errors have low actionability" in insight
+            for insight in result["insights"]
+        )
 
     def test_single_excellent_error(self):
         """Verify analysis of single excellent error."""
@@ -434,8 +520,28 @@ class TestAnalyzeErrorMessageClarity:
                 SPECIFICITY_GENERIC, ACTIONABILITY_LOW, None
             )
         ]
-        with pytest.raises(ValueError, match="error_id cannot be empty"):
+        with pytest.raises(ValueError, match="error_id"):
             analyze_error_message_clarity(errors)
+
+    @pytest.mark.parametrize(
+        ("error", "message"),
+        [
+            (_error_message(error_id=123), "error_id"),
+            (_error_message(error_id=" "), "error_id"),
+            (_error_message(message_text=123), "message_text"),
+            (_error_message(message_text=" "), "message_text"),
+            (_error_message(has_line_number=1), "has_line_number"),
+            (_error_message(has_error_value=None), "has_error_value"),
+            (_error_message(has_stack_trace="yes"), "has_stack_trace"),
+            (_error_message(has_file_path=1), "has_file_path"),
+            (_error_message(has_resolution_hint=1), "has_resolution_hint"),
+            (_error_message(was_fixed_successfully="yes"), "was_fixed_successfully"),
+        ],
+    )
+    def test_invalid_error_fields_raise_field_specific_value_error(self, error, message):
+        """Verify invalid records fail with field-specific validation errors."""
+        with pytest.raises(ValueError, match=message):
+            analyze_error_message_clarity([error])
 
     def test_invalid_specificity_level(self):
         """Verify error on invalid specificity level."""

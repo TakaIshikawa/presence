@@ -85,16 +85,21 @@ def test_mixed_tools_rounds_recovery_rate():
 
 
 @pytest.mark.parametrize(
-    "events",
+    ("events", "message"),
     [
-        "bad",
-        [{"tool_name": "pytest"}],
-        [ToolEvent("", STATUS_ERROR, 0)],
-        [ToolEvent("pytest", "failed", 0)],
-        [ToolEvent("pytest", STATUS_ERROR, -1)],
-        [ToolEvent("a", STATUS_SUCCESS, 2), ToolEvent("b", STATUS_SUCCESS, 1)],
+        ("bad", "events"),
+        ([{"tool_name": "pytest"}], "ToolEvent"),
+        ([ToolEvent("", STATUS_ERROR, 0)], "tool_name"),
+        ([ToolEvent("pytest", "failed", 0)], "status"),
+        ([ToolEvent("pytest", "", 0)], "status"),
+        ([ToolEvent("pytest", STATUS_ERROR, -1)], "turn_index"),
+        ([ToolEvent("pytest", STATUS_ERROR, True)], "turn_index"),
+        ([ToolEvent(123, STATUS_ERROR, 0)], "tool_name"),
+        ([ToolEvent("pytest", STATUS_ERROR, 0, "")], "error_message"),
+        ([ToolEvent("pytest", STATUS_SUCCESS, 0, "failed")], "error_message"),
+        ([ToolEvent("a", STATUS_SUCCESS, 2), ToolEvent("b", STATUS_SUCCESS, 1)], "turn_index"),
     ],
 )
-def test_invalid_event_records_raise_value_error(events):
-    with pytest.raises(ValueError):
+def test_invalid_event_records_raise_value_error(events, message):
+    with pytest.raises(ValueError, match=message):
         analyze_tool_error_recovery(events)
