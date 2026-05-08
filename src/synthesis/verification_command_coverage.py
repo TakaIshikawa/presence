@@ -109,7 +109,14 @@ def _extract_commands(record: object) -> list[str]:
                 if name in {"bash", "shell", "exec", "exec_command"}:
                     commands.extend(_coerce_commands(value))
 
-    return [_normalize_command(command) for command in commands if _normalize_command(command)]
+    normalized_commands: list[str] = []
+    seen_commands: set[str] = set()
+    for command in commands:
+        normalized_command = _normalize_command(command)
+        if normalized_command and normalized_command not in seen_commands:
+            normalized_commands.append(normalized_command)
+            seen_commands.add(normalized_command)
+    return normalized_commands
 
 
 def _coerce_commands(value: object) -> list[str]:

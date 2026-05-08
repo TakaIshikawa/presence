@@ -1,6 +1,7 @@
 """Tests for context window utilization tracking."""
 
 import pytest
+from typing import Any
 
 from engagement.context_window_utilization import (
     ConversationTurn,
@@ -448,13 +449,15 @@ class TestValidation:
 
     def test_invalid_turns_type_raises(self):
         """Verify invalid turns type raises ValueError."""
+        invalid_turns: Any = "not a list"
         with pytest.raises(ValueError, match="must be a list"):
-            analyze_context_window_utilization("not a list")  # type: ignore
+            analyze_context_window_utilization(invalid_turns)
 
     def test_invalid_turn_instance_raises(self):
         """Verify invalid turn instance raises ValueError."""
+        malformed_turns: list[Any] = [{"not": "a turn"}]
         with pytest.raises(ValueError, match="ConversationTurn instances"):
-            analyze_context_window_utilization([{"not": "a turn"}])  # type: ignore
+            analyze_context_window_utilization(malformed_turns)
 
     def test_negative_turn_number_raises(self):
         """Verify negative turn number raises ValueError."""

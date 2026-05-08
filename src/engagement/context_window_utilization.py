@@ -72,7 +72,7 @@ class ContextWindowUtilization:
 
 
 def analyze_context_window_utilization(
-    turns: list[ConversationTurn],
+    turns: object,
     max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
 ) -> ContextWindowUtilization:
     """Analyze context window utilization across conversation turns.
@@ -92,6 +92,8 @@ def analyze_context_window_utilization(
     if not isinstance(turns, list):
         raise ValueError("turns must be a list")
 
+    if not isinstance(max_context_tokens, int) or isinstance(max_context_tokens, bool):
+        raise ValueError("max_context_tokens must be positive")
     if max_context_tokens <= 0:
         raise ValueError("max_context_tokens must be positive")
 
@@ -99,11 +101,19 @@ def analyze_context_window_utilization(
     for turn in turns:
         if not isinstance(turn, ConversationTurn):
             raise ValueError("All turns must be ConversationTurn instances")
+        if not isinstance(turn.turn_number, int) or isinstance(turn.turn_number, bool):
+            raise ValueError("turn_number must be non-negative")
         if turn.turn_number < 0:
             raise ValueError("turn_number must be non-negative")
+        if not isinstance(turn.context_tokens, int) or isinstance(turn.context_tokens, bool):
+            raise ValueError("context_tokens must be non-negative")
         if turn.context_tokens < 0:
             raise ValueError("context_tokens must be non-negative")
-        if turn.added_tokens is not None and turn.added_tokens < 0:
+        if turn.added_tokens is not None and (
+            not isinstance(turn.added_tokens, int)
+            or isinstance(turn.added_tokens, bool)
+            or turn.added_tokens < 0
+        ):
             raise ValueError("added_tokens must be non-negative or None")
 
     # Handle empty session

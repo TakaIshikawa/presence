@@ -207,7 +207,7 @@ def test_cli_outputs_json_and_validates_arguments(capsys, tmp_path):
                 "--db",
                 str(db_path),
                 "--days",
-                "2",
+                "3650",
                 "--threshold-minutes",
                 "30",
                 "--format",
