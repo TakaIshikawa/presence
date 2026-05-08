@@ -152,7 +152,7 @@ def _validate_events(events: Sequence[SessionVerificationEvent]) -> None:
     for position, event in enumerate(events):
         if not isinstance(event, SessionVerificationEvent):
             raise ValueError("events must contain SessionVerificationEvent instances")
-        if not isinstance(event.turn_index, int) or event.turn_index < 0:
+        if not isinstance(event.turn_index, int) or isinstance(event.turn_index, bool) or event.turn_index < 0:
             raise ValueError("turn_index must be a non-negative integer")
         if event.turn_index <= last_index:
             raise ValueError("turn_index values must be strictly increasing")
