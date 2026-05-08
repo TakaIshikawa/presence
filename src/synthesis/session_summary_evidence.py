@@ -29,7 +29,7 @@ def analyze_session_summary_evidence(summary: str, evidence: SessionEvidence) ->
     if not isinstance(summary, str):
         raise ValueError("summary must be a string")
     _validate_evidence(evidence)
-    normalized = summary.lower()
+    normalized = _normalize_text(summary)
     mentioned_files = tuple(path for path in evidence.edited_files if path.lower() in normalized)
     all_file_mentions = tuple(sorted({token.strip(".,:;()[]") for token in summary.split() if "/" in token and "." in token}))
     untouched = tuple(path for path in all_file_mentions if path not in evidence.edited_files)
@@ -65,11 +65,52 @@ def _validate_evidence(evidence: SessionEvidence) -> None:
 
 
 def _command_mentioned(command: str, normalized_summary: str) -> bool:
-    command_norm = " ".join(command.lower().split())
-    if command_norm in normalized_summary:
+    command_norm = _normalize_text(command)
+    command_canonical = _canonical_test_command(command_norm)
+    summary_canonical = _canonical_test_command(normalized_summary)
+    if command_norm in normalized_summary or command_canonical in summary_canonical:
         return True
-    head = command_norm.split()[0] if command_norm else ""
-    return bool(head and head in normalized_summary and any(token in command_norm for token in ("pytest", "test", "build", "mypy")))
+    command_target = _test_target(command_canonical)
+    summary_targets = _summary_test_targets(summary_canonical)
+    if command_target and command_target in summary_canonical:
+        return True
+    if command_target and summary_targets and command_target not in summary_targets:
+        return False
+    head = command_canonical.split()[0] if command_canonical else ""
+    return bool(
+        head
+        and head in summary_canonical
+        and any(token in command_canonical for token in ("pytest", "test", "build", "mypy"))
+    )
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.lower().split())
+
+
+def _canonical_test_command(value: str) -> str:
+    tokens = value.split()
+    if tokens[:2] == ["uv", "run"]:
+        tokens = tokens[2:]
+    if tokens[:3] == ["python", "-m", "pytest"]:
+        tokens = ["pytest", *tokens[3:]]
+    return " ".join(tokens)
+
+
+def _test_target(command: str) -> str:
+    for token in command.split():
+        stripped = token.strip(".,:;()[]")
+        if stripped.startswith("tests/") or stripped.startswith("test/"):
+            return stripped
+    return ""
+
+
+def _summary_test_targets(summary: str) -> set[str]:
+    return {
+        token.strip(".,:;()[]")
+        for token in summary.split()
+        if token.strip(".,:;()[]").startswith(("tests/", "test/"))
+    }
 
 
 def _evidence_quality(

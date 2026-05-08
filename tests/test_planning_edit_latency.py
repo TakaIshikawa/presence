@@ -1,5 +1,7 @@
 """Tests for planning edit latency analyzer."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from synthesis.planning_edit_latency import (
@@ -39,6 +41,34 @@ def test_immediate_edit_counts_fast_followthrough():
     assert result.metrics.delayed_edit_count == 0
     assert result.metrics.average_edit_latency_turns == 1.0
     assert result.quality == QUALITY_FAST
+
+
+def test_valid_minimal_timestamped_plan_to_edit_sequence():
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    result = analyze_planning_edit_latency(
+        [
+            PlanningEditTurn(0, KIND_PLAN, "synthesis", timestamp=start),
+            PlanningEditTurn(1, KIND_EDIT, "synthesis", 1, start + timedelta(minutes=1)),
+        ]
+    )
+
+    assert result.metrics.average_edit_latency_turns == 1.0
+    assert result.outcomes[0].edit_turn_index == 1
+    assert result.quality == QUALITY_FAST
+
+
+def test_equal_timestamps_are_allowed_when_turn_order_is_valid():
+    timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    result = analyze_planning_edit_latency(
+        [
+            PlanningEditTurn(0, KIND_PLAN, "synthesis", timestamp=timestamp),
+            PlanningEditTurn(1, KIND_EDIT, "synthesis", 1, timestamp),
+        ]
+    )
+
+    assert result.metrics.immediate_edit_count == 1
 
 
 def test_delayed_edit_degrades_quality_and_rounds_latency():
@@ -103,6 +133,14 @@ def test_multiple_scopes_match_first_later_same_scope_edit():
         ([PlanningEditTurn(0, KIND_PLAN, "")], "scope"),
         ([PlanningEditTurn(0, KIND_EDIT, "api", 0)], "greater than 0"),
         ([PlanningEditTurn(0, KIND_PLAN, "api", 1)], "file_count 0"),
+        ([PlanningEditTurn(0, KIND_PLAN, "api", timestamp=datetime(2026, 1, 1))], "timezone-aware"),
+        (
+            [
+                PlanningEditTurn(0, KIND_PLAN, "api", timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc)),
+                PlanningEditTurn(1, KIND_EDIT, "api", 1, datetime(2025, 12, 31, tzinfo=timezone.utc)),
+            ],
+            "chronological",
+        ),
     ],
 )
 def test_invalid_inputs_raise_clear_value_errors(turns, message):

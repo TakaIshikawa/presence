@@ -7,6 +7,7 @@ edits in the same scope.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Sequence
 
 
@@ -30,6 +31,7 @@ class PlanningEditTurn:
     event_type: str
     scope: str
     file_count: int = 0
+    timestamp: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ def _validate_turns(turns: Sequence[PlanningEditTurn]) -> None:
         raise ValueError("turns must be a list or tuple")
 
     last_index = -1
+    last_timestamp: datetime | None = None
     for position, turn in enumerate(turns):
         if not isinstance(turn, PlanningEditTurn):
             raise ValueError("turns must contain PlanningEditTurn instances")
@@ -140,11 +143,25 @@ def _validate_turns(turns: Sequence[PlanningEditTurn]) -> None:
             raise ValueError("scope must be a non-empty string")
         if not isinstance(turn.file_count, int) or turn.file_count < 0:
             raise ValueError("file_count must be a non-negative integer")
+        if turn.timestamp is not None:
+            if not _is_timezone_aware(turn.timestamp):
+                raise ValueError("timestamp must be timezone-aware when provided")
+            if last_timestamp is not None and turn.timestamp < last_timestamp:
+                raise ValueError("timestamp values must be chronological")
+            last_timestamp = turn.timestamp
         if turn.event_type == KIND_PLAN and turn.file_count != 0:
             raise ValueError("plan turns must have file_count 0")
         if turn.event_type == KIND_EDIT and turn.file_count == 0:
             raise ValueError("edit turns must have file_count greater than 0")
         last_index = turn.turn_index
+
+
+def _is_timezone_aware(value: object) -> bool:
+    return (
+        isinstance(value, datetime)
+        and value.tzinfo is not None
+        and value.utcoffset() is not None
+    )
 
 
 def _match_plan_edits(turns: Sequence[PlanningEditTurn]) -> list[PlanEditOutcome]:

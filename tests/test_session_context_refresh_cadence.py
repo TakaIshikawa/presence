@@ -7,8 +7,10 @@ from synthesis.session_context_refresh_cadence import (
     MARKER_FILE_CONTEXT_RECAP,
     MARKER_NONE,
     MARKER_PLAN_RECAP,
+    QUALITY_NO_SESSION,
     QUALITY_STALE,
     QUALITY_STRONG,
+    STALE_CONTEXT_GAP_TURNS,
     ContextRefreshTurn,
     analyze_session_context_refresh_cadence,
 )
@@ -18,8 +20,21 @@ def test_no_turns_returns_no_session_result():
     result = analyze_session_context_refresh_cadence([])
 
     assert result.metrics.total_turns == 0
-    assert result.quality == "no_session"
+    assert result.quality == QUALITY_NO_SESSION
     assert "No session" in result.insights[0]
+
+
+def test_single_refresh_event_returns_deterministic_report():
+    result = analyze_session_context_refresh_cadence(
+        [ContextRefreshTurn(0, 100, (MARKER_CONSTRAINT_RECAP,))]
+    )
+
+    assert result.metrics.total_turns == 1
+    assert result.metrics.refresh_turns == 1
+    assert result.metrics.average_turns_between_refreshes == 0.0
+    assert result.metrics.longest_refresh_gap == 0
+    assert result.metrics.stale_context_windows == 0
+    assert result.quality == QUALITY_STRONG
 
 
 def test_regular_refresh_cadence_is_strong():
@@ -74,6 +89,30 @@ def test_no_refreshes_are_stale():
 
     assert result.metrics.refresh_turns == 0
     assert result.quality == QUALITY_STALE
+
+
+def test_only_non_refresh_events_are_classified_explicitly():
+    result = analyze_session_context_refresh_cadence(
+        [ContextRefreshTurn(index, 100, (MARKER_NONE,)) for index in range(3)]
+    )
+
+    assert result.metrics.marker_counts == ()
+    assert result.metrics.refresh_turns == 0
+    assert result.quality == QUALITY_STALE
+    assert "0 of 3 turns" in result.insights[0]
+
+
+def test_exact_stale_threshold_gap_is_not_stale():
+    result = analyze_session_context_refresh_cadence(
+        [
+            ContextRefreshTurn(0, 100, (MARKER_PLAN_RECAP,)),
+            ContextRefreshTurn(STALE_CONTEXT_GAP_TURNS, 100, (MARKER_FILE_CONTEXT_RECAP,)),
+        ]
+    )
+
+    assert result.metrics.longest_refresh_gap == STALE_CONTEXT_GAP_TURNS
+    assert result.metrics.stale_context_windows == 0
+    assert result.quality == QUALITY_STRONG
 
 
 @pytest.mark.parametrize(
