@@ -12,6 +12,23 @@ def test_empty_turns_return_low_zero_state():
     result = analyze_context_rehydration_gaps([])
 
     assert result.metrics.total_turns == 0
+    assert result.metrics.repeated_file_reads == 0
+    assert result.metrics.repeated_clarification_asks == 0
+    assert result.metrics.resumed_session_gaps == 0
+    assert result.severity == "low"
+
+
+def test_none_input_raises_value_error():
+    with pytest.raises(ValueError, match="turns must be a list or tuple"):
+        analyze_context_rehydration_gaps(None)
+
+
+def test_minimal_valid_turn_returns_expected_metrics():
+    result = analyze_context_rehydration_gaps([ContextTurn(0)])
+
+    assert result.metrics.total_turns == 1
+    assert result.metrics.unnecessary_rediscovery_ratio == 0.0
+    assert result.top_repeated_context_keys == ()
     assert result.severity == "low"
 
 
@@ -84,5 +101,5 @@ def test_repeated_user_clarifications_can_drive_moderate_severity():
     ],
 )
 def test_malformed_turns_raise_value_error(turns):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="turns|turn_index|file_reads|clarification_asks|booleans"):
         analyze_context_rehydration_gaps(turns)

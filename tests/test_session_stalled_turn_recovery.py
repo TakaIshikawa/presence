@@ -3,6 +3,7 @@
 import pytest
 
 from synthesis.session_stalled_turn_recovery import (
+    QUALITY_NO_STALLS,
     QUALITY_PARTIAL,
     QUALITY_POOR,
     QUALITY_STRONG,
@@ -67,6 +68,66 @@ def test_immediate_recovery_boundary_includes_two_turn_latency():
     assert result.metrics.delayed_recoveries == 0
     assert result.metrics.average_recovery_latency == 1.5
     assert result.recovery_quality == QUALITY_STRONG
+
+
+def test_progress_only_session_has_no_stalls_quality():
+    result = analyze_session_stalled_turn_recovery(
+        [
+            SessionTurn(0, STATUS_PROGRESS),
+            SessionTurn(1, STATUS_PROGRESS),
+        ]
+    )
+
+    assert result.metrics.recovery_rate == 1.0
+    assert result.stall_outcomes == ()
+    assert result.recovery_quality == QUALITY_NO_STALLS
+
+
+def test_recovery_rate_at_strong_boundary_with_no_delays_is_strong():
+    result = analyze_session_stalled_turn_recovery(
+        [
+            SessionTurn(0, STATUS_BLOCKED),
+            SessionTurn(1, STATUS_PROGRESS),
+            SessionTurn(2, STATUS_BLOCKED),
+            SessionTurn(3, STATUS_PROGRESS),
+            SessionTurn(4, STATUS_STALLED),
+            SessionTurn(5, STATUS_PROGRESS),
+            SessionTurn(6, STATUS_STALLED),
+            SessionTurn(7, STATUS_PROGRESS),
+            SessionTurn(8, STATUS_BLOCKED),
+        ]
+    )
+
+    assert result.metrics.recovery_rate == 0.8
+    assert result.metrics.delayed_recoveries == 0
+    assert result.recovery_quality == QUALITY_STRONG
+
+
+def test_recovery_rate_at_partial_boundary_is_partial():
+    result = analyze_session_stalled_turn_recovery(
+        [
+            SessionTurn(0, STATUS_BLOCKED),
+            SessionTurn(1, STATUS_PROGRESS),
+            SessionTurn(2, STATUS_STALLED),
+        ]
+    )
+
+    assert result.metrics.recovery_rate == 0.5
+    assert result.recovery_quality == QUALITY_PARTIAL
+
+
+def test_recovery_rate_below_partial_boundary_is_poor():
+    result = analyze_session_stalled_turn_recovery(
+        [
+            SessionTurn(0, STATUS_BLOCKED),
+            SessionTurn(1, STATUS_PROGRESS),
+            SessionTurn(2, STATUS_STALLED),
+            SessionTurn(3, STATUS_BLOCKED),
+        ]
+    )
+
+    assert result.metrics.recovery_rate == 0.333
+    assert result.recovery_quality == QUALITY_POOR
 
 
 def test_delayed_recovery_counts_recovery_but_degrades_quality():

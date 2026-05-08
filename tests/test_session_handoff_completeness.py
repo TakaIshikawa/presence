@@ -41,6 +41,81 @@ def test_missing_verification_has_specific_gap_and_insight():
     assert any("verification" in insight for insight in result.insights)
 
 
+def test_partial_handoff_missing_verification_scores_below_complete():
+    complete = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Add analyzer",
+            changed_files=("src/analyzer.py",),
+            verification_status="pytest passed",
+            blockers=("none",),
+            next_steps=("owner: continue rollout",),
+            risk_notes=("low risk",),
+        )
+    )
+    partial = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Add analyzer",
+            changed_files=("src/analyzer.py",),
+            blockers=("none",),
+            next_steps=("owner: continue rollout",),
+            risk_notes=("low risk",),
+        )
+    )
+
+    assert partial.metrics.completeness_score < complete.metrics.completeness_score
+    assert "missing_verification" in partial.gap_labels
+
+
+def test_partial_handoff_missing_next_step_ownership_is_reported():
+    complete = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Fix tests",
+            changed_files=("tests/test_x.py",),
+            verification_status="pytest passed",
+            blockers=("none",),
+            next_steps=("owner: run full suite",),
+            risk_notes=("watch flaky test",),
+        )
+    )
+    partial = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Fix tests",
+            changed_files=("tests/test_x.py",),
+            verification_status="pytest passed",
+            blockers=("none",),
+            risk_notes=("watch flaky test",),
+        )
+    )
+
+    assert partial.metrics.completeness_score < complete.metrics.completeness_score
+    assert "missing_next_steps" in partial.gap_labels
+
+
+def test_partial_handoff_missing_changed_file_summary_is_reported():
+    complete = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Document handoff",
+            changed_files=("README.md",),
+            verification_status="not run",
+            blockers=("none",),
+            next_steps=("owner: review docs",),
+            risk_notes=("docs only",),
+        )
+    )
+    partial = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Document handoff",
+            verification_status="not run",
+            blockers=("none",),
+            next_steps=("owner: review docs",),
+            risk_notes=("docs only",),
+        )
+    )
+
+    assert partial.metrics.completeness_score < complete.metrics.completeness_score
+    assert "missing_changed_files" in partial.gap_labels
+
+
 def test_missing_next_steps_is_reported():
     result = analyze_session_handoff_completeness(
         SessionHandoff(
