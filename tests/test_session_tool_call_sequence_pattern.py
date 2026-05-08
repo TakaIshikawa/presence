@@ -4,30 +4,30 @@ import pytest
 
 from synthesis.session_tool_call_sequence_pattern import (
     analyze_session_tool_call_sequence_pattern,
+    _calculate_transitions,
+    _find_common_patterns,
+    _count_efficient_patterns,
+    _detect_inefficient_patterns,
     _count_circular_reads,
-    _count_patterns,
-    _find_sequence_patterns,
-    _find_transitions,
-    _max_consecutive_same,
 )
 
 
 class TestAnalyzeSessionToolCallSequencePattern:
     """Test main analyzer function."""
 
-    def test_empty_session_returns_zeroed_metrics(self):
-        """Verify empty session returns empty metrics."""
+    def test_empty_input_returns_zeroed_metrics(self):
+        """Verify empty input returns zero metrics."""
         result = analyze_session_tool_call_sequence_pattern([])
 
         assert result["total_tool_calls"] == 0
-        assert result["unique_tools"] == 0
-        assert result["sequence_patterns"] == []
-        assert result["tool_transitions"] == []
-        assert result["consecutive_same_tool"] == 0
+        assert result["sequence_length_stats"]["min"] == 0
+        assert result["sequence_length_stats"]["max"] == 0
+        assert result["sequence_length_stats"]["avg"] == 0.0
+        assert result["tool_transitions"] == {}
+        assert result["common_patterns"] == []
         assert result["efficient_pattern_count"] == 0
-        assert result["inefficient_pattern_count"] == 0
+        assert result["inefficient_patterns"] == []
         assert result["circular_reads"] == 0
-        assert result["workflow_efficiency"] == "empty"
 
     def test_none_input_treated_as_empty_list(self):
         """Verify None input is treated as empty list."""
@@ -40,337 +40,342 @@ class TestAnalyzeSessionToolCallSequencePattern:
             analyze_session_tool_call_sequence_pattern("not a list")
 
     def test_single_tool_call(self):
-        """Verify single tool call is handled."""
+        """Verify single tool call is processed."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read", "turn_index": 0},
+            {"tool_name": "Read", "turn_index": 1}
         ])
 
         assert result["total_tool_calls"] == 1
-        assert result["unique_tools"] == 1
-        assert result["workflow_efficiency"] == "simple"
+        assert result["sequence_length_stats"]["min"] == 1
+        assert result["tool_transitions"] == {}  # No transitions with single call
 
-    def test_simple_sequence(self):
-        """Verify simple tool sequence."""
+    def test_simple_sequence_with_transitions(self):
+        """Verify simple tool sequence tracks transitions."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read", "turn_index": 0},
-            {"tool_name": "Edit", "turn_index": 1},
-            {"tool_name": "Read", "turn_index": 2},
+            {"tool_name": "Read", "turn_index": 1},
+            {"tool_name": "Edit", "turn_index": 2},
+            {"tool_name": "Read", "turn_index": 3},
         ])
 
         assert result["total_tool_calls"] == 3
-        assert result["unique_tools"] == 2
-        assert result["consecutive_same_tool"] == 1
+        assert result["tool_transitions"]["Read->Edit"] == 1
+        assert result["tool_transitions"]["Edit->Read"] == 1
 
-    def test_efficient_pattern_detection(self):
-        """Verify efficient patterns are detected."""
-        result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read", "turn_index": 0},
-            {"tool_name": "Edit", "turn_index": 1},
-            {"tool_name": "Read", "turn_index": 2},
-            {"tool_name": "Grep", "turn_index": 3},
-            {"tool_name": "Read", "turn_index": 4},
-            {"tool_name": "Edit", "turn_index": 5},
-        ])
-
-        assert result["efficient_pattern_count"] >= 1
-        assert result["workflow_efficiency"] in ("efficient", "optimal")
-
-    def test_inefficient_pattern_detection(self):
-        """Verify inefficient patterns are detected."""
-        result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read", "turn_index": 0},
+    def test_common_pattern_detection(self):
+        """Verify common patterns are detected."""
+        records = [
             {"tool_name": "Read", "turn_index": 1},
-            {"tool_name": "Read", "turn_index": 2},
-            {"tool_name": "Edit", "turn_index": 3},
+            {"tool_name": "Edit", "turn_index": 2},
+            {"tool_name": "Read", "turn_index": 3},
             {"tool_name": "Edit", "turn_index": 4},
-            {"tool_name": "Edit", "turn_index": 5},
-        ])
+        ]
 
-        assert result["inefficient_pattern_count"] >= 1
-        assert result["workflow_efficiency"] == "inefficient"
+        result = analyze_session_tool_call_sequence_pattern(records)
 
-    def test_sequence_pattern_extraction(self):
-        """Verify sequence patterns are extracted."""
-        result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-            {"tool_name": "Bash"},
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-            {"tool_name": "Bash"},
-        ])
+        # Should detect "Read, Edit" pattern occurring twice
+        patterns = result["common_patterns"]
+        read_edit_pattern = next((p for p in patterns if p["pattern"] == ["Read", "Edit"]), None)
+        assert read_edit_pattern is not None
+        assert read_edit_pattern["count"] == 2
 
-        assert len(result["sequence_patterns"]) > 0
-        # Should detect Read→Edit→Bash pattern twice
-        pattern = result["sequence_patterns"][0]
-        assert pattern["pattern"] == ["Read", "Edit", "Bash"]
-        assert pattern["count"] == 2
+    def test_efficient_pattern_count(self):
+        """Verify efficient patterns are counted."""
+        records = [
+            {"tool_name": "Read", "turn_index": 1},
+            {"tool_name": "Edit", "turn_index": 2},
+            {"tool_name": "Read", "turn_index": 3},
+            {"tool_name": "Edit", "turn_index": 4},
+        ]
 
-    def test_tool_transitions_extraction(self):
-        """Verify tool transitions are extracted."""
-        result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-        ])
+        result = analyze_session_tool_call_sequence_pattern(records)
 
-        transitions = result["tool_transitions"]
-        assert len(transitions) > 0
-        # Should have Read→Edit and Edit→Read transitions
-        transition_pairs = [(t["from_tool"], t["to_tool"]) for t in transitions]
-        assert ("Read", "Edit") in transition_pairs
-        assert ("Edit", "Read") in transition_pairs
-
-    def test_consecutive_same_tool_tracking(self):
-        """Verify consecutive same tool tracking."""
-        result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read"},
-            {"tool_name": "Read"},
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-            {"tool_name": "Read"},
-        ])
-
-        assert result["consecutive_same_tool"] == 3
+        # "Read->Edit" is an efficient pattern, occurs twice
+        assert result["efficient_pattern_count"] >= 2
 
     def test_circular_reads_detection(self):
         """Verify circular reads are detected."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read", "file_path": "foo.py"},
-            {"tool_name": "Edit", "file_path": "bar.py"},
-            {"tool_name": "Read", "file_path": "foo.py"},
-            {"tool_name": "Bash"},
-            {"tool_name": "Read", "file_path": "foo.py"},
+            {"tool_name": "Read", "turn_index": 1, "file_path": "src/foo.py"},
+            {"tool_name": "Bash", "turn_index": 2},
+            {"tool_name": "Read", "turn_index": 3, "file_path": "src/foo.py"},
         ])
 
-        assert result["circular_reads"] > 0
+        # Same file read twice without edit -> circular read
+        assert result["circular_reads"] == 1
 
-    def test_optimal_workflow_classification(self):
-        """Verify optimal workflow classification."""
+    def test_no_circular_reads_when_file_edited(self):
+        """Verify no circular reads when file is edited between reads."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Grep"},
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-            {"tool_name": "Read"},
-            {"tool_name": "Bash"},
+            {"tool_name": "Read", "turn_index": 1, "file_path": "src/foo.py"},
+            {"tool_name": "Edit", "turn_index": 2, "file_path": "src/foo.py"},
+            {"tool_name": "Read", "turn_index": 3, "file_path": "src/foo.py"},
         ])
 
-        assert result["efficient_pattern_count"] >= 2
-        assert result["inefficient_pattern_count"] == 0
-        assert result["workflow_efficiency"] == "optimal"
+        # File edited between reads -> not circular
+        assert result["circular_reads"] == 0
 
-    def test_mixed_workflow_classification(self):
-        """Verify mixed workflow classification."""
+    def test_inefficient_pattern_excessive_reads(self):
+        """Verify detection of excessive consecutive reads."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-            {"tool_name": "Write"},
-            {"tool_name": "Bash"},
-            {"tool_name": "Glob"},
+            {"tool_name": "Read", "turn_index": 1},
+            {"tool_name": "Read", "turn_index": 2},
+            {"tool_name": "Read", "turn_index": 3},
         ])
 
-        # No strong patterns either way
-        assert result["workflow_efficiency"] == "mixed"
+        assert "excessive_consecutive_reads" in result["inefficient_patterns"]
 
     def test_malformed_record_skipped(self):
         """Verify non-dict records are skipped."""
         result = analyze_session_tool_call_sequence_pattern([
             "not a dict",
-            {"tool_name": "Read"},
-            {"tool_name": "Edit"},
-        ])
-
-        assert result["total_tool_calls"] == 2
-
-    def test_missing_tool_name_skipped(self):
-        """Verify records without tool_name are skipped."""
-        result = analyze_session_tool_call_sequence_pattern([
-            {"turn_index": 0},
-            {"tool_name": "Read"},
+            {"tool_name": "Read", "turn_index": 1},
         ])
 
         assert result["total_tool_calls"] == 1
 
+    def test_record_without_tool_name_skipped(self):
+        """Verify records without tool_name are skipped."""
+        result = analyze_session_tool_call_sequence_pattern([
+            {"turn_index": 1},
+            {"tool_name": "Read", "turn_index": 2},
+        ])
 
-class TestHelperFunctions:
-    """Test helper functions."""
+        assert result["total_tool_calls"] == 1
 
-    def test_find_sequence_patterns_basic(self):
-        """Verify basic sequence pattern finding."""
-        tools = ["Read", "Edit", "Read", "Edit", "Read"]
-        patterns = _find_sequence_patterns(tools, 2)
+    def test_grep_read_edit_workflow(self):
+        """Verify Grep->Read->Edit workflow is detected."""
+        result = analyze_session_tool_call_sequence_pattern([
+            {"tool_name": "Grep", "turn_index": 1},
+            {"tool_name": "Read", "turn_index": 2},
+            {"tool_name": "Edit", "turn_index": 3},
+            {"tool_name": "Grep", "turn_index": 4},
+            {"tool_name": "Read", "turn_index": 5},
+            {"tool_name": "Edit", "turn_index": 6},
+        ])
 
-        assert len(patterns) > 0
-        # Should find Read→Edit pattern
-        pattern_dict = {tuple(p["pattern"]): p["count"] for p in patterns}
-        assert pattern_dict.get(("Read", "Edit")) == 2
+        # Should detect the 3-tool pattern
+        patterns = result["common_patterns"]
+        grep_read_edit = next(
+            (p for p in patterns if p["pattern"] == ["Grep", "Read", "Edit"]),
+            None
+        )
+        assert grep_read_edit is not None
+        assert grep_read_edit["count"] == 2
 
-    def test_find_sequence_patterns_length_three(self):
-        """Verify 3-tool sequence pattern finding."""
-        tools = ["Read", "Edit", "Bash", "Read", "Edit", "Bash"]
-        patterns = _find_sequence_patterns(tools, 3)
 
-        assert len(patterns) > 0
-        pattern_dict = {tuple(p["pattern"]): p["count"] for p in patterns}
-        assert pattern_dict.get(("Read", "Edit", "Bash")) == 2
+class TestCalculateTransitions:
+    """Test transition calculation helper."""
 
-    def test_find_sequence_patterns_too_short(self):
-        """Verify empty result for too short sequence."""
-        tools = ["Read", "Edit"]
-        patterns = _find_sequence_patterns(tools, 3)
-        assert patterns == []
+    def test_empty_sequence_returns_empty(self):
+        """Verify empty sequence returns empty dict."""
+        assert _calculate_transitions([]) == {}
 
-    def test_find_transitions_basic(self):
-        """Verify basic transition finding."""
-        tools = ["Read", "Edit", "Read", "Edit"]
-        transitions = _find_transitions(tools)
+    def test_single_tool_returns_empty(self):
+        """Verify single tool returns empty dict."""
+        assert _calculate_transitions(["Read"]) == {}
 
-        assert len(transitions) == 2
-        trans_dict = {(t["from_tool"], t["to_tool"]): t["count"] for t in transitions}
-        assert trans_dict.get(("Read", "Edit")) == 2
-        assert trans_dict.get(("Edit", "Read")) == 1
+    def test_simple_transition(self):
+        """Verify simple transition is tracked."""
+        result = _calculate_transitions(["Read", "Edit"])
+        assert result["Read->Edit"] == 1
 
-    def test_find_transitions_single_tool(self):
-        """Verify empty result for single tool."""
-        tools = ["Read"]
-        transitions = _find_transitions(tools)
-        assert transitions == []
+    def test_multiple_same_transitions(self):
+        """Verify repeated transitions are counted."""
+        result = _calculate_transitions(["Read", "Edit", "Read", "Edit"])
+        assert result["Read->Edit"] == 2
+        assert result["Edit->Read"] == 1
 
-    def test_max_consecutive_same_basic(self):
-        """Verify max consecutive calculation."""
-        tools = ["Read", "Read", "Read", "Edit", "Read", "Read"]
-        assert _max_consecutive_same(tools) == 3
+    def test_different_transitions(self):
+        """Verify different transitions are tracked separately."""
+        result = _calculate_transitions(["Read", "Edit", "Write", "Bash"])
+        assert result["Read->Edit"] == 1
+        assert result["Edit->Write"] == 1
+        assert result["Write->Bash"] == 1
 
-    def test_max_consecutive_same_all_different(self):
-        """Verify max consecutive with no repeats."""
-        tools = ["Read", "Edit", "Bash", "Grep"]
-        assert _max_consecutive_same(tools) == 1
 
-    def test_max_consecutive_same_empty(self):
-        """Verify max consecutive with empty list."""
-        assert _max_consecutive_same([]) == 0
+class TestFindCommonPatterns:
+    """Test common pattern detection helper."""
 
-    def test_count_patterns_found(self):
-        """Verify pattern counting."""
-        tools = ["Read", "Edit", "Read", "Grep", "Read", "Edit"]
-        patterns = [("Read", "Edit", "Read")]
-        assert _count_patterns(tools, patterns) == 1
+    def test_empty_sequence_returns_empty(self):
+        """Verify empty sequence returns empty list."""
+        assert _find_common_patterns([]) == []
 
-    def test_count_patterns_multiple(self):
-        """Verify multiple pattern occurrences."""
-        tools = ["Read", "Read", "Read", "Edit", "Read", "Read", "Read"]
-        patterns = [("Read", "Read", "Read")]
-        # Should find 2 occurrences (overlapping allowed)
-        assert _count_patterns(tools, patterns) == 2
+    def test_single_tool_returns_empty(self):
+        """Verify single tool returns empty list."""
+        assert _find_common_patterns(["Read"]) == []
 
-    def test_count_patterns_not_found(self):
-        """Verify zero count when pattern not found."""
-        tools = ["Read", "Edit", "Bash"]
-        patterns = [("Grep", "Read", "Edit")]
-        assert _count_patterns(tools, patterns) == 0
+    def test_pattern_occurs_once_not_common(self):
+        """Verify patterns occurring once are not returned."""
+        result = _find_common_patterns(["Read", "Edit", "Write"])
+        # No pattern repeats twice, so should be empty
+        assert len(result) == 0
 
-    def test_count_circular_reads_detected(self):
-        """Verify circular reads detection."""
-        tools = ["Read", "Edit", "Read", "Bash"]
-        paths = ["foo.py", "bar.py", "foo.py", ""]
-        assert _count_circular_reads(tools, paths) == 1
+    def test_pattern_occurs_twice_is_common(self):
+        """Verify patterns occurring twice are detected."""
+        result = _find_common_patterns(["Read", "Edit", "Read", "Edit"])
+        # "Read, Edit" occurs twice
+        assert len(result) > 0
+        assert any(p["pattern"] == ["Read", "Edit"] and p["count"] == 2 for p in result)
 
-    def test_count_circular_reads_no_circles(self):
-        """Verify no false positives."""
-        tools = ["Read", "Edit", "Read"]
-        paths = ["foo.py", "bar.py", "baz.py"]
-        assert _count_circular_reads(tools, paths) == 0
+    def test_multiple_pattern_lengths(self):
+        """Verify patterns of different lengths are detected."""
+        sequence = ["A", "B", "C", "A", "B", "C"]
+        result = _find_common_patterns(sequence)
+        # Should detect both 2-length and 3-length patterns
+        assert len(result) > 0
 
-    def test_count_circular_reads_within_window(self):
-        """Verify circular detection within window size."""
-        tools = ["Read", "Edit", "Edit", "Edit", "Edit", "Read"]
-        paths = ["foo.py", "a", "b", "c", "d", "foo.py"]
-        # foo.py read at index 0 and 5, within window of 5
-        assert _count_circular_reads(tools, paths) == 1
+    def test_limited_to_top_10(self):
+        """Verify result is limited to 10 patterns."""
+        # Create a sequence with many different patterns
+        sequence = list(range(50)) * 3  # Many repeated patterns
+        result = _find_common_patterns([str(x) for x in sequence])
+        assert len(result) <= 10
 
-    def test_count_circular_reads_outside_window(self):
-        """Verify no detection outside window."""
-        tools = ["Read", "Edit", "Edit", "Edit", "Edit", "Edit", "Read"]
-        paths = ["foo.py", "a", "b", "c", "d", "e", "foo.py"]
-        # foo.py read at index 0 and 6, outside window of 5
-        assert _count_circular_reads(tools, paths) == 0
 
-    def test_count_circular_reads_mismatched_lengths(self):
-        """Verify handling of mismatched list lengths."""
-        tools = ["Read", "Edit"]
-        paths = ["foo.py"]
-        assert _count_circular_reads(tools, paths) == 0
+class TestCountEfficientPatterns:
+    """Test efficient pattern counting helper."""
+
+    def test_empty_patterns_returns_zero(self):
+        """Verify empty patterns list returns 0."""
+        assert _count_efficient_patterns([]) == 0
+
+    def test_no_efficient_patterns_returns_zero(self):
+        """Verify no efficient patterns returns 0."""
+        patterns = [
+            {"pattern": ["Bash", "Bash"], "count": 5}
+        ]
+        assert _count_efficient_patterns(patterns) == 0
+
+    def test_efficient_pattern_counted(self):
+        """Verify efficient patterns are counted."""
+        patterns = [
+            {"pattern": ["Read", "Edit"], "count": 3}
+        ]
+        assert _count_efficient_patterns(patterns) == 3
+
+    def test_multiple_efficient_patterns(self):
+        """Verify multiple efficient patterns are summed."""
+        patterns = [
+            {"pattern": ["Read", "Edit"], "count": 2},
+            {"pattern": ["Grep", "Read"], "count": 3},
+        ]
+        assert _count_efficient_patterns(patterns) == 5
+
+
+class TestDetectInefficientPatterns:
+    """Test inefficient pattern detection helper."""
+
+    def test_empty_sequence_returns_empty(self):
+        """Verify empty sequence returns empty list."""
+        assert _detect_inefficient_patterns([]) == []
+
+    def test_no_inefficient_patterns(self):
+        """Verify well-structured sequence has no inefficiencies."""
+        result = _detect_inefficient_patterns(["Read", "Edit", "Write"])
+        assert len(result) == 0
+
+    def test_excessive_consecutive_reads(self):
+        """Verify excessive consecutive reads are detected."""
+        result = _detect_inefficient_patterns(["Read", "Read", "Read"])
+        assert "excessive_consecutive_reads" in result
+
+    def test_triple_read_pattern(self):
+        """Verify triple read pattern is detected."""
+        result = _detect_inefficient_patterns(["Read", "Read", "Read", "Edit"])
+        assert "triple_read_pattern" in result
+
+    def test_reads_interrupted_by_other_tools(self):
+        """Verify reads interrupted by other tools don't trigger false positive."""
+        result = _detect_inefficient_patterns(["Read", "Edit", "Read", "Edit", "Read"])
+        assert "excessive_consecutive_reads" not in result
+
+
+class TestCountCircularReads:
+    """Test circular read counting helper."""
+
+    def test_empty_inputs_returns_zero(self):
+        """Verify empty inputs return 0."""
+        assert _count_circular_reads({}, set()) == 0
+
+    def test_file_read_once_not_circular(self):
+        """Verify file read once is not circular."""
+        file_reads = {"src/foo.py": [1]}
+        file_edits = set()
+        assert _count_circular_reads(file_reads, file_edits) == 0
+
+    def test_file_read_twice_without_edit_is_circular(self):
+        """Verify file read twice without edit is circular."""
+        file_reads = {"src/foo.py": [1, 3]}
+        file_edits = set()
+        assert _count_circular_reads(file_reads, file_edits) == 1
+
+    def test_file_read_twice_with_edit_not_circular(self):
+        """Verify file read twice with edit is not circular."""
+        file_reads = {"src/foo.py": [1, 3]}
+        file_edits = {"src/foo.py"}
+        assert _count_circular_reads(file_reads, file_edits) == 0
+
+    def test_multiple_files_with_circular_reads(self):
+        """Verify multiple files with circular reads are counted."""
+        file_reads = {
+            "src/foo.py": [1, 3],
+            "src/bar.py": [2, 4, 6],
+        }
+        file_edits = set()
+        assert _count_circular_reads(file_reads, file_edits) == 2
 
 
 class TestIntegrationScenarios:
     """Test realistic integration scenarios."""
 
-    def test_efficient_grep_read_edit_workflow(self):
-        """Simulate efficient search-read-edit workflow."""
+    def test_standard_modification_workflow(self):
+        """Simulate standard Read->Edit->Read workflow."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Grep", "file_path": ""},
-            {"tool_name": "Read", "file_path": "src/main.py"},
-            {"tool_name": "Edit", "file_path": "src/main.py"},
-            {"tool_name": "Grep", "file_path": ""},
-            {"tool_name": "Read", "file_path": "src/utils.py"},
-            {"tool_name": "Edit", "file_path": "src/utils.py"},
-            {"tool_name": "Bash", "file_path": ""},
+            {"tool_name": "Read", "turn_index": 1, "file_path": "src/foo.py"},
+            {"tool_name": "Edit", "turn_index": 2, "file_path": "src/foo.py"},
+            {"tool_name": "Read", "turn_index": 3, "file_path": "src/foo.py"},
         ])
 
-        assert result["efficient_pattern_count"] >= 2
-        assert result["inefficient_pattern_count"] == 0
-        assert result["workflow_efficiency"] in ("optimal", "efficient")
+        assert result["total_tool_calls"] == 3
+        assert "Read->Edit" in result["tool_transitions"]
+        assert "Edit->Read" in result["tool_transitions"]
+        assert result["circular_reads"] == 0  # File was edited
 
-    def test_inefficient_excessive_reads_workflow(self):
-        """Simulate inefficient workflow with excessive re-reads."""
+    def test_search_and_modify_workflow(self):
+        """Simulate Grep->Read->Edit workflow."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read", "file_path": "foo.py"},
-            {"tool_name": "Read", "file_path": "foo.py"},
-            {"tool_name": "Read", "file_path": "foo.py"},
-            {"tool_name": "Read", "file_path": "bar.py"},
-            {"tool_name": "Read", "file_path": "bar.py"},
-            {"tool_name": "Edit", "file_path": "foo.py"},
+            {"tool_name": "Grep", "turn_index": 1},
+            {"tool_name": "Read", "turn_index": 2, "file_path": "src/target.py"},
+            {"tool_name": "Edit", "turn_index": 3, "file_path": "src/target.py"},
         ])
 
-        assert result["inefficient_pattern_count"] > 0
-        assert result["circular_reads"] > 0
-        assert result["workflow_efficiency"] == "inefficient"
+        assert result["tool_transitions"]["Grep->Read"] == 1
+        assert result["tool_transitions"]["Read->Edit"] == 1
+        # Verify efficient patterns are detected in common_patterns
+        assert len(result["common_patterns"]) == 0  # Pattern only occurs once
 
-    def test_balanced_workflow_with_verification(self):
-        """Simulate balanced workflow with read-edit-verify cycles."""
+    def test_inefficient_repeated_reads(self):
+        """Simulate inefficient repeated reads without modifications."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Read", "file_path": "src/main.py"},
-            {"tool_name": "Edit", "file_path": "src/main.py"},
-            {"tool_name": "Read", "file_path": "src/main.py"},
-            {"tool_name": "Bash"},
-            {"tool_name": "Read", "file_path": "tests/test_main.py"},
-            {"tool_name": "Edit", "file_path": "tests/test_main.py"},
-            {"tool_name": "Bash"},
+            {"tool_name": "Read", "turn_index": 1, "file_path": "src/file.py"},
+            {"tool_name": "Read", "turn_index": 2, "file_path": "src/file.py"},
+            {"tool_name": "Read", "turn_index": 3, "file_path": "src/file.py"},
+            {"tool_name": "Read", "turn_index": 4, "file_path": "src/file.py"},
         ])
 
-        assert result["efficient_pattern_count"] > 0
-        assert result["workflow_efficiency"] in ("efficient", "optimal", "mixed")
+        assert result["circular_reads"] == 1
+        assert "excessive_consecutive_reads" in result["inefficient_patterns"]
 
-    def test_complex_multi_file_workflow(self):
-        """Simulate complex workflow across multiple files."""
+    def test_complex_multi_file_session(self):
+        """Simulate complex session with multiple files and tools."""
         result = analyze_session_tool_call_sequence_pattern([
-            {"tool_name": "Glob"},
-            {"tool_name": "Read", "file_path": "a.py"},
-            {"tool_name": "Read", "file_path": "b.py"},
-            {"tool_name": "Edit", "file_path": "a.py"},
-            {"tool_name": "Edit", "file_path": "b.py"},
-            {"tool_name": "Bash"},
-            {"tool_name": "Read", "file_path": "c.py"},
-            {"tool_name": "Edit", "file_path": "c.py"},
-            {"tool_name": "Bash"},
+            {"tool_name": "Grep", "turn_index": 1},
+            {"tool_name": "Read", "turn_index": 2, "file_path": "src/a.py"},
+            {"tool_name": "Read", "turn_index": 3, "file_path": "src/b.py"},
+            {"tool_name": "Edit", "turn_index": 4, "file_path": "src/a.py"},
+            {"tool_name": "Bash", "turn_index": 5},
+            {"tool_name": "Read", "turn_index": 6, "file_path": "src/a.py"},
         ])
 
-        assert result["total_tool_calls"] == 9
-        assert result["unique_tools"] >= 3
-        # Should have multiple Read→Edit transitions
-        transitions = result["tool_transitions"]
-        read_edit = [t for t in transitions if t["from_tool"] == "Read" and t["to_tool"] == "Edit"]
-        assert len(read_edit) > 0
+        assert result["total_tool_calls"] == 6
+        assert result["circular_reads"] == 0  # src/a.py was edited

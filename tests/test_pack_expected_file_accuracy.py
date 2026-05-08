@@ -4,11 +4,11 @@ import pytest
 
 from synthesis.pack_expected_file_accuracy import (
     analyze_pack_expected_file_accuracy,
-    _auto_categorize_file,
-    _calculate_f1_score,
-    _calculate_precision,
-    _calculate_recall,
-    _classify_accuracy_pattern,
+    _precision,
+    _recall,
+    _f1_score,
+    _categorize_file,
+    _normalize_files,
 )
 
 
@@ -17,373 +17,457 @@ class TestAnalyzePackExpectedFileAccuracy:
 
     def test_empty_input_returns_zeroed_metrics(self):
         """Verify empty input returns zero metrics."""
-        result = analyze_pack_expected_file_accuracy({})
+        result = analyze_pack_expected_file_accuracy([])
 
-        assert result["expected_files"] == []
-        assert result["changed_files"] == []
-        assert result["correctly_expected"] == []
-        assert result["false_positives"] == []
-        assert result["false_negatives"] == []
-        assert result["precision"] == 0.0
-        assert result["recall"] == 0.0
-        assert result["f1_score"] == 0.0
-        assert result["missed_categories"] == []
-        assert result["accuracy_pattern"] == "empty"
+        assert result["total_packs"] == 0
+        assert result["perfect_predictions"] == 0
+        assert result["avg_precision"] == 0.0
+        assert result["avg_recall"] == 0.0
+        assert result["avg_f1_score"] == 0.0
+        assert result["false_positives_count"] == 0
+        assert result["false_negatives_count"] == 0
+        assert result["commonly_missed_types"] == []
+        assert result["examples"] == []
 
-    def test_none_input_treated_as_empty_dict(self):
-        """Verify None input is treated as empty dict."""
+    def test_none_input_treated_as_empty_list(self):
+        """Verify None input is treated as empty list."""
         result = analyze_pack_expected_file_accuracy(None)
-        assert result["precision"] == 0.0
+        assert result["total_packs"] == 0
 
     def test_invalid_input_type_raises_error(self):
-        """Verify non-dict input raises ValueError."""
-        with pytest.raises(ValueError, match="records must be a dictionary"):
-            analyze_pack_expected_file_accuracy("not a dict")
+        """Verify non-list input raises ValueError."""
+        with pytest.raises(ValueError, match="records must be a list"):
+            analyze_pack_expected_file_accuracy("not a list")
 
-    def test_perfect_match(self):
-        """Verify perfect match between expected and changed."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["src/main.py", "src/utils.py"],
-            "changed_files": ["src/main.py", "src/utils.py"],
-        })
+    def test_perfect_prediction(self):
+        """Verify perfect prediction metrics."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/foo.py", "tests/test_foo.py"],
+                "changed_files": ["src/foo.py", "tests/test_foo.py"],
+            }
+        ])
 
-        assert result["correctly_expected"] == ["src/main.py", "src/utils.py"]
-        assert result["false_positives"] == []
-        assert result["false_negatives"] == []
-        assert result["precision"] == 100.0
-        assert result["recall"] == 100.0
-        assert result["f1_score"] == 100.0
-        assert result["accuracy_pattern"] == "perfect"
+        assert result["total_packs"] == 1
+        assert result["perfect_predictions"] == 1
+        assert result["avg_precision"] == 100.0
+        assert result["avg_recall"] == 100.0
+        assert result["avg_f1_score"] == 100.0
+        assert result["false_positives_count"] == 0
+        assert result["false_negatives_count"] == 0
 
-    def test_partial_match(self):
-        """Verify partial match calculates metrics correctly."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["src/main.py", "src/utils.py", "src/config.py"],
-            "changed_files": ["src/main.py", "src/utils.py"],
-        })
+    def test_over_prediction_low_precision(self):
+        """Verify over-prediction scenario with low precision."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/a.py", "src/b.py", "src/c.py"],
+                "changed_files": ["src/a.py"],  # Only 1 of 3 expected
+            }
+        ])
 
-        assert result["correctly_expected"] == ["src/main.py", "src/utils.py"]
-        assert result["false_positives"] == ["src/config.py"]
-        assert result["false_negatives"] == []
-        assert result["precision"] == pytest.approx(66.67, abs=0.01)
-        assert result["recall"] == 100.0
+        # Precision: 1/3 = 33.33%
+        assert result["avg_precision"] == 33.33
+        # Recall: 1/1 = 100%
+        assert result["avg_recall"] == 100.0
+        assert result["false_positives_count"] == 2
+        assert result["false_negatives_count"] == 0
 
-    def test_over_predicted(self):
-        """Verify over-prediction detection."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["a.py", "b.py", "c.py", "d.py"],
-            "changed_files": ["a.py", "b.py"],
-        })
+    def test_under_prediction_low_recall(self):
+        """Verify under-prediction scenario with low recall."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/foo.py"],
+                "changed_files": ["src/foo.py", "src/bar.py", "src/baz.py"],
+            }
+        ])
 
-        assert len(result["false_positives"]) == 2
-        assert result["accuracy_pattern"] == "over_predicted"
+        # Precision: 1/1 = 100%
+        assert result["avg_precision"] == 100.0
+        # Recall: 1/3 = 33.33%
+        assert result["avg_recall"] == 33.33
+        assert result["false_positives_count"] == 0
+        assert result["false_negatives_count"] == 2
 
-    def test_under_predicted(self):
-        """Verify under-prediction detection."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["src/main.py"],
-            "changed_files": ["src/main.py", "tests/test_main.py", "src/utils.py"],
-        })
+    def test_no_overlap_zero_metrics(self):
+        """Verify complete mismatch returns zero metrics."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/a.py"],
+                "changed_files": ["src/b.py"],
+            }
+        ])
 
-        assert len(result["false_negatives"]) == 2
-        assert "tests/test_main.py" in result["false_negatives"]
-        assert "src/utils.py" in result["false_negatives"]
-        assert result["accuracy_pattern"] == "under_predicted"
+        assert result["avg_precision"] == 0.0
+        assert result["avg_recall"] == 0.0
+        assert result["avg_f1_score"] == 0.0
+        assert result["false_positives_count"] == 1
+        assert result["false_negatives_count"] == 1
 
-    def test_no_match(self):
-        """Verify complete mismatch."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["src/foo.py"],
-            "changed_files": ["src/bar.py"],
-        })
-
-        assert result["correctly_expected"] == []
-        assert result["precision"] == 0.0
-        assert result["recall"] == 0.0
-        assert result["f1_score"] == 0.0
-        assert result["accuracy_pattern"] == "poor"
-
-    def test_missed_categories_detection(self):
-        """Verify missed file categories are identified."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["src/main.py"],
-            "changed_files": [
-                "src/main.py",
-                "tests/test_main.py",
-                "tests/test_utils.py",
-                "package.json",
-            ],
-        })
-
-        categories = result["missed_categories"]
-        assert len(categories) >= 2
-        # Should detect test and config categories
-        category_names = [c["category"] for c in categories]
-        assert "test" in category_names
-        assert "config" in category_names
-
-    def test_file_path_normalization(self):
-        """Verify file paths are normalized."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["./src/main.py", "src\\utils.py"],
-            "changed_files": ["src/main.py", "src/utils.py"],
-        })
-
-        assert result["precision"] == 100.0
-        assert result["recall"] == 100.0
-
-    def test_accurate_pattern_classification(self):
-        """Verify accurate pattern (high precision and recall)."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["a.py", "b.py", "c.py", "d.py", "e.py"],
-            "changed_files": ["a.py", "b.py", "c.py", "d.py"],
-        })
-
-        # 4/5 expected changed = 80% precision
-        # 4/4 changed were expected = 100% recall
-        assert result["precision"] == 80.0
-        assert result["recall"] == 100.0
-        assert result["accuracy_pattern"] == "accurate"
-
-    def test_f1_score_calculation(self):
-        """Verify F1 score is calculated correctly."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["a.py", "b.py", "c.py"],
-            "changed_files": ["a.py", "b.py", "d.py"],
-        })
-
-        # Precision: 2/3 = 66.67%
-        # Recall: 2/3 = 66.67%
-        # F1: 2 * (66.67 * 66.67) / (66.67 + 66.67) = 66.67
-        assert result["precision"] == pytest.approx(66.67, abs=0.01)
-        assert result["recall"] == pytest.approx(66.67, abs=0.01)
-        assert result["f1_score"] == pytest.approx(66.67, abs=0.01)
-
-    def test_custom_file_categories(self):
-        """Verify custom file categories are used."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["a.py"],
-            "changed_files": ["a.py", "b.py", "c.py"],
-            "file_categories": {
-                "b.py": "custom_category",
-                "c.py": "custom_category",
+    def test_multiple_packs_averaged(self):
+        """Verify metrics are averaged across multiple packs."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/a.py"],
+                "changed_files": ["src/a.py"],  # Perfect: 100% precision, 100% recall
             },
-        })
+            {
+                "pack_id": "pack2",
+                "expected_files": ["src/b.py", "src/c.py"],
+                "changed_files": ["src/b.py"],  # 50% precision, 100% recall
+            },
+        ])
 
-        categories = result["missed_categories"]
-        assert len(categories) == 1
-        assert categories[0]["category"] == "custom_category"
-        assert categories[0]["count"] == 2
+        # Avg precision: (100 + 50) / 2 = 75
+        assert result["avg_precision"] == 75.0
+        # Avg recall: (100 + 100) / 2 = 100
+        assert result["avg_recall"] == 100.0
+
+    def test_commonly_missed_types_detected(self):
+        """Verify commonly missed file types are detected."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/foo.py"],
+                "changed_files": ["src/foo.py", "tests/test_foo.py", "config.json"],
+            }
+        ])
+
+        missed_types = result["commonly_missed_types"]
+        assert len(missed_types) == 2
+        # Should detect test and config as missed types
+        types = [item["file_type"] for item in missed_types]
+        assert "test" in types
+        assert "config" in types
+
+    def test_examples_collected(self):
+        """Verify examples of imperfect predictions are collected."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/a.py", "src/b.py"],
+                "changed_files": ["src/a.py"],
+                "task_title": "Test task",
+            }
+        ])
+
+        assert len(result["examples"]) == 1
+        example = result["examples"][0]
+        assert example["pack_id"] == "pack1"
+        assert example["task_title"] == "Test task"
+        assert example["precision"] == 50.0
+        assert example["recall"] == 100.0
+        assert "src/b.py" in example["false_positives"]
+
+    def test_examples_limited_to_five(self):
+        """Verify examples are limited to 5."""
+        packs = [
+            {
+                "pack_id": f"pack{i}",
+                "expected_files": ["src/a.py"],
+                "changed_files": ["src/b.py"],  # All imperfect
+            }
+            for i in range(10)
+        ]
+
+        result = analyze_pack_expected_file_accuracy(packs)
+        assert len(result["examples"]) == 5
+
+    def test_perfect_prediction_not_in_examples(self):
+        """Verify perfect predictions are not included in examples."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/foo.py"],
+                "changed_files": ["src/foo.py"],
+            }
+        ])
+
+        assert len(result["examples"]) == 0
+
+    def test_file_paths_normalized(self):
+        """Verify file paths are normalized."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["./src/foo.py", "src\\bar.py"],
+                "changed_files": ["src/foo.py", "src/bar.py"],
+            }
+        ])
+
+        # Should be perfect match after normalization
+        assert result["perfect_predictions"] == 1
+
+    def test_empty_expected_files(self):
+        """Verify handling of empty expected files."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": [],
+                "changed_files": ["src/foo.py"],
+            }
+        ])
+
+        # Precision: 100% (0 expected, 0 TP - nothing expected, nothing matched)
+        # Recall: 0% (0 of 1 actual was expected)
+        assert result["avg_precision"] == 100.0
+        assert result["avg_recall"] == 0.0
+
+    def test_empty_changed_files(self):
+        """Verify handling of empty changed files."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/foo.py"],
+                "changed_files": [],
+            }
+        ])
+
+        # Precision: 0% (0 of 1 expected was changed)
+        # Recall: 100% (0 actual, 0 TP - nothing changed, nothing missed)
+        assert result["avg_precision"] == 0.0
+        assert result["avg_recall"] == 100.0
+
+    def test_both_empty_perfect_prediction(self):
+        """Verify both empty lists is treated as perfect prediction."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": [],
+                "changed_files": [],
+            }
+        ])
+
+        # Both empty: precision and recall = 100%
+        assert result["avg_precision"] == 100.0
+        assert result["avg_recall"] == 100.0
+        assert result["perfect_predictions"] == 1
+
+    def test_malformed_record_skipped(self):
+        """Verify non-dict records are skipped."""
+        result = analyze_pack_expected_file_accuracy([
+            "not a dict",
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/foo.py"],
+                "changed_files": ["src/foo.py"],
+            },
+        ])
+
+        assert result["total_packs"] == 1
+
+    def test_missing_pack_id_uses_index(self):
+        """Verify missing pack_id uses index."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "expected_files": ["src/foo.py"],
+                "changed_files": ["src/bar.py"],
+            }
+        ])
+
+        assert result["examples"][0]["pack_id"] == "pack_0"
+
+    def test_missing_task_title_uses_unknown(self):
+        """Verify missing task_title uses 'unknown'."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "pack1",
+                "expected_files": ["src/foo.py"],
+                "changed_files": ["src/bar.py"],
+            }
+        ])
+
+        assert result["examples"][0]["task_title"] == "unknown"
 
 
-class TestHelperFunctions:
-    """Test helper functions."""
+class TestPrecision:
+    """Test precision calculation helper."""
 
-    def test_calculate_precision_normal(self):
-        """Verify precision calculation."""
-        assert _calculate_precision(8, 10) == 80.0
-        assert _calculate_precision(3, 4) == 75.0
+    def test_perfect_precision(self):
+        """Verify perfect precision returns 100."""
+        assert _precision(5, 5) == 100.0
 
-    def test_calculate_precision_zero_expected(self):
-        """Verify precision with zero expected files."""
-        assert _calculate_precision(0, 0) == 0.0
+    def test_partial_precision(self):
+        """Verify partial precision calculation."""
+        assert _precision(1, 3) == 33.33
 
-    def test_calculate_precision_rounding(self):
-        """Verify precision is rounded to 2 decimals."""
-        assert _calculate_precision(1, 3) == 33.33
+    def test_zero_predicted_zero_tp(self):
+        """Verify zero predicted and zero TP returns 100."""
+        assert _precision(0, 0) == 100.0
 
-    def test_calculate_recall_normal(self):
-        """Verify recall calculation."""
-        assert _calculate_recall(8, 10) == 80.0
-        assert _calculate_recall(2, 5) == 40.0
+    def test_zero_predicted_nonzero_tp(self):
+        """Verify zero predicted with nonzero TP returns 0 (invalid case)."""
+        assert _precision(1, 0) == 0.0
 
-    def test_calculate_recall_zero_changed(self):
-        """Verify recall with zero changed files."""
-        assert _calculate_recall(0, 0) == 0.0
 
-    def test_calculate_recall_rounding(self):
-        """Verify recall is rounded to 2 decimals."""
-        assert _calculate_recall(2, 3) == 66.67
+class TestRecall:
+    """Test recall calculation helper."""
 
-    def test_calculate_f1_score_normal(self):
-        """Verify F1 score calculation."""
-        # Precision=80, Recall=80 -> F1=80
-        assert _calculate_f1_score(80.0, 80.0) == 80.0
+    def test_perfect_recall(self):
+        """Verify perfect recall returns 100."""
+        assert _recall(5, 5) == 100.0
 
-    def test_calculate_f1_score_different_values(self):
-        """Verify F1 score with different precision/recall."""
-        # Precision=75, Recall=60 -> F1 = 2*(75*60)/(75+60) = 66.67
-        assert _calculate_f1_score(75.0, 60.0) == pytest.approx(66.67, abs=0.01)
+    def test_partial_recall(self):
+        """Verify partial recall calculation."""
+        assert _recall(1, 3) == 33.33
 
-    def test_calculate_f1_score_zero_values(self):
-        """Verify F1 score with zero values."""
-        assert _calculate_f1_score(0.0, 0.0) == 0.0
+    def test_zero_actual_zero_tp(self):
+        """Verify zero actual and zero TP returns 100."""
+        assert _recall(0, 0) == 100.0
 
-    def test_auto_categorize_file_test(self):
-        """Verify test file categorization."""
-        assert _auto_categorize_file("tests/test_main.py") == "test"
-        assert _auto_categorize_file("test_utils.py") == "test"
-        assert _auto_categorize_file("src/main_test.py") == "test"
+    def test_zero_actual_nonzero_tp(self):
+        """Verify zero actual with nonzero TP returns 0 (invalid case)."""
+        assert _recall(1, 0) == 0.0
 
-    def test_auto_categorize_file_config(self):
-        """Verify config file categorization."""
-        assert _auto_categorize_file("package.json") == "config"
-        assert _auto_categorize_file("tsconfig.json") == "config"
-        assert _auto_categorize_file("pyproject.toml") == "config"
-        assert _auto_categorize_file("Dockerfile") == "config"
 
-    def test_auto_categorize_file_types(self):
-        """Verify type definition categorization."""
-        assert _auto_categorize_file("src/types.d.ts") == "types"
-        assert _auto_categorize_file("src/main.types.ts") == "types"
-        assert _auto_categorize_file("stubs/module.pyi") == "types"
+class TestF1Score:
+    """Test F1 score calculation helper."""
 
-    def test_auto_categorize_file_docs(self):
-        """Verify documentation categorization."""
-        assert _auto_categorize_file("README.md") == "docs"
-        assert _auto_categorize_file("docs/guide.rst") == "docs"
+    def test_perfect_f1(self):
+        """Verify perfect precision and recall gives F1 = 100."""
+        assert _f1_score(100.0, 100.0) == 100.0
 
-    def test_auto_categorize_file_source(self):
-        """Verify source file categorization (default)."""
-        assert _auto_categorize_file("src/main.py") == "source"
-        assert _auto_categorize_file("lib/utils.ts") == "source"
+    def test_zero_precision_and_recall(self):
+        """Verify zero precision and recall gives F1 = 0."""
+        assert _f1_score(0.0, 0.0) == 0.0
 
-    def test_classify_accuracy_pattern_perfect(self):
-        """Verify perfect pattern classification."""
-        pattern = _classify_accuracy_pattern(
-            precision=100.0,
-            recall=100.0,
-            false_positive_count=0,
-            false_negative_count=0,
-        )
-        assert pattern == "perfect"
+    def test_balanced_f1(self):
+        """Verify F1 calculation with equal precision and recall."""
+        # F1 should equal precision/recall when they're equal
+        assert _f1_score(50.0, 50.0) == 50.0
 
-    def test_classify_accuracy_pattern_accurate(self):
-        """Verify accurate pattern classification."""
-        pattern = _classify_accuracy_pattern(
-            precision=85.0,
-            recall=90.0,
-            false_positive_count=1,
-            false_negative_count=1,
-        )
-        assert pattern == "accurate"
+    def test_imbalanced_f1(self):
+        """Verify F1 calculation with imbalanced metrics."""
+        # High precision (100%), low recall (33.33%)
+        # F1 = 2 * (1.0 * 0.3333) / (1.0 + 0.3333) = 0.6666 / 1.3333 = 0.5 = 50%
+        f1 = _f1_score(100.0, 33.33)
+        assert 49.0 < f1 < 51.0  # Allow some rounding tolerance
 
-    def test_classify_accuracy_pattern_over_predicted(self):
-        """Verify over-predicted pattern classification."""
-        pattern = _classify_accuracy_pattern(
-            precision=50.0,
-            recall=80.0,
-            false_positive_count=5,
-            false_negative_count=1,
-        )
-        assert pattern == "over_predicted"
 
-    def test_classify_accuracy_pattern_under_predicted(self):
-        """Verify under-predicted pattern classification."""
-        pattern = _classify_accuracy_pattern(
-            precision=80.0,
-            recall=50.0,
-            false_positive_count=1,
-            false_negative_count=5,
-        )
-        assert pattern == "under_predicted"
+class TestCategorizeFile:
+    """Test file categorization helper."""
 
-    def test_classify_accuracy_pattern_poor(self):
-        """Verify poor pattern classification."""
-        pattern = _classify_accuracy_pattern(
-            precision=30.0,
-            recall=40.0,
-            false_positive_count=3,
-            false_negative_count=3,
-        )
-        assert pattern == "poor"
+    def test_test_file_detection(self):
+        """Verify test files are categorized as 'test'."""
+        assert _categorize_file("tests/test_foo.py") == "test"
+        assert _categorize_file("src/test_bar.py") == "test"
 
-    def test_classify_accuracy_pattern_empty(self):
-        """Verify empty pattern classification."""
-        pattern = _classify_accuracy_pattern(
-            precision=0.0,
-            recall=0.0,
-            false_positive_count=0,
-            false_negative_count=0,
-        )
-        assert pattern == "empty"
+    def test_config_file_detection(self):
+        """Verify config files are categorized as 'config'."""
+        assert _categorize_file("config.json") == "config"
+        assert _categorize_file("settings.yaml") == "config"
+        assert _categorize_file("app.config.ts") == "config"
+
+    def test_types_file_detection(self):
+        """Verify type definition files are categorized as 'types'."""
+        assert _categorize_file("types.d.ts") == "types"
+        assert _categorize_file("user.types.ts") == "types"
+
+    def test_docs_file_detection(self):
+        """Verify documentation files are categorized as 'docs'."""
+        assert _categorize_file("README.md") == "docs"
+        assert _categorize_file("docs/guide.rst") == "docs"
+
+    def test_extension_fallback(self):
+        """Verify extension is used as fallback."""
+        assert _categorize_file("src/main.py") == "py"
+        assert _categorize_file("src/app.ts") == "ts"
+
+    def test_no_extension_returns_other(self):
+        """Verify files without extension return 'other'."""
+        assert _categorize_file("Makefile") == "other"
+
+
+class TestNormalizeFiles:
+    """Test file normalization helper."""
+
+    def test_empty_list_returns_empty(self):
+        """Verify empty list returns empty list."""
+        assert _normalize_files([]) == []
+
+    def test_none_returns_empty(self):
+        """Verify None returns empty list."""
+        assert _normalize_files(None) == []
+
+    def test_single_string_converted_to_list(self):
+        """Verify single string is converted to list."""
+        assert _normalize_files("src/foo.py") == ["src/foo.py"]
+
+    def test_leading_dot_slash_removed(self):
+        """Verify leading ./ is removed."""
+        assert _normalize_files(["./src/foo.py"]) == ["src/foo.py"]
+
+    def test_backslashes_converted_to_forward_slashes(self):
+        """Verify backslashes are converted to forward slashes."""
+        assert _normalize_files(["src\\foo.py"]) == ["src/foo.py"]
 
 
 class TestIntegrationScenarios:
     """Test realistic integration scenarios."""
 
-    def test_well_planned_pack(self):
-        """Simulate well-planned pack with accurate predictions."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": [
-                "src/main.py",
-                "src/utils.py",
-                "tests/test_main.py",
-            ],
-            "changed_files": [
-                "src/main.py",
-                "src/utils.py",
-                "tests/test_main.py",
-            ],
-        })
+    def test_well_predicted_pack(self):
+        """Simulate well-predicted pack execution."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "task_123",
+                "expected_files": [
+                    "src/synthesis/analyzer.py",
+                    "tests/test_analyzer.py",
+                ],
+                "changed_files": [
+                    "src/synthesis/analyzer.py",
+                    "tests/test_analyzer.py",
+                ],
+                "task_title": "Add analyzer",
+            }
+        ])
 
-        assert result["accuracy_pattern"] == "perfect"
-        assert result["f1_score"] == 100.0
+        assert result["perfect_predictions"] == 1
+        assert result["avg_f1_score"] == 100.0
 
-    def test_forgot_test_files(self):
-        """Simulate common pattern of forgetting test files."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": ["src/main.py", "src/utils.py"],
-            "changed_files": [
-                "src/main.py",
-                "src/utils.py",
-                "tests/test_main.py",
-                "tests/test_utils.py",
-            ],
-        })
+    def test_missed_test_files(self):
+        """Simulate common case of missing test files in prediction."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "task_123",
+                "expected_files": ["src/foo.py"],
+                "changed_files": [
+                    "src/foo.py",
+                    "tests/test_foo.py",
+                    "tests/test_integration.py",
+                ],
+            }
+        ])
 
-        assert result["accuracy_pattern"] == "under_predicted"
-        categories = result["missed_categories"]
-        assert categories[0]["category"] == "test"
-        assert categories[0]["count"] == 2
+        assert result["avg_recall"] == 33.33  # 1 of 3
+        missed_types = result["commonly_missed_types"]
+        assert any(item["file_type"] == "test" for item in missed_types)
 
-    def test_over_estimated_scope(self):
-        """Simulate over-estimated scope with unnecessary files."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": [
-                "src/main.py",
-                "src/utils.py",
-                "src/config.py",
-                "src/types.py",
-                "tests/test_main.py",
-            ],
-            "changed_files": [
-                "src/main.py",
-                "tests/test_main.py",
-            ],
-        })
+    def test_batch_execution_varying_accuracy(self):
+        """Simulate batch execution with varying prediction accuracy."""
+        result = analyze_pack_expected_file_accuracy([
+            {
+                "pack_id": "task_1",
+                "expected_files": ["src/a.py"],
+                "changed_files": ["src/a.py"],  # Perfect
+            },
+            {
+                "pack_id": "task_2",
+                "expected_files": ["src/b.py", "src/c.py"],
+                "changed_files": ["src/b.py"],  # Over-predicted
+            },
+            {
+                "pack_id": "task_3",
+                "expected_files": ["src/d.py"],
+                "changed_files": ["src/d.py", "src/e.py", "config.json"],  # Under-predicted
+            },
+        ])
 
-        assert result["accuracy_pattern"] == "over_predicted"
-        assert len(result["false_positives"]) == 3
-
-    def test_mixed_accuracy(self):
-        """Simulate mixed accuracy with some correct, some missed."""
-        result = analyze_pack_expected_file_accuracy({
-            "expected_files": [
-                "src/main.py",
-                "src/utils.py",
-                "src/unused.py",
-            ],
-            "changed_files": [
-                "src/main.py",
-                "src/utils.py",
-                "tests/test_main.py",
-                "package.json",
-            ],
-        })
-
-        assert len(result["correctly_expected"]) == 2
-        assert len(result["false_positives"]) == 1
-        assert len(result["false_negatives"]) == 2
-        assert result["precision"] == pytest.approx(66.67, abs=0.01)
-        assert result["recall"] == 50.0
+        assert result["total_packs"] == 3
+        assert result["perfect_predictions"] == 1
+        # Should have examples of imperfect predictions
+        assert len(result["examples"]) == 2

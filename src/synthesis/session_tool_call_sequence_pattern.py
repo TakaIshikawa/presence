@@ -1,67 +1,64 @@
-"""Session tool call sequence pattern analyzer for workflow optimization.
+"""Session tool call sequence pattern analyzer for workflow detection.
 
-Analyzes the sequence and patterns of tool calls within agent sessions. Identifies
-common workflows, efficient patterns, and problematic sequences like excessive
-re-reads or circular tool chains.
+Analyzes the sequence and patterns of tool calls within agent sessions to
+identify common workflows, detect inefficient patterns, and measure sequence
+characteristics. Tracks consecutive tool usage patterns like Read→Edit→Read
+sequences and identifies circular tool chains.
 
 Sequence metrics:
-- Common patterns: Frequently occurring tool sequences (e.g., Read→Edit→Read)
-- Sequence length distribution: How many consecutive tool calls of same type
-- Tool transition frequencies: Most common tool-to-tool transitions
+- Sequence length distribution: Min/max/avg consecutive tool calls
+- Tool transition frequencies: Which tools commonly follow others
+- Common patterns: Frequently occurring tool sequences
 - Inefficient patterns: Circular reads, redundant tool chains
-- Workflow efficiency: Pattern-based workflow quality assessment
 
-Pattern classifications:
-- Efficient: Read→Edit→Verify, Grep→Read→Edit sequences
-- Inefficient: Read→Read→Read (excessive re-reads), circular patterns
-- Optimal: Targeted sequences with minimal redundancy
+Pattern types:
+- Read-Edit-Verify: Standard modification workflow
+- Read-Edit-Read: Verification by re-reading
+- Grep-Read-Edit: Search and modify workflow
+- Circular reads: Same file read multiple times without edits
 """
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any
 
 
-# Common efficient workflow patterns
-EFFICIENT_PATTERNS = [
-    ("Read", "Edit", "Read"),  # Edit with verification
-    ("Grep", "Read", "Edit"),  # Search, read, modify
-    ("Read", "Edit", "Bash"),  # Edit then test
-    ("Glob", "Read", "Edit"),  # Find, read, modify
-]
+# Pattern detection thresholds
+MIN_PATTERN_LENGTH = 2
+MAX_PATTERN_LENGTH = 5
+MIN_PATTERN_FREQUENCY = 2
 
-# Inefficient patterns to detect
-INEFFICIENT_PATTERNS = [
-    ("Read", "Read", "Read"),  # Excessive re-reads
-    ("Grep", "Grep", "Grep"),  # Repeated searches
-    ("Edit", "Edit", "Edit"),  # Rapid-fire edits without verification
+# Common efficient patterns
+EFFICIENT_PATTERNS = [
+    ("Read", "Edit"),
+    ("Grep", "Read"),
+    ("Read", "Edit", "Read"),
+    ("Grep", "Read", "Edit"),
 ]
 
 
 def analyze_session_tool_call_sequence_pattern(records: object) -> dict[str, Any]:
-    """Analyze tool call sequence patterns in a session.
+    """Analyze tool call sequences and patterns in agent sessions.
 
-    Examines the order and patterns of tool calls to identify common workflows
-    and detect inefficient sequences.
+    Tracks tool call sequences, identifies common workflows, and detects
+    inefficient patterns like excessive re-reads or circular tool chains.
 
     Args:
         records: List of tool call dictionaries with keys:
             - tool_name: Name of the tool (Read, Edit, Bash, etc.)
             - turn_index: Turn number when tool was called
-            - file_path: Optional file path for file operations
+            - file_path: Optional file path for file-related tools
 
     Returns:
         Dict with:
             - total_tool_calls: Total number of tool calls
-            - unique_tools: Number of unique tools used
-            - sequence_patterns: Most common 3-tool sequences
-            - tool_transitions: Most common tool-to-tool transitions
-            - consecutive_same_tool: Max consecutive calls to same tool
-            - efficient_pattern_count: Count of efficient patterns detected
-            - inefficient_pattern_count: Count of inefficient patterns
-            - circular_reads: Count of file read multiple times in succession
-            - workflow_efficiency: Classification of overall pattern quality
+            - sequence_length_stats: Dict with min/max/avg sequence lengths
+            - tool_transitions: Dict mapping (from_tool, to_tool) to count
+            - common_patterns: List of frequently occurring tool sequences
+            - efficient_pattern_count: Count of efficient pattern occurrences
+            - inefficient_patterns: List of detected inefficient patterns
+            - circular_reads: Count of files read multiple times without edits
 
     Raises:
         ValueError: If records is not a list
@@ -75,10 +72,11 @@ def analyze_session_tool_call_sequence_pattern(records: object) -> dict[str, Any
         return _empty_result()
 
     # Extract tool sequence
-    tools: list[str] = []
-    file_paths: list[str] = []
+    tool_sequence: list[str] = []
+    file_reads: dict[str, list[int]] = defaultdict(list)  # Track file read positions
+    file_edits: set[str] = set()  # Track which files were edited
 
-    for record in records:
+    for index, record in enumerate(records):
         if not isinstance(record, dict):
             continue
 
@@ -86,37 +84,34 @@ def analyze_session_tool_call_sequence_pattern(records: object) -> dict[str, Any
         if not tool_name:
             continue
 
-        tools.append(tool_name)
-        file_paths.append(_string(record.get("file_path", "")))
+        tool_sequence.append(tool_name)
 
-    if not tools:
-        return _empty_result()
+        # Track file operations for circular read detection
+        file_path = _string(record.get("file_path"))
+        if file_path:
+            if tool_name.lower() in ("read", "glob", "grep"):
+                file_reads[file_path].append(index)
+            elif tool_name.lower() in ("edit", "write"):
+                file_edits.add(file_path)
+
+    total_calls = len(tool_sequence)
 
     # Analyze sequences
-    sequence_patterns = _find_sequence_patterns(tools, 3)
-    tool_transitions = _find_transitions(tools)
-    consecutive_same_tool = _max_consecutive_same(tools)
-    efficient_count = _count_patterns(tools, EFFICIENT_PATTERNS)
-    inefficient_count = _count_patterns(tools, INEFFICIENT_PATTERNS)
-    circular_reads = _count_circular_reads(tools, file_paths)
-    workflow_efficiency = _classify_workflow_efficiency(
-        efficient_count,
-        inefficient_count,
-        circular_reads,
-        consecutive_same_tool,
-        len(tools),
-    )
+    sequence_stats = _calculate_sequence_stats(tool_sequence)
+    tool_transitions = _calculate_transitions(tool_sequence)
+    common_patterns = _find_common_patterns(tool_sequence)
+    efficient_count = _count_efficient_patterns(common_patterns)
+    inefficient = _detect_inefficient_patterns(tool_sequence)
+    circular_reads = _count_circular_reads(file_reads, file_edits)
 
     return {
-        "total_tool_calls": len(tools),
-        "unique_tools": len(set(tools)),
-        "sequence_patterns": sequence_patterns,
+        "total_tool_calls": total_calls,
+        "sequence_length_stats": sequence_stats,
         "tool_transitions": tool_transitions,
-        "consecutive_same_tool": consecutive_same_tool,
+        "common_patterns": common_patterns,
         "efficient_pattern_count": efficient_count,
-        "inefficient_pattern_count": inefficient_count,
+        "inefficient_patterns": inefficient,
         "circular_reads": circular_reads,
-        "workflow_efficiency": workflow_efficiency,
     }
 
 
@@ -124,14 +119,12 @@ def _empty_result() -> dict[str, Any]:
     """Return empty result structure."""
     return {
         "total_tool_calls": 0,
-        "unique_tools": 0,
-        "sequence_patterns": [],
-        "tool_transitions": [],
-        "consecutive_same_tool": 0,
+        "sequence_length_stats": {"min": 0, "max": 0, "avg": 0.0},
+        "tool_transitions": {},
+        "common_patterns": [],
         "efficient_pattern_count": 0,
-        "inefficient_pattern_count": 0,
+        "inefficient_patterns": [],
         "circular_reads": 0,
-        "workflow_efficiency": "empty",
     }
 
 
@@ -140,150 +133,117 @@ def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def _find_sequence_patterns(tools: list[str], length: int) -> list[dict[str, Any]]:
-    """Find most common N-length sequences.
+def _calculate_sequence_stats(sequence: list[str]) -> dict[str, Any]:
+    """Calculate sequence length statistics.
 
-    Returns up to 5 most common patterns with their counts.
+    For now, we treat the entire sequence as one long sequence.
+    Returns min/max/avg all equal to the total length.
     """
-    if len(tools) < length:
+    if not sequence:
+        return {"min": 0, "max": 0, "avg": 0.0}
+
+    length = len(sequence)
+    return {
+        "min": length,
+        "max": length,
+        "avg": float(length),
+    }
+
+
+def _calculate_transitions(sequence: list[str]) -> dict[str, int]:
+    """Calculate tool transition frequencies.
+
+    Returns dict mapping "ToolA->ToolB" to count.
+    """
+    if len(sequence) < 2:
+        return {}
+
+    transitions: Counter[str] = Counter()
+    for i in range(len(sequence) - 1):
+        from_tool = sequence[i]
+        to_tool = sequence[i + 1]
+        transition = f"{from_tool}->{to_tool}"
+        transitions[transition] += 1
+
+    return dict(transitions)
+
+
+def _find_common_patterns(sequence: list[str]) -> list[dict[str, Any]]:
+    """Find frequently occurring tool sequences.
+
+    Returns list of pattern dicts with sequence and count.
+    """
+    if len(sequence) < MIN_PATTERN_LENGTH:
         return []
 
-    sequences: Counter[tuple[str, ...]] = Counter()
+    pattern_counts: Counter[tuple[str, ...]] = Counter()
 
-    for i in range(len(tools) - length + 1):
-        sequence = tuple(tools[i:i + length])
-        sequences[sequence] = sequences.get(sequence, 0) + 1
+    # Extract patterns of various lengths
+    for length in range(MIN_PATTERN_LENGTH, min(MAX_PATTERN_LENGTH + 1, len(sequence) + 1)):
+        for i in range(len(sequence) - length + 1):
+            pattern = tuple(sequence[i:i + length])
+            pattern_counts[pattern] += 1
 
-    # Return top 5 patterns
-    top_patterns = sequences.most_common(5)
-    return [
+    # Filter patterns that occur at least MIN_PATTERN_FREQUENCY times
+    common = [
         {"pattern": list(pattern), "count": count}
-        for pattern, count in top_patterns
+        for pattern, count in pattern_counts.most_common()
+        if count >= MIN_PATTERN_FREQUENCY
     ]
 
-
-def _find_transitions(tools: list[str]) -> list[dict[str, Any]]:
-    """Find most common tool-to-tool transitions.
-
-    Returns up to 5 most common transitions.
-    """
-    if len(tools) < 2:
-        return []
-
-    transitions: Counter[tuple[str, str]] = Counter()
-
-    for i in range(len(tools) - 1):
-        transition = (tools[i], tools[i + 1])
-        transitions[transition] = transitions.get(transition, 0) + 1
-
-    # Return top 5 transitions
-    top_transitions = transitions.most_common(5)
-    return [
-        {"from_tool": from_tool, "to_tool": to_tool, "count": count}
-        for (from_tool, to_tool), count in top_transitions
-    ]
+    return common[:10]  # Limit to top 10
 
 
-def _max_consecutive_same(tools: list[str]) -> int:
-    """Find maximum number of consecutive calls to same tool."""
-    if not tools:
-        return 0
-
-    max_consecutive = 1
-    current_consecutive = 1
-
-    for i in range(1, len(tools)):
-        if tools[i] == tools[i - 1]:
-            current_consecutive += 1
-            max_consecutive = max(max_consecutive, current_consecutive)
-        else:
-            current_consecutive = 1
-
-    return max_consecutive
-
-
-def _count_patterns(tools: list[str], patterns: list[tuple[str, ...]]) -> int:
-    """Count occurrences of specific patterns in tool sequence."""
+def _count_efficient_patterns(common_patterns: list[dict[str, Any]]) -> int:
+    """Count occurrences of known efficient patterns."""
     count = 0
-
-    for pattern in patterns:
-        pattern_len = len(pattern)
-        for i in range(len(tools) - pattern_len + 1):
-            sequence = tuple(tools[i:i + pattern_len])
-            if sequence == pattern:
-                count += 1
-
+    for item in common_patterns:
+        pattern = tuple(item["pattern"])
+        if pattern in EFFICIENT_PATTERNS:
+            count += item["count"]
     return count
 
 
-def _count_circular_reads(tools: list[str], file_paths: list[str]) -> int:
-    """Count instances where same file is read multiple times in succession.
+def _detect_inefficient_patterns(sequence: list[str]) -> list[str]:
+    """Detect inefficient tool usage patterns.
 
-    Circular read: Same file read 2+ times within 5 tool calls.
+    Returns list of inefficiency descriptions.
     """
-    if len(tools) != len(file_paths):
-        return 0
+    inefficiencies = []
 
-    circular_count = 0
-    window_size = 6  # Window of 6 to include i + 5
+    # Detect consecutive reads of same tool without edits
+    consecutive_reads = 0
+    for i in range(len(sequence)):
+        if sequence[i].lower() == "read":
+            consecutive_reads += 1
+            if consecutive_reads >= 3:
+                if "excessive_consecutive_reads" not in inefficiencies:
+                    inefficiencies.append("excessive_consecutive_reads")
+        else:
+            consecutive_reads = 0
 
-    for i in range(len(tools)):
-        if tools[i] not in ("Read", "Glob", "Grep"):
-            continue
+    # Detect read-read-read patterns without edits
+    for i in range(len(sequence) - 2):
+        if (sequence[i].lower() == "read" and
+            sequence[i + 1].lower() == "read" and
+            sequence[i + 2].lower() == "read"):
+            if "triple_read_pattern" not in inefficiencies:
+                inefficiencies.append("triple_read_pattern")
+            break
 
-        file_path = file_paths[i]
-        if not file_path:
-            continue
-
-        # Look ahead in window (up to 5 positions ahead)
-        for j in range(i + 1, min(i + window_size, len(tools))):
-            if tools[j] in ("Read", "Glob", "Grep") and file_paths[j] == file_path:
-                circular_count += 1
-                break
-
-    return circular_count
+    return inefficiencies
 
 
-def _classify_workflow_efficiency(
-    efficient_count: int,
-    inefficient_count: int,
-    circular_reads: int,
-    max_consecutive: int,
-    total_calls: int,
-) -> str:
-    """Classify workflow efficiency based on pattern analysis.
+def _count_circular_reads(
+    file_reads: dict[str, list[int]],
+    file_edits: set[str],
+) -> int:
+    """Count files that were read multiple times without edits between reads.
 
-    Classifications:
-    - optimal: High efficient patterns, no inefficient patterns
-    - efficient: More efficient than inefficient patterns
-    - inefficient: More inefficient patterns, circular reads, or excessive consecutive
-    - mixed: Mix of patterns
-    - simple: Too few calls to classify
-    - empty: No calls
+    A circular read is when a file is read 2+ times but never edited.
     """
-    if total_calls == 0:
-        return "empty"
-
-    if total_calls < 5:
-        return "simple"
-
-    # Check for serious inefficiencies (lowered thresholds)
-    has_serious_issues = (
-        inefficient_count >= 2
-        or circular_reads > 2
-        or max_consecutive > 4
-    )
-
-    if has_serious_issues:
-        return "inefficient"
-
-    # Check for optimal patterns
-    if efficient_count > 2 and inefficient_count == 0 and circular_reads <= 1:
-        return "optimal"
-
-    # More efficient than inefficient
-    if efficient_count > inefficient_count and circular_reads <= 2:
-        return "efficient"
-
-    # Default: mixed patterns
-    return "mixed"
+    circular = 0
+    for file_path, read_positions in file_reads.items():
+        if len(read_positions) >= 2 and file_path not in file_edits:
+            circular += 1
+    return circular
