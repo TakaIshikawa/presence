@@ -143,6 +143,7 @@ def analyze_agent_preference_learning(
             raise ValueError("read_total_count must be non-negative")
         if session.read_with_offset_count > session.read_total_count:
             raise ValueError("read_with_offset_count cannot exceed read_total_count")
+        _validate_tool_usages(session)
 
     # Handle empty sessions
     if not sessions:
@@ -231,6 +232,24 @@ def analyze_agent_preference_learning(
             "avg_cache_utilization": analysis.optimization_adoption_rate.avg_cache_utilization,
         },
     }
+
+
+def _validate_tool_usages(session: SessionBehavior) -> None:
+    """Validate nested tool usage records before aggregation."""
+    if not isinstance(session.tool_usages, (list, tuple)):
+        raise ValueError("tool_usages must be a list or tuple")
+
+    for usage in session.tool_usages:
+        if not isinstance(usage, ToolUsage):
+            raise ValueError("tool_usages must contain ToolUsage instances")
+        if not usage.tool_name.strip():
+            raise ValueError("tool_name must be non-blank")
+        if not usage.task_type.strip():
+            raise ValueError("task_type must be non-blank")
+        if usage.usage_count < 0:
+            raise ValueError("usage_count must be non-negative")
+        if usage.session_id != session.session_id:
+            raise ValueError("ToolUsage session_id must match parent SessionBehavior session_id")
 
 
 def _calculate_tool_affinity_scores(

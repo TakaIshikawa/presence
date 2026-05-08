@@ -23,6 +23,7 @@ def test_complete_handoff_scores_full_completeness():
     assert result.metrics.completeness_score == 1.0
     assert result.gap_labels == ()
     assert result.quality == "complete"
+    assert result.verification_state == "passed"
 
 
 def test_missing_verification_has_specific_gap_and_insight():
@@ -53,6 +54,61 @@ def test_missing_next_steps_is_reported():
     )
 
     assert "missing_next_steps" in result.gap_labels
+    assert result.verification_state == "not_run"
+    assert "missing_verification" not in result.gap_labels
+    assert any("not successful" in insight for insight in result.insights)
+
+
+def test_failed_verification_counts_as_present_evidence_with_state():
+    result = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Fix tests",
+            changed_files=("tests/test_x.py",),
+            verification_status="failed",
+            blockers=("none",),
+            next_steps=("rerun after fix",),
+            risk_notes=("test failure remains",),
+        )
+    )
+
+    assert result.verification_state == "failed"
+    assert "missing_verification" not in result.gap_labels
+    assert result.quality == "complete"
+    assert any("not successful" in insight for insight in result.insights)
+
+
+def test_blocked_verification_counts_as_present_evidence_with_state():
+    result = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Fix tests",
+            changed_files=("tests/test_x.py",),
+            verification_status="blocked",
+            blockers=("dependency unavailable",),
+            next_steps=("retry verification",),
+            risk_notes=("verification blocked",),
+        )
+    )
+
+    assert result.verification_state == "blocked"
+    assert "missing_verification" not in result.gap_labels
+    assert result.metrics.completeness_score == 1.0
+    assert any("not successful" in insight for insight in result.insights)
+
+
+def test_blank_verification_status_is_missing_state():
+    result = analyze_session_handoff_completeness(
+        SessionHandoff(
+            objective="Fix tests",
+            changed_files=("tests/test_x.py",),
+            verification_status=" ",
+            blockers=("none",),
+            next_steps=("run tests",),
+            risk_notes=("verification missing",),
+        )
+    )
+
+    assert result.verification_state == "missing"
+    assert "missing_verification" in result.gap_labels
 
 
 def test_blocker_only_handoff_is_incomplete_but_counts_blockers_present():

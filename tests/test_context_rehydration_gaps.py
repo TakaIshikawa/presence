@@ -13,6 +13,7 @@ def test_empty_turns_return_low_zero_state():
 
     assert result.metrics.total_turns == 0
     assert result.severity == "low"
+    assert result.repeated_context_counts == {}
 
 
 def test_efficient_reuse_has_low_severity():
@@ -39,7 +40,36 @@ def test_repeated_reads_are_separate_from_clarification_asks():
     assert result.metrics.repeated_clarification_asks == 1
     assert "src/a.py" in result.top_repeated_context_keys
     assert "what is the goal?" in result.top_repeated_context_keys
+    assert result.repeated_context_counts == {
+        "src/a.py": 2,
+        "what is the goal?": 2,
+    }
     assert result.severity == "high"
+
+
+def test_repeated_file_counts_include_observed_reads():
+    result = analyze_context_rehydration_gaps(
+        [
+            ContextTurn(0, file_reads=("src/a.py", "src/b.py")),
+            ContextTurn(1, file_reads=("src/a.py",)),
+            ContextTurn(2, file_reads=("src/a.py", "src/b.py")),
+        ]
+    )
+
+    assert result.repeated_context_counts == {"src/a.py": 3, "src/b.py": 2}
+    assert result.top_repeated_context_keys == ("src/a.py", "src/b.py")
+
+
+def test_repeated_ask_counts_are_whitespace_and_case_normalized():
+    result = analyze_context_rehydration_gaps(
+        [
+            ContextTurn(0, clarification_asks=("  What   next? ",)),
+            ContextTurn(1, clarification_asks=("what next?",)),
+            ContextTurn(2, clarification_asks=("WHAT NEXT?",)),
+        ]
+    )
+
+    assert result.repeated_context_counts == {"what next?": 3}
 
 
 def test_resumed_session_without_summary_counts_gap():

@@ -11,6 +11,9 @@ _CONFLICT_PAIRS = (
     ("do not browse", "search the web", "browsing_conflict"),
     ("do not edit", "implement", "editing_conflict"),
     ("concise", "comprehensive", "verbosity_conflict"),
+    ("highest priority", "low priority", "priority_conflict"),
+    ("must", "optional", "priority_conflict"),
+    ("required", "nice to have", "priority_conflict"),
 )
 
 
