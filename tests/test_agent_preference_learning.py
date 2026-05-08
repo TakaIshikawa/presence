@@ -5,16 +5,10 @@ import pytest
 from engagement.agent_preference_learning import (
     ToolUsage,
     SessionBehavior,
-    ToolAffinityScore,
-    StrategyEvolution,
-    OptimizationAdoption,
     analyze_agent_preference_learning,
     _calculate_tool_affinity_scores,
     _track_strategy_evolution,
     _calculate_optimization_adoption,
-    MIN_TOOL_USAGE_FOR_AFFINITY,
-    STRONG_AFFINITY_THRESHOLD,
-    MIN_SESSIONS_FOR_EVOLUTION,
 )
 
 
@@ -464,6 +458,89 @@ class TestAnalyzeAgentPreferenceLearning:
         ]
         with pytest.raises(ValueError, match="read_with_offset_count cannot exceed read_total_count"):
             analyze_agent_preference_learning(sessions)
+
+    def test_invalid_nested_tool_usage_negative_count(self):
+        """Verify nested tool usages cannot have negative counts."""
+        sessions = [
+            SessionBehavior("s1", 0, [ToolUsage("Read", "file_read", -1, "s1")], 0, 0, 0, 0, 0, None)
+        ]
+        with pytest.raises(ValueError, match="usage_count must be non-negative"):
+            analyze_agent_preference_learning(sessions)
+
+    def test_invalid_nested_tool_usage_blank_tool_name(self):
+        """Verify nested tool usages cannot have blank tool names."""
+        sessions = [
+            SessionBehavior("s1", 0, [ToolUsage(" ", "file_read", 1, "s1")], 0, 0, 0, 0, 0, None)
+        ]
+        with pytest.raises(ValueError, match="tool_name must be non-blank"):
+            analyze_agent_preference_learning(sessions)
+
+    def test_invalid_nested_tool_usage_blank_task_type(self):
+        """Verify nested tool usages cannot have blank task types."""
+        sessions = [
+            SessionBehavior("s1", 0, [ToolUsage("Read", "", 1, "s1")], 0, 0, 0, 0, 0, None)
+        ]
+        with pytest.raises(ValueError, match="task_type must be non-blank"):
+            analyze_agent_preference_learning(sessions)
+
+    def test_invalid_nested_tool_usage_session_mismatch(self):
+        """Verify nested tool usages must belong to their parent session."""
+        sessions = [
+            SessionBehavior("s1", 0, [ToolUsage("Read", "file_read", 1, "other")], 0, 0, 0, 0, 0, None)
+        ]
+        with pytest.raises(ValueError, match="session_id must match parent"):
+            analyze_agent_preference_learning(sessions)
+
+    def test_valid_nested_multi_tool_usage_aggregates_affinity_scores(self):
+        """Verify valid nested tool usages still aggregate by task and tool."""
+        sessions = [
+            SessionBehavior(
+                "s1",
+                0,
+                [
+                    ToolUsage("Read", "file_read", 4, "s1"),
+                    ToolUsage("Cat", "file_read", 2, "s1"),
+                    ToolUsage("Grep", "search", 3, "s1"),
+                ],
+                0,
+                6,
+                0,
+                0,
+                0,
+                None,
+            ),
+            SessionBehavior(
+                "s2",
+                1,
+                [
+                    ToolUsage("Read", "file_read", 2, "s2"),
+                    ToolUsage("Grep", "search", 4, "s2"),
+                ],
+                0,
+                6,
+                0,
+                0,
+                0,
+                None,
+            ),
+        ]
+
+        result = analyze_agent_preference_learning(sessions)
+
+        assert result["tool_affinity_scores"]["file_read"] == {
+            "task_type": "file_read",
+            "preferred_tool": "Read",
+            "affinity_score": 0.75,
+            "usage_count": 6,
+            "alternative_tools": {"Cat": 2},
+        }
+        assert result["tool_affinity_scores"]["search"] == {
+            "task_type": "search",
+            "preferred_tool": "Grep",
+            "affinity_score": 1.0,
+            "usage_count": 7,
+            "alternative_tools": {},
+        }
 
     def test_result_structure(self):
         """Verify result structure contains all required fields."""

@@ -25,3 +25,35 @@ def test_string_prompt_is_accepted():
 
     assert report["prompt_count"] == 1
     assert report["conflict_count"] == 1
+
+
+def test_detects_high_and_low_priority_conflict_in_string_prompt():
+    report = analyze_prompt_constraint_conflicts(
+        "Use highest priority for speed, but treat speed as low priority."
+    )
+
+    assert report["has_conflicts"]
+    assert report["conflicts"][0]["conflict_type"] == "priority_conflict"
+
+
+def test_detects_must_and_optional_conflict_in_prompt_dict():
+    report = analyze_prompt_constraint_conflicts(
+        [{"prompt": "You must update docs, but the docs update is optional."}]
+    )
+
+    assert report["has_conflicts"]
+    assert report["conflicts"][0]["conflict_type"] == "priority_conflict"
+
+
+def test_detects_required_and_nice_to_have_conflict_in_mixed_prompts():
+    report = analyze_prompt_constraint_conflicts(
+        [
+            "Be concise.",
+            {"prompt": "Verification is required, but verification is nice to have."},
+        ]
+    )
+
+    assert report["prompt_count"] == 2
+    assert report["conflict_count"] == 1
+    assert report["conflicts"][0]["index"] == 1
+    assert report["conflicts"][0]["conflict_type"] == "priority_conflict"

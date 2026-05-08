@@ -28,6 +28,7 @@ class SessionHandoffCompleteness:
     metrics: HandoffCompletenessMetrics
     gap_labels: tuple[str, ...]
     quality: str
+    verification_state: str
     insights: tuple[str, ...]
 
 
@@ -39,11 +40,12 @@ def analyze_session_handoff_completeness(
     if handoff is None:
         handoff = SessionHandoff()
     _validate_handoff(handoff)
+    verification_state = _normalize_verification_state(handoff.verification_status)
 
     checks = {
         "missing_objective": bool(handoff.objective.strip()),
         "missing_changed_files": bool(handoff.changed_files),
-        "missing_verification": bool(handoff.verification_status.strip()),
+        "missing_verification": verification_state != "missing",
         "missing_blockers": bool(handoff.blockers),
         "missing_next_steps": bool(handoff.next_steps),
         "missing_risk_notes": bool(handoff.risk_notes),
@@ -57,7 +59,8 @@ def analyze_session_handoff_completeness(
         metrics=metrics,
         gap_labels=gaps,
         quality=quality,
-        insights=_handoff_insights(gaps),
+        verification_state=verification_state,
+        insights=_handoff_insights(gaps, verification_state),
     )
 
 
@@ -76,9 +79,33 @@ def _validate_handoff(handoff: SessionHandoff) -> None:
             raise ValueError(f"{name} must contain only strings")
 
 
-def _handoff_insights(gaps: tuple[str, ...]) -> tuple[str, ...]:
+def _normalize_verification_state(verification_status: str) -> str:
+    normalized = " ".join(verification_status.lower().replace("-", " ").replace("_", " ").split())
+    if not normalized:
+        return "missing"
+    if "not run" in normalized:
+        return "not_run"
+    if "blocked" in normalized:
+        return "blocked"
+    if "unknown" in normalized:
+        return "unknown"
+    if "fail" in normalized or "error" in normalized:
+        return "failed"
+    if "pass" in normalized or "success" in normalized:
+        return "passed"
+    return "provided"
+
+
+def _handoff_insights(gaps: tuple[str, ...], verification_state: str) -> tuple[str, ...]:
+    verification_insight = ()
+    if verification_state in {"failed", "not_run", "blocked", "unknown"}:
+        verification_insight = (f"Verification was not successful: {verification_state}.",)
+
     if not gaps:
-        return ("Handoff contains objective, files, verification, blockers, next steps, and risks.",)
+        return (
+            "Handoff contains objective, files, verification, blockers, next steps, and risks.",
+            *verification_insight,
+        )
     priority = {
         "missing_objective": "Add the handoff objective so the next agent knows the target.",
         "missing_verification": "Add verification status before handoff.",
@@ -87,4 +114,4 @@ def _handoff_insights(gaps: tuple[str, ...]) -> tuple[str, ...]:
         "missing_blockers": "State blockers explicitly, even if there are none.",
         "missing_risk_notes": "Capture risk notes for follow-up review.",
     }
-    return tuple(priority[gap] for gap in gaps[:3])
+    return (*verification_insight, *(priority[gap] for gap in gaps[:3]))

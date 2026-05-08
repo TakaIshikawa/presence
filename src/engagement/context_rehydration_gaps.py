@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class ContextRehydrationGaps:
     severity: str
     top_repeated_context_keys: tuple[str, ...]
     insights: tuple[str, ...]
+    repeated_context_counts: Mapping[str, int]
 
 
 def analyze_context_rehydration_gaps(
@@ -40,16 +41,19 @@ def analyze_context_rehydration_gaps(
     _validate_context_turns(turns)
     if not turns:
         metrics = ContextRehydrationMetrics(0, 0, 0, 0, 0.0)
-        return ContextRehydrationGaps(metrics, "low", (), ("No turns supplied.",))
+        return ContextRehydrationGaps(metrics, "low", (), ("No turns supplied.",), {})
 
     file_counts: dict[str, int] = {}
     ask_counts: dict[str, int] = {}
+    context_counts: dict[str, int] = {}
     for turn in turns:
         for path in turn.file_reads:
             file_counts[path] = file_counts.get(path, 0) + 1
+            context_counts[path] = context_counts.get(path, 0) + 1
         for ask in turn.clarification_asks:
             key = " ".join(ask.lower().split())
             ask_counts[key] = ask_counts.get(key, 0) + 1
+            context_counts[key] = context_counts.get(key, 0) + 1
 
     repeated_file_reads = sum(count - 1 for count in file_counts.values() if count > 1)
     repeated_asks = sum(count - 1 for count in ask_counts.values() if count > 1)
@@ -64,14 +68,16 @@ def analyze_context_rehydration_gaps(
         round(ratio, 3),
     )
     severity = "high" if ratio >= 0.75 else "moderate" if ratio >= 0.25 else "low"
-    repeated_keys = sorted(
-        [key for key, count in {**file_counts, **ask_counts}.items() if count > 1]
-    )
+    repeated_counts = {
+        key: count for key, count in sorted(context_counts.items()) if count > 1
+    }
+    repeated_keys = sorted(repeated_counts)
     return ContextRehydrationGaps(
         metrics,
         severity,
         tuple(repeated_keys[:5]),
         _rehydration_insights(metrics, severity),
+        repeated_counts,
     )
 
 
