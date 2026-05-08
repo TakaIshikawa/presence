@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any, Iterable
 
 
-COMMAND_CLASSES = ("missing", "targeted", "broad", "typecheck", "build", "unknown")
+COMMAND_CLASSES = ("missing", "targeted", "broad", "typecheck", "build", "lint", "unknown")
 _COMMAND_FIELDS = (
     "verification_commands",
     "verification",
@@ -142,6 +142,8 @@ def _classify_command(command: str) -> str:
         return "typecheck"
     if any(token in normalized for token in ("npm run build", "pnpm build", "yarn build", "cargo build", "go build", "make build")):
         return "build"
+    if _is_lint_or_format_check(normalized):
+        return "lint"
     if _is_broad_suite(normalized):
         return "broad"
     if _is_targeted_verification(normalized):
@@ -149,6 +151,15 @@ def _classify_command(command: str) -> str:
     if any(token in normalized for token in ("pytest", "vitest", "jest", "go test", "cargo test", "npm test", "pnpm test", "yarn test")):
         return "broad"
     return "unknown"
+
+
+def _is_lint_or_format_check(command: str) -> bool:
+    lint_tokens = ("ruff check", "flake8", "pylint", "eslint")
+    if any(token in command for token in lint_tokens):
+        return True
+    if any(token in command for token in ("black", "prettier")) and "--check" in command:
+        return True
+    return False
 
 
 def _is_broad_suite(command: str) -> bool:

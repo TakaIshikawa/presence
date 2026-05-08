@@ -27,3 +27,45 @@ def test_summarizes_pass_failed_and_missing_verification():
     assert report["missing_count"] == 1
     assert report["verification_coverage_percentage"] == 66.67
     assert report["pass_rate_percentage"] == 50.0
+
+
+def test_groups_verification_by_execution_pack_metadata():
+    report = analyze_pack_verification_summary(
+        [
+            {
+                "task_id": "a",
+                "execution_pack": "pack-a",
+                "verification_command": "pytest a",
+                "verification_status": "passed",
+            },
+            {
+                "task_id": "b",
+                "pack": "pack-a",
+                "verification_command": "pytest b",
+                "verification_status": "failed",
+            },
+            {"task_id": "c", "pack_key": "pack-b", "status": "completed"},
+            {"task_id": "d", "verification_command": "pytest d", "verification_status": "passed"},
+        ]
+    )
+
+    assert report["packs"]["pack-a"] == {
+        "task_count": 2,
+        "passed": 1,
+        "failed": 1,
+        "missing": 0,
+        "verification_coverage_percentage": 100.0,
+        "pass_rate_percentage": 50.0,
+    }
+    assert report["packs"]["pack-b"]["missing"] == 1
+    assert report["packs"]["unpackaged"]["passed"] == 1
+
+
+def test_pack_summary_uses_unpacked_fallback_for_tasks_without_metadata():
+    report = analyze_pack_verification_summary(
+        [{"task_id": "a", "status": "completed"}, None]
+    )
+
+    assert set(report["packs"]) == {"unpackaged"}
+    assert report["packs"]["unpackaged"]["task_count"] == 2
+    assert report["packs"]["unpackaged"]["missing"] == 2

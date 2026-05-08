@@ -59,6 +59,23 @@ def test_typecheck_and_build_commands_are_classified():
     assert report["records_with_verification"] == 2
 
 
+def test_lint_and_format_check_commands_are_classified_as_meaningful_verification():
+    report = analyze_verification_command_coverage(
+        [
+            {"id": "ruff", "verification_commands": ["ruff check src"]},
+            {"id": "black", "verification_commands": ["black --check src tests"]},
+            {"id": "flake8", "commands": ["flake8 src"]},
+            {"id": "pylint", "commands": ["pylint src"]},
+            {"id": "eslint", "commands": ["eslint ."]},
+            {"id": "prettier", "commands": ["prettier --check ."]},
+        ]
+    )
+
+    assert report["records_with_verification"] == 6
+    assert report["command_class_counts"]["lint"] == 6
+    assert report["command_class_counts"]["unknown"] == 0
+
+
 def test_exec_style_tool_calls_extract_dict_cmd_arguments():
     report = analyze_verification_command_coverage(
         [
@@ -83,6 +100,25 @@ def test_exec_style_tool_calls_extract_dict_cmd_arguments():
     assert report["command_class_counts"]["targeted"] == 1
     assert report["command_class_counts"]["typecheck"] == 1
     assert report["command_class_counts"]["build"] == 1
+
+
+def test_exec_style_tool_calls_extract_lint_commands():
+    report = analyze_verification_command_coverage(
+        [
+            {
+                "id": "shell-lint",
+                "tool_calls": [{"name": "exec_command", "args": {"cmd": "ruff check src"}}],
+            },
+            {
+                "id": "bash-format",
+                "tool_calls": [{"name": "bash", "input": "black --check src tests"}],
+            },
+        ]
+    )
+
+    assert report["records_with_verification"] == 2
+    assert report["command_class_counts"]["lint"] == 2
+    assert report["weak_or_missing_examples"] == []
 
 
 def test_exec_style_tool_calls_extract_string_inputs_and_iterable_commands():

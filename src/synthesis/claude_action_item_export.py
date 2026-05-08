@@ -117,6 +117,34 @@ def format_claude_action_item_exports_json(
     return json.dumps([export.to_dict() for export in exports], indent=2, sort_keys=True)
 
 
+def export_claude_action_items_json(
+    text: str,
+    *,
+    session_metadata: dict[str, Any] | None = None,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    status: str = "open",
+    created_at: str | None = None,
+    resolved_at: str | None = None,
+) -> str:
+    """Extract action items from text and export a schema-validated JSON payload."""
+    exports = extract_claude_action_items_from_text(
+        text,
+        session_metadata=session_metadata,
+        min_confidence=min_confidence,
+    )
+    payload = [
+        _action_item_json_row(
+            export,
+            status=status,
+            created_at=created_at,
+            resolved_at=resolved_at,
+        )
+        for export in exports
+    ]
+    _validate_action_item_json_payload(payload)
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
 def format_claude_action_item_exports_text(
     exports: list[ClaudeActionItemExport],
 ) -> str:
@@ -329,6 +357,48 @@ def _suggest_angle(signal_type: str, action_item: str) -> str:
     if re.search(r"\b(export|content|post|thread|newsletter|idea)\b", action_item.lower()):
         return f"Use {compact} as a behind-the-scenes content workflow lesson."
     return f"Show the implementation follow-up behind {compact} and why it mattered."
+
+
+def _action_item_json_row(
+    export: ClaudeActionItemExport,
+    *,
+    status: str,
+    created_at: str | None,
+    resolved_at: str | None,
+) -> dict[str, Any]:
+    created = created_at or export.timestamp
+    resolved = resolved_at if status == "resolved" else None
+    return {
+        "action_id": export.action_item_id,
+        "prompt_text": export.action_item,
+        "confidence_score": export.confidence,
+        "status": status,
+        "created_at": created,
+        "resolved_at": resolved,
+    }
+
+
+def _validate_action_item_json_payload(payload: list[dict[str, Any]]) -> None:
+    required = {"action_id", "prompt_text", "confidence_score", "status", "created_at", "resolved_at"}
+    valid_statuses = {"open", "resolved", "dismissed"}
+    for item in payload:
+        missing = required - set(item)
+        if missing:
+            raise ValueError(f"action item JSON missing required fields: {sorted(missing)}")
+        if not isinstance(item["action_id"], str) or not item["action_id"]:
+            raise ValueError("action_id must be a non-empty string")
+        if not isinstance(item["prompt_text"], str) or not item["prompt_text"]:
+            raise ValueError("prompt_text must be a non-empty string")
+        if not isinstance(item["confidence_score"], (int, float)) or isinstance(item["confidence_score"], bool):
+            raise ValueError("confidence_score must be numeric")
+        if not 0 <= float(item["confidence_score"]) <= 1:
+            raise ValueError("confidence_score must be between 0 and 1")
+        if item["status"] not in valid_statuses:
+            raise ValueError("status must be one of open, resolved, dismissed")
+        if item["created_at"] is not None and not isinstance(item["created_at"], str):
+            raise ValueError("created_at must be a string or null")
+        if item["resolved_at"] is not None and not isinstance(item["resolved_at"], str):
+            raise ValueError("resolved_at must be a string or null")
 
 
 def _clean_action_item(line: str) -> str:

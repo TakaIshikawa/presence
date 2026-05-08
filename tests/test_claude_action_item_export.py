@@ -14,6 +14,7 @@ import pytest
 from synthesis.claude_action_item_export import (
     SOURCE_NAME,
     build_claude_action_item_exports,
+    export_claude_action_items_json,
     extract_claude_action_items_from_text,
     format_claude_action_item_exports_json,
 )
@@ -141,6 +142,59 @@ def test_json_formatter_includes_required_export_fields():
     assert payload[0]["excerpt"]
     assert payload[0]["confidence"] >= 0.65
     assert "quality-gate" in payload[0]["suggested_content_angle"]
+
+
+def test_export_claude_action_items_json_uses_schema_fields():
+    payload = json.loads(
+        export_claude_action_items_json(
+            "TODO: add JSON export for Claude action items.",
+            session_metadata={
+                "session_id": "sess-json-export",
+                "timestamp": "2026-04-30T12:00:00+00:00",
+            },
+            min_confidence=0.65,
+        )
+    )
+
+    assert set(payload[0]) == {
+        "action_id",
+        "prompt_text",
+        "confidence_score",
+        "status",
+        "created_at",
+        "resolved_at",
+    }
+    assert payload[0]["action_id"].startswith("claude_action_")
+    assert "JSON export" in payload[0]["prompt_text"]
+    assert payload[0]["confidence_score"] >= 0.65
+    assert payload[0]["status"] == "open"
+    assert payload[0]["created_at"] == "2026-04-30T12:00:00+00:00"
+    assert payload[0]["resolved_at"] is None
+
+
+def test_export_claude_action_items_json_filters_by_min_confidence_and_edge_cases():
+    payload = json.loads(
+        export_claude_action_items_json(
+            """
+            TODO: add JSON export for Claude action items.
+            Should the exporter include unresolved questions?
+            """,
+            min_confidence=0.9,
+        )
+    )
+
+    assert len(payload) == 1
+    assert "unresolved questions" not in payload[0]["prompt_text"]
+    assert json.loads(export_claude_action_items_json("", min_confidence=0.65)) == []
+
+
+def test_export_claude_action_items_json_validates_status():
+    with pytest.raises(ValueError, match="status"):
+        export_claude_action_items_json(
+            "TODO: add tests.",
+            min_confidence=0.65,
+            status="unknown",
+        )
 
 
 def test_cli_supports_json_output_and_min_confidence(db, monkeypatch, capsys):
