@@ -83,3 +83,16 @@ def test_invalid_inputs_raise_value_error():
         )
     with pytest.raises(ValueError, match="event_type"):
         analyze_tool_result_followup_latency([ToolResultFollowupEvent(0, "other", "exec", "tests")])
+
+
+def test_one_action_satisfies_only_one_result():
+    report = analyze_tool_result_followup_latency(
+        [
+            ToolResultFollowupEvent(0, "result", "exec", "tests"),
+            ToolResultFollowupEvent(1, "result", "exec", "tests"),
+            ToolResultFollowupEvent(2, "action", "exec", "tests"),
+        ]
+    )
+
+    assert report.followed_results == 1
+    assert report.stale_results == 1
