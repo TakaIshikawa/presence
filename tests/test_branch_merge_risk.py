@@ -1,8 +1,16 @@
 """Tests for branch merge risk analysis."""
 
+from typing import cast
+
 import pytest
 
 from synthesis.branch_merge_risk import BranchTouchRecord, analyze_branch_merge_risk
+
+
+def _record_with_invalid_changed_files(changed_files: object) -> BranchTouchRecord:
+    record = BranchTouchRecord("a", ("src/foo.py",))
+    object.__setattr__(record, "changed_files", changed_files)
+    return record
 
 
 def test_independent_branches_with_companion_tests_are_low_risk():
@@ -55,7 +63,9 @@ def test_hotspot_sorting_is_deterministic_for_equal_counts():
 
 
 def test_invalid_records_raise_value_error():
+    malformed_record: object = {"branch_name": "a"}
+
     with pytest.raises(ValueError, match="BranchTouchRecord"):
-        analyze_branch_merge_risk([{"branch_name": "a"}])
+        analyze_branch_merge_risk(cast(list[BranchTouchRecord], [malformed_record]))
     with pytest.raises(ValueError, match="changed_files"):
-        analyze_branch_merge_risk([BranchTouchRecord("a", ["src/foo.py"])])  # type: ignore[arg-type]
+        analyze_branch_merge_risk([_record_with_invalid_changed_files(["src/foo.py"])])
