@@ -60,8 +60,8 @@ class SessionToolUsageDensity:
 
 
 def calculate_session_tool_usage_density(
-    tool_calls: Sequence[str],
-    turn_count: int,
+    tool_calls: object,
+    turn_count: object,
 ) -> SessionToolUsageDensity:
     """Calculate tool usage density metrics for a session.
 
@@ -75,16 +75,18 @@ def calculate_session_tool_usage_density(
     Raises:
         ValueError: If turn_count is negative or tool_calls contains invalid data
     """
+    if not isinstance(turn_count, int) or isinstance(turn_count, bool):
+        raise ValueError("turn_count must be an integer")
     if turn_count < 0:
         raise ValueError("turn_count must be non-negative")
-
     if not isinstance(tool_calls, (list, tuple)):
-        raise ValueError("tool_calls must be a sequence (list or tuple)")
+        raise ValueError("tool_calls must be a list or tuple of strings")
 
-    # Validate tool_calls contains strings
-    if tool_calls:
-        if not all(isinstance(tool, str) for tool in tool_calls):
-            raise ValueError("tool_calls must contain only strings")
+    for index, tool in enumerate(tool_calls):
+        if not isinstance(tool, str):
+            raise ValueError(f"tool_calls[{index}] must be a string")
+
+    validated_tool_calls = tuple(tool_calls)
 
     # Handle empty session
     if turn_count == 0:
@@ -95,7 +97,7 @@ def calculate_session_tool_usage_density(
             burst_density=0.0,
             workflow_pattern="empty",
             metrics=ToolUsageMetrics(
-                tool_calls=tuple(tool_calls),
+                tool_calls=validated_tool_calls,
                 turn_count=0,
                 unique_tool_count=0,
                 total_tool_count=0,
@@ -103,17 +105,17 @@ def calculate_session_tool_usage_density(
             insights=["Empty session - no tool usage to analyze"],
         )
 
-    total_tool_count = len(tool_calls)
-    unique_tool_count = len(set(tool_calls)) if tool_calls else 0
+    total_tool_count = len(validated_tool_calls)
+    unique_tool_count = len(set(validated_tool_calls)) if validated_tool_calls else 0
 
     # Calculate metrics
     tools_per_turn = _calculate_tools_per_turn(total_tool_count, turn_count)
     tool_diversity = _calculate_tool_diversity_index(unique_tool_count, total_tool_count)
-    clustering = _calculate_tool_clustering_coefficient(tool_calls)
+    clustering = _calculate_tool_clustering_coefficient(validated_tool_calls)
     burst_density = _calculate_burst_density(tools_per_turn)
 
     metrics = ToolUsageMetrics(
-        tool_calls=tuple(tool_calls),
+        tool_calls=validated_tool_calls,
         turn_count=turn_count,
         unique_tool_count=unique_tool_count,
         total_tool_count=total_tool_count,

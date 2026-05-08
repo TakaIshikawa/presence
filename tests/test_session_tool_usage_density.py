@@ -378,18 +378,27 @@ class TestSessionToolUsageDensityEdgeCases:
 
     def test_invalid_tool_calls_type_raises(self):
         """Verify invalid tool_calls type raises ValueError."""
-        with pytest.raises(ValueError, match="must be a sequence"):
+        with pytest.raises(ValueError, match="tool_calls must be a list or tuple of strings"):
             calculate_session_tool_usage_density(
-                tool_calls="not a list",  # type: ignore
+                tool_calls="not a list",
                 turn_count=10,
             )
 
     def test_tool_calls_with_non_string_raises(self):
         """Verify tool_calls with non-strings raises ValueError."""
-        with pytest.raises(ValueError, match="must contain only strings"):
+        with pytest.raises(ValueError, match=r"tool_calls\[0\] must be a string"):
             calculate_session_tool_usage_density(
-                tool_calls=[123, 456],  # type: ignore
+                tool_calls=[123, 456],
                 turn_count=10,
+            )
+
+    @pytest.mark.parametrize("turn_count", [1.5, "10", None, True])
+    def test_non_integer_turn_count_raises(self, turn_count):
+        """Verify non-integer turn counts raise ValueError."""
+        with pytest.raises(ValueError, match="turn_count must be an integer"):
+            calculate_session_tool_usage_density(
+                tool_calls=["read"],
+                turn_count=turn_count,
             )
 
     def test_empty_tool_calls_with_positive_turns(self):
