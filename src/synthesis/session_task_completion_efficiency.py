@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, TypedDict
 
 
 EVENT_TODO_DECLARED = "todo_declared"
 EVENT_TODO_COMPLETED = "todo_completed"
 EVENT_TODO_ABANDONED = "todo_abandoned"
+
+
+class CompletedTaskDetail(TypedDict):
+    """Details of a completed task."""
+
+    task_id: str
+    description: str
+    start_turn: int
+    end_turn: int
+    turns_to_complete: int
+    tokens_used: int
+
+
+class AbandonedTaskDetail(TypedDict):
+    """Details of an abandoned task."""
+
+    task_id: str
+    description: str
+    start_turn: int
+    abandoned_turn: int
 
 
 @dataclass(frozen=True)
@@ -41,8 +61,8 @@ class SessionTaskCompletionEfficiencyAnalysis:
     """Complete analysis of task completion efficiency."""
 
     metrics: TaskEfficiencyMetrics
-    completed_task_details: tuple[dict[str, str | int], ...]
-    abandoned_task_details: tuple[dict[str, str | int], ...]
+    completed_task_details: tuple[CompletedTaskDetail, ...]
+    abandoned_task_details: tuple[AbandonedTaskDetail, ...]
     insights: tuple[str, ...]
 
 
@@ -63,8 +83,8 @@ def analyze_session_task_completion_efficiency(
 
     # Track task states
     declared_tasks: dict[str, tuple[int, str, int]] = {}  # task_id -> (turn, desc, start_tokens)
-    completed_tasks: list[dict[str, str | int]] = []
-    abandoned_tasks: list[dict[str, str | int]] = []
+    completed_tasks: list[CompletedTaskDetail] = []
+    abandoned_tasks: list[AbandonedTaskDetail] = []
 
     cumulative_tokens = 0
 
@@ -118,7 +138,7 @@ def analyze_session_task_completion_efficiency(
     completion_rate = len(completed_tasks) / total_tasks if total_tasks > 0 else 0.0
     abandonment_rate = len(abandoned_tasks) / total_tasks if total_tasks > 0 else 0.0
 
-    total_completion_tokens = sum(task["tokens_used"] for task in completed_tasks)  # type: ignore
+    total_completion_tokens = sum(task["tokens_used"] for task in completed_tasks)
     avg_tokens = (
         total_completion_tokens / len(completed_tasks) if completed_tasks else 0.0
     )
