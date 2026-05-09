@@ -1,5 +1,6 @@
 """Tests for task switching overhead analyzer."""
 
+from typing import Any
 import pytest
 from datetime import datetime, timedelta, timezone
 from math import inf, nan
@@ -429,13 +430,15 @@ class TestValidation:
 
     def test_invalid_switches_type_raises(self):
         """Verify invalid switches type raises ValueError."""
+        invalid_switches: Any = "not a list"
         with pytest.raises(ValueError, match="must be a list"):
-            analyze_task_switching_overhead("not a list", 60.0)  # type: ignore
+            analyze_task_switching_overhead(invalid_switches, 60.0)
 
     def test_invalid_switch_instance_raises(self):
         """Verify invalid switch instance raises ValueError."""
+        invalid_switches: Any = [{"not": "a switch"}]
         with pytest.raises(ValueError, match="TaskSwitch instances"):
-            analyze_task_switching_overhead([{"not": "a switch"}], 60.0)  # type: ignore
+            analyze_task_switching_overhead(invalid_switches, 60.0)
 
     def test_naive_timestamp_raises(self):
         """Verify naive datetime raises ValueError."""
@@ -464,8 +467,9 @@ class TestValidation:
     @pytest.mark.parametrize("duration", ["60", nan, inf, -inf, True])
     def test_invalid_session_duration_type_raises(self, duration):
         """Verify session duration must be a finite number."""
+        invalid_duration: Any = duration
         with pytest.raises(ValueError, match="session_duration_minutes must be a finite number"):
-            analyze_task_switching_overhead([], duration)  # type: ignore[arg-type]
+            analyze_task_switching_overhead([], invalid_duration)
 
     def test_out_of_order_switch_timestamps_raise(self):
         """Verify switch timestamps must be chronological."""
