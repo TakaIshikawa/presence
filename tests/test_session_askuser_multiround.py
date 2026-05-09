@@ -1,682 +1,428 @@
-"""Tests for session AskUserQuestion multi-turn conversation analyzer."""
+"""Tests for session AskUserQuestion multi-turn conversation flow analyzer."""
 
 import pytest
 
-from synthesis.session_askuser_multiround import analyze_session_askuser_multiround
+from synthesis.session_askuser_multiround import (
+    analyze_session_askuser_multiround,
+    _is_exitplanmode_confusion,
+    _evaluate_option_quality,
+    _is_multiselect_appropriate,
+)
 
 
 class TestAnalyzeSessionAskUserMultiRound:
     """Test main analyzer function."""
 
-    def test_empty_session_returns_zeroed_metrics(self):
+    def test_empty_session(self):
         """Verify empty session returns zero metrics."""
         result = analyze_session_askuser_multiround([])
 
         assert result["total_turns"] == 0
         assert result["askuser_invocations"] == 0
-        assert result["total_questions_asked"] == 0
-        assert result["avg_questions_per_invocation"] == 0.0
-        assert result["sessions_with_multiple_rounds"] is False
-        assert result["multi_round_session_percentage"] == 0.0
-        assert result["time_between_rounds_seconds"] == []
-        assert result["avg_time_between_rounds_seconds"] == 0.0
-        assert result["min_time_between_rounds_seconds"] == 0.0
-        assert result["max_time_between_rounds_seconds"] == 0.0
-        assert result["session_completed"] is False
-        assert result["session_failed"] is False
-        assert result["correlation_score"] == 0.0
+        assert result["questions_per_session"] == 0
+        assert result["batch_efficiency_rate"] == 0.0
+        assert result["early_planning_rate"] == 0.0
+        assert result["option_quality_score"] == 0.0
+        assert result["multiselect_appropriate_rate"] == 0.0
+        assert result["exitplanmode_confusion_rate"] == 0.0
 
-    def test_none_input_treated_as_empty_list(self):
+    def test_none_input(self):
         """Verify None input is treated as empty list."""
         result = analyze_session_askuser_multiround(None)
         assert result["total_turns"] == 0
 
-    def test_invalid_input_type_raises_error(self):
+    def test_invalid_input_type(self):
         """Verify non-list input raises ValueError."""
         with pytest.raises(ValueError, match="records must be a list"):
             analyze_session_askuser_multiround("not a list")
 
-    def test_single_question_round(self):
-        """Verify single AskUserQuestion invocation."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "Read",
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [
-                    {"question": "Which approach should we use?"},
-                    {"question": "What is your preference?"},
-                ],
-                "timestamp": 1000.0,
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "Edit",
-            },
-        ])
-
-        assert result["total_turns"] == 3
-        assert result["askuser_invocations"] == 1
-        assert result["total_questions_asked"] == 2
-        assert result["avg_questions_per_invocation"] == 2.0
-        assert result["sessions_with_multiple_rounds"] is False
-        assert result["multi_round_session_percentage"] == 0.0
-
-    def test_multiple_question_rounds(self):
-        """Verify multiple AskUserQuestion invocations."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Question 1?"}],
-                "timestamp": 1000.0,
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "Edit",
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Question 2?"}],
-                "timestamp": 1050.0,
-            },
-            {
-                "turn_index": 3,
-                "tool_name": "Write",
-            },
-            {
-                "turn_index": 4,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Question 3?"}],
-                "timestamp": 1120.0,
-            },
-        ])
-
-        assert result["askuser_invocations"] == 3
-        assert result["total_questions_asked"] == 3
-        assert result["sessions_with_multiple_rounds"] is True
-        assert result["multi_round_session_percentage"] == 100.0
-
-    def test_time_between_rounds_calculation(self):
-        """Verify time intervals between question rounds."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-                "timestamp": 1000.0,
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-                "timestamp": 1050.0,
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q3?"}],
-                "timestamp": 1120.0,
-            },
-        ])
-
-        # Intervals: 1050-1000=50, 1120-1050=70
-        assert result["time_between_rounds_seconds"] == [50.0, 70.0]
-        assert result["avg_time_between_rounds_seconds"] == 60.0
-        assert result["min_time_between_rounds_seconds"] == 50.0
-        assert result["max_time_between_rounds_seconds"] == 70.0
-
-    def test_no_timestamps_provided(self):
-        """Verify handling when timestamps are missing."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-            },
-        ])
-
-        assert result["askuser_invocations"] == 2
-        assert result["time_between_rounds_seconds"] == []
-        assert result["avg_time_between_rounds_seconds"] == 0.0
-
-    def test_partial_timestamps(self):
-        """Verify handling when only some records have timestamps."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-                "timestamp": 1000.0,
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-                # No timestamp
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q3?"}],
-                "timestamp": 1100.0,
-            },
-        ])
-
-        # Only records with timestamps included
-        assert result["time_between_rounds_seconds"] == [100.0]
-
-    def test_session_completed_success(self):
-        """Verify session completion tracking."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q?"}],
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "Edit",
-                "session_completed": True,
-            },
-        ])
-
-        assert result["session_completed"] is True
-        assert result["session_failed"] is False
-
-    def test_session_failed(self):
-        """Verify session failure tracking."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q?"}],
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "Edit",
-                "session_failed": True,
-            },
-        ])
-
-        assert result["session_completed"] is False
-        assert result["session_failed"] is True
-
-    def test_correlation_score_no_questions_completed(self):
-        """Verify correlation score when no questions asked but completed."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "Read",
-                "session_completed": True,
-            },
-        ])
-
-        # Autonomous completion
-        assert result["correlation_score"] == 0.5
-
-    def test_correlation_score_no_questions_failed(self):
-        """Verify correlation score when no questions asked and failed."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "Read",
-                "session_failed": True,
-            },
-        ])
-
-        # Should have asked for help
-        assert result["correlation_score"] == -0.5
-
-    def test_correlation_score_few_questions_completed(self):
-        """Verify correlation score with few questions and success."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "Write",
-                "session_completed": True,
-            },
-        ])
-
-        # 2 invocations + success = strong positive correlation
-        assert result["correlation_score"] == 0.9
-
-    def test_correlation_score_many_questions_completed(self):
-        """Verify correlation score with many questions and success."""
-        result = analyze_session_askuser_multiround([
-            *[
-                {
-                    "turn_index": i,
-                    "tool_name": "AskUserQuestion",
-                    "questions": [{"question": f"Q{i}?"}],
-                }
-                for i in range(7)
-            ],
-            {
-                "turn_index": 7,
-                "tool_name": "Write",
-                "session_completed": True,
-            },
-        ])
-
-        # 7 invocations + success = weak positive correlation
-        assert result["correlation_score"] == 0.3
-
-    def test_correlation_score_questions_failed(self):
-        """Verify correlation score with questions and failure."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q3?"}],
-            },
-            {
-                "turn_index": 3,
-                "tool_name": "Write",
-                "session_failed": True,
-            },
-        ])
-
-        # 3 invocations + failure = moderate negative correlation
-        assert result["correlation_score"] == -0.7
-
-    def test_correlation_score_many_questions_failed(self):
-        """Verify correlation score with many questions and failure."""
-        result = analyze_session_askuser_multiround([
-            *[
-                {
-                    "turn_index": i,
-                    "tool_name": "AskUserQuestion",
-                    "questions": [{"question": f"Q{i}?"}],
-                }
-                for i in range(10)
-            ],
-            {
-                "turn_index": 10,
-                "tool_name": "Write",
-                "session_failed": True,
-            },
-        ])
-
-        # 10 invocations + failure = strong negative correlation
-        assert result["correlation_score"] == -0.9
-
-    def test_multiple_questions_per_invocation(self):
-        """Verify tracking of multiple questions in single invocation."""
+    def test_single_question_sequential(self):
+        """Verify single question per call (sequential pattern)."""
         result = analyze_session_askuser_multiround([
             {
                 "turn_index": 0,
                 "tool_name": "AskUserQuestion",
                 "questions": [
-                    {"question": "Q1?"},
-                    {"question": "Q2?"},
-                    {"question": "Q3?"},
+                    {
+                        "question": "Which approach should we use?",
+                        "options": [
+                            {"label": "Approach A", "description": "Use method A for implementation"},
+                            {"label": "Approach B", "description": "Use method B for implementation"},
+                        ],
+                        "multiSelect": False,
+                    }
                 ],
-            },
-        ])
-
-        assert result["askuser_invocations"] == 1
-        assert result["total_questions_asked"] == 3
-        assert result["avg_questions_per_invocation"] == 3.0
-
-    def test_mixed_question_counts_per_invocation(self):
-        """Verify average calculation with varying question counts."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [
-                    {"question": "Q2?"},
-                    {"question": "Q3?"},
-                    {"question": "Q4?"},
-                ],
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "AskUserQuestion",
-                "questions": [
-                    {"question": "Q5?"},
-                    {"question": "Q6?"},
-                ],
-            },
-        ])
-
-        assert result["askuser_invocations"] == 3
-        assert result["total_questions_asked"] == 6
-        # (1 + 3 + 2) / 3 = 2.0
-        assert result["avg_questions_per_invocation"] == 2.0
-
-    def test_empty_questions_list(self):
-        """Verify handling of empty questions list."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [],
-            },
-        ])
-
-        assert result["askuser_invocations"] == 1
-        assert result["total_questions_asked"] == 0
-
-    def test_missing_questions_field(self):
-        """Verify handling when questions field is missing."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                # No questions field
-            },
-        ])
-
-        assert result["askuser_invocations"] == 1
-        assert result["total_questions_asked"] == 0
-
-    def test_non_list_questions_field(self):
-        """Verify handling when questions field is not a list."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": "not a list",
-            },
-        ])
-
-        assert result["askuser_invocations"] == 1
-        assert result["total_questions_asked"] == 0
-
-    def test_case_insensitive_tool_matching(self):
-        """Verify tool name matching is case-insensitive."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "ASKUSERQUESTION",
-                "questions": [{"question": "Q?"}],
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "askuserquestion",
-                "questions": [{"question": "Q?"}],
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q?"}],
-            },
-        ])
-
-        assert result["askuser_invocations"] == 3
-
-    def test_non_askuser_tools_ignored(self):
-        """Verify non-AskUserQuestion tools are ignored."""
-        result = analyze_session_askuser_multiround([
-            {"turn_index": 0, "tool_name": "Read"},
-            {"turn_index": 1, "tool_name": "Edit"},
-            {"turn_index": 2, "tool_name": "Write"},
-            {
-                "turn_index": 3,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q?"}],
-            },
-            {"turn_index": 4, "tool_name": "Bash"},
-        ])
-
-        assert result["total_turns"] == 5
-        assert result["askuser_invocations"] == 1
-
-    def test_malformed_record_skipped(self):
-        """Verify non-dict records are skipped."""
-        result = analyze_session_askuser_multiround([
-            "not a dict",
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q?"}],
-            },
-            None,
-            42,
-        ])
-
-        assert result["total_turns"] == 1
-        assert result["askuser_invocations"] == 1
-
-    def test_whitespace_handling_in_tool_names(self):
-        """Verify whitespace in tool names is stripped."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "  AskUserQuestion  ",
-                "questions": [{"question": "Q?"}],
+                "in_plan_mode": True,
             }
         ])
 
         assert result["askuser_invocations"] == 1
+        assert result["total_questions_asked"] == 1
+        assert result["sequential_questions"] == 1
+        assert result["batched_questions"] == 0
+        assert result["batch_efficiency_rate"] == 0.0
 
-    def test_session_outcome_updates_with_last_record(self):
-        """Verify session outcome is determined by last record."""
+    def test_multiple_questions_batched(self):
+        """Verify multiple questions in single call (batched pattern)."""
         result = analyze_session_askuser_multiround([
             {
                 "turn_index": 0,
-                "tool_name": "Read",
-                "session_completed": True,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {
+                        "question": "Which library?",
+                        "options": [
+                            {"label": "Library A", "description": "Fast and lightweight"},
+                            {"label": "Library B", "description": "Feature-rich"},
+                        ],
+                        "multiSelect": False,
+                    },
+                    {
+                        "question": "Which features to enable?",
+                        "options": [
+                            {"label": "Feature 1", "description": "Enable caching"},
+                            {"label": "Feature 2", "description": "Enable logging"},
+                            {"label": "Feature 3", "description": "Enable monitoring"},
+                        ],
+                        "multiSelect": True,
+                    },
+                ],
+                "in_plan_mode": True,
+            }
+        ])
+
+        assert result["total_questions_asked"] == 2
+        assert result["batched_questions"] == 2
+        assert result["batch_efficiency_rate"] == 100.0
+
+    def test_mixed_batching_efficiency(self):
+        """Verify batch efficiency calculation with mixed patterns."""
+        result = analyze_session_askuser_multiround([
+            # Sequential question
+            {
+                "turn_index": 0,
+                "tool_name": "AskUserQuestion",
+                "questions": [{"question": "Question 1?", "options": [{"label": "A", "description": "Option A"}]}],
             },
+            # Batched questions
             {
                 "turn_index": 1,
-                "tool_name": "Edit",
-                "session_completed": False,
-                "session_failed": True,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {"question": "Question 2?", "options": [{"label": "A", "description": "Option A"}]},
+                    {"question": "Question 3?", "options": [{"label": "A", "description": "Option A"}]},
+                ],
             },
         ])
 
-        # Last record wins
-        assert result["session_completed"] is False
-        assert result["session_failed"] is True
+        # 1 sequential + 2 batched = 3 total, 2 batched = 66.67%
+        assert result["sequential_questions"] == 1
+        assert result["batched_questions"] == 2
+        assert result["batch_efficiency_rate"] == 66.67
 
-    def test_timestamps_sorted_chronologically(self):
-        """Verify timestamps are sorted before interval calculation."""
+    def test_early_planning_rate(self):
+        """Verify early planning rate calculation."""
         result = analyze_session_askuser_multiround([
+            # Early planning question
             {
                 "turn_index": 0,
                 "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-                "timestamp": 1100.0,
+                "questions": [{"question": "Plan question?", "options": [{"label": "A", "description": "Desc"}]}],
+                "in_plan_mode": True,
             },
+            # Mid-execution question
             {
                 "turn_index": 1,
                 "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-                "timestamp": 1000.0,
+                "questions": [{"question": "Execution question?", "options": [{"label": "A", "description": "Desc"}]}],
+                "in_plan_mode": False,
+                "after_implementation_start": True,
             },
+            # Early planning question (before implementation)
             {
                 "turn_index": 2,
                 "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q3?"}],
-                "timestamp": 1050.0,
+                "questions": [{"question": "Another plan question?", "options": [{"label": "A", "description": "Desc"}]}],
+                "after_implementation_start": False,
             },
         ])
 
-        # Sorted: 1000, 1050, 1100
-        # Intervals: 50, 50
-        assert result["time_between_rounds_seconds"] == [50.0, 50.0]
-        assert result["avg_time_between_rounds_seconds"] == 50.0
+        # 2 early planning, 1 mid-execution = 66.67%
+        assert result["early_planning_questions"] == 2
+        assert result["mid_execution_questions"] == 1
+        assert result["early_planning_rate"] == 66.67
 
-    def test_zero_timestamp_ignored(self):
-        """Verify zero timestamps are ignored."""
+    def test_option_quality_score_good(self):
+        """Verify option quality score with good options."""
         result = analyze_session_askuser_multiround([
             {
                 "turn_index": 0,
                 "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-                "timestamp": 0,
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-                "timestamp": 1000.0,
-            },
+                "questions": [
+                    {
+                        "question": "Which approach?",
+                        "options": [
+                            {"label": "Approach A", "description": "Use Redis for caching with TTL support"},
+                            {"label": "Approach B", "description": "Use in-memory cache for faster access"},
+                            {"label": "Approach C", "description": "Use file-based cache for persistence"},
+                        ],
+                    }
+                ],
+            }
         ])
 
-        assert len(result["time_between_rounds_seconds"]) == 0
+        # 3 options (ideal), good labels and descriptions
+        assert result["option_quality_score"] > 0.8
 
-    def test_negative_timestamp_ignored(self):
-        """Verify negative timestamps are ignored."""
+    def test_option_quality_score_poor(self):
+        """Verify option quality score with poor options."""
         result = analyze_session_askuser_multiround([
             {
                 "turn_index": 0,
                 "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-                "timestamp": -100.0,
-            },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-                "timestamp": 1000.0,
-            },
+                "questions": [
+                    {
+                        "question": "What to do?",
+                        "options": [
+                            {"label": "This is a very long label with way too many words that makes it hard to read", "description": ""},
+                            {"label": "", "description": "Empty label"},
+                        ],
+                    }
+                ],
+            }
         ])
 
-        assert len(result["time_between_rounds_seconds"]) == 0
+        # Poor labels and descriptions
+        assert result["option_quality_score"] < 0.65
 
-    def test_string_timestamp_parsed(self):
-        """Verify string timestamps are parsed."""
+    def test_multiselect_appropriate_rate(self):
+        """Verify multiselect appropriateness detection."""
         result = analyze_session_askuser_multiround([
+            # Appropriate multiSelect (features)
             {
                 "turn_index": 0,
                 "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q1?"}],
-                "timestamp": "1000.0",
+                "questions": [
+                    {
+                        "question": "Which features to enable?",
+                        "options": [
+                            {"label": "Enable caching", "description": "Cache API responses"},
+                            {"label": "Enable logging", "description": "Log all requests"},
+                        ],
+                        "multiSelect": True,
+                    }
+                ],
             },
-            {
-                "turn_index": 1,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q2?"}],
-                "timestamp": "1050.0",
-            },
-        ])
-
-        assert result["time_between_rounds_seconds"] == [50.0]
-
-    def test_no_session_outcome_neutral_correlation(self):
-        """Verify correlation score is neutral when no outcome info."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q?"}],
-            },
-        ])
-
-        assert result["correlation_score"] == 0.0
-
-    def test_single_invocation_no_intervals(self):
-        """Verify single invocation produces no time intervals."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "AskUserQuestion",
-                "questions": [{"question": "Q?"}],
-                "timestamp": 1000.0,
-            },
-        ])
-
-        assert result["time_between_rounds_seconds"] == []
-        assert result["avg_time_between_rounds_seconds"] == 0.0
-
-    def test_comprehensive_multi_round_session(self):
-        """Verify comprehensive multi-round session with all features."""
-        result = analyze_session_askuser_multiround([
-            {
-                "turn_index": 0,
-                "tool_name": "Read",
-            },
+            # Appropriate single select (approach)
             {
                 "turn_index": 1,
                 "tool_name": "AskUserQuestion",
                 "questions": [
-                    {"question": "Which approach?"},
-                    {"question": "What format?"},
+                    {
+                        "question": "Which approach?",
+                        "options": [
+                            {"label": "Approach A", "description": "Method A"},
+                            {"label": "Approach B", "description": "Method B"},
+                        ],
+                        "multiSelect": False,
+                    }
                 ],
-                "timestamp": 1000.0,
-            },
-            {
-                "turn_index": 2,
-                "tool_name": "Edit",
-            },
-            {
-                "turn_index": 3,
-                "tool_name": "Write",
-            },
-            {
-                "turn_index": 4,
-                "tool_name": "AskUserQuestion",
-                "questions": [
-                    {"question": "Should we proceed?"},
-                ],
-                "timestamp": 1065.0,
-            },
-            {
-                "turn_index": 5,
-                "tool_name": "Bash",
-            },
-            {
-                "turn_index": 6,
-                "tool_name": "AskUserQuestion",
-                "questions": [
-                    {"question": "Any other changes?"},
-                    {"question": "Commit now?"},
-                    {"question": "Push to remote?"},
-                ],
-                "timestamp": 1150.0,
-                "session_completed": True,
             },
         ])
 
-        assert result["total_turns"] == 7
-        assert result["askuser_invocations"] == 3
-        assert result["total_questions_asked"] == 6
-        assert result["avg_questions_per_invocation"] == 2.0
-        assert result["sessions_with_multiple_rounds"] is True
-        assert result["multi_round_session_percentage"] == 100.0
-        # Intervals: 1065-1000=65, 1150-1065=85
-        assert result["time_between_rounds_seconds"] == [65.0, 85.0]
-        assert result["avg_time_between_rounds_seconds"] == 75.0
-        assert result["min_time_between_rounds_seconds"] == 65.0
-        assert result["max_time_between_rounds_seconds"] == 85.0
-        assert result["session_completed"] is True
-        # 3 invocations + success = moderate positive correlation
-        assert result["correlation_score"] == 0.6
+        # Both appropriate = 100%
+        assert result["multiselect_total"] == 2
+        assert result["multiselect_appropriate"] == 2
+        assert result["multiselect_appropriate_rate"] == 100.0
+
+    def test_multiselect_inappropriate(self):
+        """Verify detection of inappropriate multiSelect usage."""
+        result = analyze_session_askuser_multiround([
+            # Inappropriate: approach question with multiSelect
+            {
+                "turn_index": 0,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {
+                        "question": "Which approach to use?",
+                        "options": [
+                            {"label": "Approach A", "description": "Use method A"},
+                            {"label": "Approach B", "description": "Use method B"},
+                        ],
+                        "multiSelect": True,  # Should be False (mutually exclusive)
+                    }
+                ],
+            },
+        ])
+
+        assert result["multiselect_appropriate"] == 0
+        assert result["multiselect_appropriate_rate"] == 0.0
+
+    def test_exitplanmode_confusion_detection(self):
+        """Verify ExitPlanMode confusion anti-pattern detection."""
+        result = analyze_session_askuser_multiround([
+            # Anti-pattern: asking 'should I proceed'
+            {
+                "turn_index": 0,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {
+                        "question": "Is this plan okay? Should I proceed with implementation?",
+                        "options": [
+                            {"label": "Yes", "description": "Proceed"},
+                            {"label": "No", "description": "Revise plan"},
+                        ],
+                    }
+                ],
+            },
+            # Normal question
+            {
+                "turn_index": 1,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {
+                        "question": "Which database to use?",
+                        "options": [
+                            {"label": "PostgreSQL", "description": "Use PostgreSQL"},
+                            {"label": "MongoDB", "description": "Use MongoDB"},
+                        ],
+                    }
+                ],
+            },
+        ])
+
+        # 1 out of 2 invocations = 50%
+        assert result["exitplanmode_confusion_count"] == 1
+        assert result["exitplanmode_confusion_rate"] == 50.0
+
+    def test_realistic_good_pattern(self):
+        """Verify realistic good usage pattern."""
+        result = analyze_session_askuser_multiround([
+            # Early planning with batched questions
+            {
+                "turn_index": 0,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {
+                        "question": "Which authentication method?",
+                        "options": [
+                            {"label": "JWT", "description": "Use JSON Web Tokens for stateless auth"},
+                            {"label": "Sessions", "description": "Use server-side sessions with cookies"},
+                        ],
+                        "multiSelect": False,
+                    },
+                    {
+                        "question": "Which features to include?",
+                        "options": [
+                            {"label": "2FA", "description": "Two-factor authentication"},
+                            {"label": "OAuth", "description": "Social login support"},
+                            {"label": "Email verification", "description": "Verify user emails"},
+                        ],
+                        "multiSelect": True,
+                    },
+                ],
+                "in_plan_mode": True,
+            }
+        ])
+
+        # Should show good patterns
+        assert result["batch_efficiency_rate"] == 100.0  # All batched
+        assert result["early_planning_rate"] == 100.0  # During planning
+        assert result["option_quality_score"] > 0.8  # Good quality
+        assert result["multiselect_appropriate_rate"] == 100.0  # Appropriate usage
+        assert result["exitplanmode_confusion_rate"] == 0.0  # No anti-patterns
+
+    def test_realistic_poor_pattern(self):
+        """Verify realistic poor usage pattern."""
+        result = analyze_session_askuser_multiround([
+            # Sequential question during execution
+            {
+                "turn_index": 0,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {
+                        "question": "Is this okay?",
+                        "options": [
+                            {"label": "Yes", "description": ""},
+                            {"label": "No", "description": ""},
+                        ],
+                    }
+                ],
+                "after_implementation_start": True,
+            },
+            # Another sequential question
+            {
+                "turn_index": 1,
+                "tool_name": "AskUserQuestion",
+                "questions": [
+                    {
+                        "question": "Should I proceed?",
+                        "options": [
+                            {"label": "Yes", "description": ""},
+                            {"label": "No", "description": ""},
+                        ],
+                    }
+                ],
+                "after_implementation_start": True,
+            },
+        ])
+
+        # Should show poor patterns
+        assert result["batch_efficiency_rate"] == 0.0  # All sequential
+        assert result["early_planning_rate"] == 0.0  # During execution
+        assert result["option_quality_score"] < 0.8  # Poor quality (empty descriptions)
+        assert result["exitplanmode_confusion_rate"] == 50.0  # 1 out of 2
+
+
+class TestHelperFunctions:
+    """Test helper functions."""
+
+    def test_is_exitplanmode_confusion_positive(self):
+        """Verify detection of ExitPlanMode confusion phrases."""
+        assert _is_exitplanmode_confusion("Should I proceed with this plan?")
+        assert _is_exitplanmode_confusion("Is this plan okay?")
+        assert _is_exitplanmode_confusion("Can I proceed?")
+        assert _is_exitplanmode_confusion("Does this look good?")
+
+    def test_is_exitplanmode_confusion_negative(self):
+        """Verify normal questions not flagged."""
+        assert not _is_exitplanmode_confusion("Which approach should we use?")
+        assert not _is_exitplanmode_confusion("What database to choose?")
+
+    def test_evaluate_option_quality_ideal(self):
+        """Verify ideal option quality."""
+        options = [
+            {"label": "Option A", "description": "Clear description of option A"},
+            {"label": "Option B", "description": "Clear description of option B"},
+            {"label": "Option C", "description": "Clear description of option C"},
+        ]
+        score = _evaluate_option_quality(options)
+        assert score > 0.8
+
+    def test_evaluate_option_quality_poor(self):
+        """Verify poor option quality."""
+        options = [
+            {"label": "", "description": ""},
+        ]
+        score = _evaluate_option_quality(options)
+        assert score < 0.3
+
+    def test_is_multiselect_appropriate_features(self):
+        """Verify multiselect appropriate for features."""
+        question = "Which features to enable?"
+        options = [
+            {"label": "Enable caching", "description": "Cache responses"},
+            {"label": "Enable logging", "description": "Log requests"},
+        ]
+        assert _is_multiselect_appropriate(question, options, True)
+        assert not _is_multiselect_appropriate(question, options, False)
+
+    def test_is_multiselect_appropriate_approach(self):
+        """Verify single select appropriate for approaches."""
+        question = "Which approach to use?"
+        options = [
+            {"label": "Approach A", "description": "Use method A"},
+            {"label": "Approach B", "description": "Use method B"},
+        ]
+        assert not _is_multiselect_appropriate(question, options, True)
+        assert _is_multiselect_appropriate(question, options, False)
