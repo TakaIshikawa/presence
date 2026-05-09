@@ -118,7 +118,10 @@ def analyze_session_task_completion_efficiency(
     completion_rate = len(completed_tasks) / total_tasks if total_tasks > 0 else 0.0
     abandonment_rate = len(abandoned_tasks) / total_tasks if total_tasks > 0 else 0.0
 
-    total_completion_tokens = sum(task["tokens_used"] for task in completed_tasks)  # type: ignore
+    # Extract tokens_used values, which are guaranteed to be int from task completion
+    total_completion_tokens = sum(
+        int(task["tokens_used"]) for task in completed_tasks
+    )
     avg_tokens = (
         total_completion_tokens / len(completed_tasks) if completed_tasks else 0.0
     )
