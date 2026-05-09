@@ -1,5 +1,6 @@
 """Tests for session context retention analysis."""
 
+from typing import Any
 import pytest
 
 from synthesis.session_context_retention import (
@@ -345,13 +346,15 @@ class TestAnalyzeSessionContextRetention:
 
     def test_invalid_turns_type_raises(self):
         """Verify invalid turns type raises ValueError."""
+        invalid_input: Any = "not a list"
         with pytest.raises(ValueError, match="must be a sequence"):
-            analyze_session_context_retention("not a list")  # type: ignore
+            analyze_session_context_retention(invalid_input)
 
     def test_invalid_turn_instance_raises(self):
         """Verify invalid turn instance raises ValueError."""
+        invalid_turns: Any = [{"not": "a turn"}]
         with pytest.raises(ValueError, match="SessionTurn instances"):
-            analyze_session_context_retention([{"not": "a turn"}])  # type: ignore
+            analyze_session_context_retention(invalid_turns)
 
     def test_negative_turn_number_raises(self):
         """Verify negative turn number raises ValueError."""
