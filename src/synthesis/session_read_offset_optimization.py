@@ -36,6 +36,7 @@ def analyze_session_read_offset_optimization(records: object) -> dict[str, Any]:
             - lines_read: Number of lines read
             - after_edit: Boolean if read follows edit
             - cache_available: Boolean if cache could be used
+            - cache_query_before: Boolean if /cache query preceded this read
 
     Returns:
         Dict with optimization metrics including offset/limit usage,
@@ -56,6 +57,13 @@ def analyze_session_read_offset_optimization(records: object) -> dict[str, Any]:
     redundant_full_reads = 0
     cache_opportunities = 0
 
+    # New metrics tracking
+    file_read_tracker: dict[str, int] = {}  # Track reads per file
+    full_file_rereads = 0
+    post_edit_reads = 0
+    post_edit_targeted_reads = 0
+    cache_query_before_reads = 0
+
     for record in records:
         if not isinstance(record, Mapping):
             continue
@@ -71,7 +79,8 @@ def analyze_session_read_offset_optimization(records: object) -> dict[str, Any]:
         # Check offset/limit usage
         offset = record.get("offset")
         limit = record.get("limit")
-        if offset is not None or limit is not None:
+        has_offset_or_limit = offset is not None or limit is not None
+        if has_offset_or_limit:
             reads_with_offset_limit += 1
 
         # Track lines read
@@ -79,21 +88,44 @@ def analyze_session_read_offset_optimization(records: object) -> dict[str, Any]:
         if lines_read > 0:
             lines_read_list.append(lines_read)
 
-        # Check for redundant full reads
+        # Track file re-reads
+        file_path = _string(record.get("file_path", ""))
+        if file_path:
+            file_read_tracker[file_path] = file_read_tracker.get(file_path, 0) + 1
+            # Count full-file rereads (reading same file again without offset/limit)
+            if file_read_tracker[file_path] > 1 and not has_offset_or_limit:
+                full_file_rereads += 1
+
+        # Check for post-edit reads
         after_edit = _bool(record.get("after_edit", False))
-        if after_edit and offset is None and limit is None:
-            redundant_full_reads += 1
+        if after_edit:
+            post_edit_reads += 1
+            if has_offset_or_limit:
+                post_edit_targeted_reads += 1
+            # Also check for redundant full reads
+            if not has_offset_or_limit:
+                redundant_full_reads += 1
 
         # Check cache opportunities
         cache_available = _bool(record.get("cache_available", False))
         if cache_available:
             cache_opportunities += 1
 
+        # Check cache query before read
+        cache_query_before = _bool(record.get("cache_query_before", False))
+        if cache_query_before:
+            cache_query_before_reads += 1
+
     # Calculate metrics
-    offset_limit_percentage = _percentage(reads_with_offset_limit, read_invocations)
-    avg_lines_read = _average(lines_read_list)
+    offset_limit_usage_rate = _percentage(reads_with_offset_limit, read_invocations)
+    avg_lines_per_read = _average(lines_read_list)
     redundant_read_ratio = _percentage(redundant_full_reads, read_invocations)
     cache_opportunity_ratio = _percentage(cache_opportunities, read_invocations)
+
+    # New metric calculations
+    full_file_reread_rate = _percentage(full_file_rereads, read_invocations)
+    post_edit_targeted_rate = _percentage(post_edit_targeted_reads, post_edit_reads)
+    cache_query_before_read_rate = _percentage(cache_query_before_reads, read_invocations)
 
     # Estimate token savings (assume 4 tokens per line, 64 baseline)
     baseline_tokens = read_invocations * 64 * 4
@@ -102,8 +134,8 @@ def analyze_session_read_offset_optimization(records: object) -> dict[str, Any]:
     token_savings_percentage = _percentage(token_savings, baseline_tokens)
 
     optimization_score = _calculate_optimization_score(
-        offset_limit_percentage,
-        avg_lines_read,
+        offset_limit_usage_rate,
+        avg_lines_per_read,
         redundant_read_ratio,
         token_savings_percentage,
     )
@@ -112,9 +144,18 @@ def analyze_session_read_offset_optimization(records: object) -> dict[str, Any]:
         "total_turns": total_turns,
         "read_invocations": read_invocations,
         "reads_with_offset_limit": reads_with_offset_limit,
-        "offset_limit_percentage": offset_limit_percentage,
+        "offset_limit_usage_rate": offset_limit_usage_rate,
+        "offset_limit_percentage": offset_limit_usage_rate,  # Alias for backward compatibility
         "lines_read_list": lines_read_list,
-        "avg_lines_read": avg_lines_read,
+        "avg_lines_per_read": avg_lines_per_read,
+        "avg_lines_read": avg_lines_per_read,  # Alias for backward compatibility
+        "full_file_rereads": full_file_rereads,
+        "full_file_reread_rate": full_file_reread_rate,
+        "post_edit_reads": post_edit_reads,
+        "post_edit_targeted_reads": post_edit_targeted_reads,
+        "post_edit_targeted_rate": post_edit_targeted_rate,
+        "cache_query_before_reads": cache_query_before_reads,
+        "cache_query_before_read_rate": cache_query_before_read_rate,
         "redundant_full_reads": redundant_full_reads,
         "redundant_read_ratio": redundant_read_ratio,
         "cache_opportunities": cache_opportunities,
@@ -133,9 +174,18 @@ def _empty_result() -> dict[str, Any]:
         "total_turns": 0,
         "read_invocations": 0,
         "reads_with_offset_limit": 0,
+        "offset_limit_usage_rate": 0.0,
         "offset_limit_percentage": 0.0,
         "lines_read_list": [],
+        "avg_lines_per_read": 0.0,
         "avg_lines_read": 0.0,
+        "full_file_rereads": 0,
+        "full_file_reread_rate": 0.0,
+        "post_edit_reads": 0,
+        "post_edit_targeted_reads": 0,
+        "post_edit_targeted_rate": 0.0,
+        "cache_query_before_reads": 0,
+        "cache_query_before_read_rate": 0.0,
         "redundant_full_reads": 0,
         "redundant_read_ratio": 0.0,
         "cache_opportunities": 0,
