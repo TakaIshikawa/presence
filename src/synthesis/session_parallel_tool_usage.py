@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """Session parallel tool usage analyzer for parallel execution efficiency.
 
 Analyzes agent efficiency in parallel tool execution by tracking parallel vs
@@ -22,10 +23,31 @@ Opportunity detection heuristics:
 - Sequential Grep calls with different patterns likely independent
 - Sequential Bash commands without dependencies could be parallel
 - Tool calls separated by non-dependent operations are candidates
+=======
+"""Session parallel tool usage analyzer for agent efficiency measurement.
+
+Analyzes agent efficiency in parallel tool execution by tracking percentage
+of tool calls made in parallel vs sequential, identifying missed parallelization
+opportunities, and comparing parallelization patterns across optimization modes.
+
+Parallelization metrics:
+- Parallel usage rate: Percentage of tool call opportunities used in parallel
+- Missed opportunities: Independent tool calls made sequentially
+- Average parallel batch size: Mean number of tools called together
+- Parallelization by tool type: Which tools are frequently parallelized
+- Mode comparison: Parallel usage in optimized vs baseline modes
+
+Efficiency patterns:
+- High parallelization: Frequent parallel batches with large sizes
+- Sequential execution: Minimal parallel usage despite opportunities
+- Tool-specific patterns: Some tools parallelized more than others
+- Optimization impact: Improved parallelization in optimized mode
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
 """
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -41,21 +63,38 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
 
     Evaluates how effectively agents use parallel tool calls, detects missed
     parallelization opportunities, and compares efficiency across optimization modes.
+=======
+from collections import Counter
+from typing import Any
+
+
+def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
+    """Analyze parallel tool usage patterns in agent sessions.
+
+    Tracks parallel execution efficiency, missed opportunities, and
+    parallelization patterns by tool type and optimization mode.
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
 
     Args:
         records: List of turn dictionaries with keys:
             - turn_index: Turn number in session
             - tool_calls: List of tool call dicts with:
                 - tool_name: Name of the tool
+<<<<<<< HEAD
                 - call_index: Index within the turn
             - optimization_mode: Optional mode (baseline/optimized)
             - turn_duration: Optional duration in seconds
+=======
+                - timestamp: Optional call timestamp
+            - optimization_mode: Optional mode (baseline/optimized)
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
 
     Returns:
         Dict with:
             - total_turns: Total number of turns analyzed
             - turns_with_tools: Turns containing tool calls
             - total_tool_calls: Total number of tool calls
+<<<<<<< HEAD
             - parallel_tool_calls: Tool calls made in parallel (2+ per turn)
             - sequential_tool_calls: Tool calls made sequentially (1 per turn)
             - parallel_usage_percentage: Percentage of calls made in parallel
@@ -67,6 +106,17 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
             - common_parallel_patterns: Frequently parallelized tool combinations
             - optimization_mode_comparison: Metrics by baseline/optimized mode
             - parallel_efficiency_score: Overall efficiency (0-100)
+=======
+            - parallel_turns: Count of turns with 2+ parallel tools
+            - parallel_usage_rate: Percentage of tool turns using parallelization
+            - total_parallel_batches: Count of parallel execution batches
+            - avg_parallel_batch_size: Average size of parallel batches
+            - max_parallel_batch_size: Largest parallel batch observed
+            - missed_opportunities: Estimated sequential calls that could be parallel
+            - tool_parallelization: Dict mapping tool names to parallel usage counts
+            - mode_comparison: Dict comparing baseline vs optimized parallelization
+            - examples: Example turns with different parallelization patterns
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
 
     Raises:
         ValueError: If records is not a list
@@ -82,6 +132,7 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
     total_turns = 0
     turns_with_tools = 0
     total_tool_calls = 0
+<<<<<<< HEAD
     parallel_tool_calls = 0
     sequential_tool_calls = 0
     turns_with_parallel = 0
@@ -107,6 +158,22 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
 
     # Track previous turn for opportunity detection
     previous_tool_calls: list[str] = []
+=======
+    parallel_turns = 0
+    parallel_batch_sizes: list[int] = []
+    tool_parallelization: Counter[str] = Counter()
+    missed_opportunities = 0
+    examples: list[dict[str, Any]] = []
+
+    # Mode comparison tracking
+    mode_stats: dict[str, dict[str, int]] = {
+        "baseline": {"turns_with_tools": 0, "parallel_turns": 0, "total_tool_calls": 0},
+        "optimized": {"turns_with_tools": 0, "parallel_turns": 0, "total_tool_calls": 0},
+    }
+
+    # Track consecutive sequential turns for opportunity detection
+    previous_turn_tools: list[str] = []
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
 
     for record in records:
         if not isinstance(record, dict):
@@ -114,12 +181,23 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
 
         total_turns += 1
         tool_calls = record.get("tool_calls")
+<<<<<<< HEAD
         if not isinstance(tool_calls, list) or not tool_calls:
             previous_tool_calls = []
             continue
 
         # Extract tool names
         tool_names = []
+=======
+        optimization_mode = _string(record.get("optimization_mode", "")).lower()
+
+        if not isinstance(tool_calls, list) or not tool_calls:
+            previous_turn_tools = []
+            continue
+
+        # Extract tool names from this turn
+        tool_names: list[str] = []
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
         for call in tool_calls:
             if not isinstance(call, dict):
                 continue
@@ -128,6 +206,7 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
                 tool_names.append(tool_name)
 
         if not tool_names:
+<<<<<<< HEAD
             previous_tool_calls = []
             continue
 
@@ -233,11 +312,72 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
         missed_opportunities,
         total_tool_calls,
     )
+=======
+            previous_turn_tools = []
+            continue
+
+        turns_with_tools += 1
+        num_tools = len(tool_names)
+        total_tool_calls += num_tools
+
+        # Track mode-specific stats
+        if optimization_mode in mode_stats:
+            mode_stats[optimization_mode]["turns_with_tools"] += 1
+            mode_stats[optimization_mode]["total_tool_calls"] += num_tools
+
+        # Check if this turn uses parallelization
+        is_parallel = num_tools >= 2
+        if is_parallel:
+            parallel_turns += 1
+            parallel_batch_sizes.append(num_tools)
+
+            # Track which tools are parallelized
+            for tool_name in set(tool_names):
+                tool_parallelization[tool_name] += 1
+
+            # Track mode-specific parallel usage
+            if optimization_mode in mode_stats:
+                mode_stats[optimization_mode]["parallel_turns"] += 1
+
+            # Collect example
+            if len(examples) < 10:
+                examples.append({
+                    "turn_index": record.get("turn_index", total_turns),
+                    "tools": tool_names,
+                    "batch_size": num_tools,
+                    "optimization_mode": optimization_mode or "unknown",
+                })
+        else:
+            # Single tool call - check for missed parallelization opportunity
+            # If previous turn also had single tool call with different tool, potential opportunity
+            if len(previous_turn_tools) == 1 and previous_turn_tools[0] != tool_names[0]:
+                # Different tools in consecutive turns = missed opportunity
+                missed_opportunities += 1
+
+        previous_turn_tools = tool_names
+
+    # Calculate metrics
+    parallel_usage_rate = _percentage(parallel_turns, turns_with_tools)
+    total_parallel_batches = len(parallel_batch_sizes)
+    avg_batch_size = _average(sum(parallel_batch_sizes), len(parallel_batch_sizes))
+    max_batch_size = max(parallel_batch_sizes) if parallel_batch_sizes else 0
+
+    # Calculate mode comparison
+    mode_comparison = {}
+    for mode, stats in mode_stats.items():
+        mode_comparison[mode] = {
+            "turns_with_tools": stats["turns_with_tools"],
+            "parallel_turns": stats["parallel_turns"],
+            "parallel_usage_rate": _percentage(stats["parallel_turns"], stats["turns_with_tools"]),
+            "total_tool_calls": stats["total_tool_calls"],
+        }
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
 
     return {
         "total_turns": total_turns,
         "turns_with_tools": turns_with_tools,
         "total_tool_calls": total_tool_calls,
+<<<<<<< HEAD
         "parallel_tool_calls": parallel_tool_calls,
         "sequential_tool_calls": sequential_tool_calls,
         "parallel_usage_percentage": parallel_usage_pct,
@@ -249,6 +389,17 @@ def analyze_session_parallel_tool_usage(records: object) -> dict[str, Any]:
         "common_parallel_patterns": common_patterns,
         "optimization_mode_comparison": mode_comparison,
         "parallel_efficiency_score": efficiency_score,
+=======
+        "parallel_turns": parallel_turns,
+        "parallel_usage_rate": parallel_usage_rate,
+        "total_parallel_batches": total_parallel_batches,
+        "avg_parallel_batch_size": avg_batch_size,
+        "max_parallel_batch_size": max_batch_size,
+        "missed_opportunities": missed_opportunities,
+        "tool_parallelization": dict(tool_parallelization.most_common(10)),
+        "mode_comparison": mode_comparison,
+        "examples": examples[:5],  # Limit to 5 examples
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
     }
 
 
@@ -258,6 +409,7 @@ def _empty_result() -> dict[str, Any]:
         "total_turns": 0,
         "turns_with_tools": 0,
         "total_tool_calls": 0,
+<<<<<<< HEAD
         "parallel_tool_calls": 0,
         "sequential_tool_calls": 0,
         "parallel_usage_percentage": 0.0,
@@ -269,6 +421,30 @@ def _empty_result() -> dict[str, Any]:
         "common_parallel_patterns": [],
         "optimization_mode_comparison": [],
         "parallel_efficiency_score": 0.0,
+=======
+        "parallel_turns": 0,
+        "parallel_usage_rate": 0.0,
+        "total_parallel_batches": 0,
+        "avg_parallel_batch_size": 0.0,
+        "max_parallel_batch_size": 0,
+        "missed_opportunities": 0,
+        "tool_parallelization": {},
+        "mode_comparison": {
+            "baseline": {
+                "turns_with_tools": 0,
+                "parallel_turns": 0,
+                "parallel_usage_rate": 0.0,
+                "total_tool_calls": 0,
+            },
+            "optimized": {
+                "turns_with_tools": 0,
+                "parallel_turns": 0,
+                "parallel_usage_rate": 0.0,
+                "total_tool_calls": 0,
+            },
+        },
+        "examples": [],
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
     }
 
 
@@ -277,6 +453,7 @@ def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+<<<<<<< HEAD
 def _float(value: object) -> float:
     """Convert value to float, returning 0.0 for invalid values."""
     if value is None:
@@ -291,6 +468,8 @@ def _float(value: object) -> float:
     return 0.0
 
 
+=======
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
 def _percentage(numerator: int | float, denominator: int | float) -> float:
     """Calculate percentage, returning 0.0 if denominator is 0."""
     if denominator <= 0:
@@ -298,6 +477,7 @@ def _percentage(numerator: int | float, denominator: int | float) -> float:
     return round((numerator / denominator) * 100.0, 2)
 
 
+<<<<<<< HEAD
 def _average(values: list[int] | list[float]) -> float:
     """Calculate average of numeric values."""
     if not values:
@@ -337,3 +517,10 @@ def _calculate_efficiency_score(
 
     score = parallel_component + batch_component + opportunity_component
     return round(max(0.0, min(100.0, score)), 2)
+=======
+def _average(total: float | int, count: int) -> float:
+    """Calculate average, returning 0.0 if count is 0."""
+    if count <= 0:
+        return 0.0
+    return round(total / count, 2)
+>>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
