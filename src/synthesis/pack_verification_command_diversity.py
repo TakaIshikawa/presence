@@ -1,141 +1,83 @@
-<<<<<<< HEAD
-"""Pack verification command diversity analyzer for quality assurance.
+"""Pack verification command diversity and coverage analyzer.
 
-Analyzes verification command coverage and diversity across execution packs
-to identify weak verification strategies and correlate diversity with success.
+Analyzes verification command diversity and test coverage discipline across
+Claude Code execution packs. Measures breadth of verification tools used,
+density of verification commands, timing distribution, and test scope patterns.
 
-Command diversity metrics:
-- Unique verification commands: Count of distinct commands used
-- Command types: Classification (test/lint/build/typecheck/other)
-- Multi-stage verification: Percentage using multiple command types
-- Verification breadth: File coverage across commands
-- Diversity-success correlation: Relationship between diversity and outcomes
+Verification diversity metrics:
+- Unique verification tools: Count of distinct verification types
+- Verification density: Ratio of verification to total tool calls
+- Verification timing: Early/mid/late session distribution
+- Test scope breadth: Ratio of targeted vs broad test suites
 
-Verification strategies:
-- Comprehensive: Multiple command types with broad coverage
-- Single-stage: One type of verification (e.g., only tests)
-- Weak: Minimal or no verification commands
-- Redundant: Multiple similar commands without diversity
-=======
-"""Pack verification command diversity analyzer for verification strategy quality.
+Verification patterns detected:
+- Over-reliance on single verification method
+- Missing type checking when typed code edited
+- Missing build verification for core infrastructure changes
+- Test-before-implementation discipline (TDD signals)
 
-Analyzes verification command coverage across execution packs to measure
-verification strategy strength. Evaluates command types, diversity scores,
-multi-stage verification adoption, and correlation with pack success rates.
-
-Verification metrics:
-- Unique commands: Count of distinct verification commands used
-- Command types: Distribution of test/lint/build/typecheck commands
-- Multi-stage rate: Percentage of packs using multiple verification types
-- Diversity score: Measure of verification breadth across command types
-- Success correlation: Relationship between verification diversity and pack outcomes
-
-Verification patterns:
-- Comprehensive: Multi-stage verification with diverse command types
-- Single-stage: Only one verification command type used
-- Weak: Minimal or no verification commands
-- Test-only: Only test commands, missing lint/typecheck/build
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+Quality indicators:
+- High tool diversity (>3 verification types)
+- Good verification density (>15% of tool calls)
+- Balanced timing distribution (verification throughout session)
+- Appropriate test scope (mix of targeted and broad verification)
 """
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-import re
-from collections import Counter, defaultdict
-from typing import Any, Mapping
-
-# Command type patterns for classification
-COMMAND_PATTERNS = {
-    "test": [
-        r"\bpytest\b", r"\btest\b", r"\bjest\b", r"\bmocha\b",
-        r"\bvitest\b", r"\bava\b", r"\btap\b"
-    ],
-    "lint": [
-        r"\bruff\b", r"\bpylint\b", r"\beslint\b", r"\bflake8\b",
-        r"\blint\b", r"\bblack\b", r"\bprettier\b"
-    ],
-    "typecheck": [
-        r"\bmypy\b", r"\bpyright\b", r"\btsc\b", r"\bflow\b",
-        r"\btype-?check\b"
-    ],
-    "build": [
-        r"\bbuild\b", r"\bcompile\b", r"\bmake\b", r"\bcargo\b",
-        r"\bnpm\s+run\s+build\b", r"\byarn\s+build\b"
-    ],
-}
-=======
 from collections import Counter
 from typing import Any, Mapping
 
 
-# Command type classifications
-COMMAND_TYPE_TEST = "test"
-COMMAND_TYPE_LINT = "lint"
-COMMAND_TYPE_BUILD = "build"
-COMMAND_TYPE_TYPECHECK = "typecheck"
-COMMAND_TYPE_OTHER = "other"
-
-# Diversity thresholds
-MIN_DIVERSITY_SCORE = 25.0
-GOOD_DIVERSITY_SCORE = 50.0
-EXCELLENT_DIVERSITY_SCORE = 75.0
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+# Common verification tools by category
+VERIFICATION_TOOLS = {
+    "test": ["pytest", "npm test", "cargo test", "go test", "jest", "mocha", "vitest"],
+    "type": ["mypy", "pyright", "tsc", "typescript", "flow"],
+    "lint": ["eslint", "pylint", "ruff", "flake8", "clippy", "golint"],
+    "build": ["npm run build", "cargo build", "make", "go build", "tsc"],
+    "format": ["prettier", "black", "rustfmt", "gofmt"],
+}
 
 
 def analyze_pack_verification_command_diversity(records: object) -> dict[str, Any]:
-    """Analyze verification command diversity across execution packs.
+    """Analyze verification command diversity and patterns across packs.
 
-<<<<<<< HEAD
-    Evaluates verification strategies by examining command variety, types,
-    multi-stage usage, and correlation with pack success rates.
+    Evaluates breadth of verification tools, verification density, timing,
+    and test scope to identify gaps in verification discipline.
 
     Args:
         records: List of pack dictionaries with keys:
             - pack_id: Pack identifier
-            - verification_command: Verification command string
-            - expected_files: Optional list of files expected to be modified
-            - success: Optional boolean indicating pack success
-            - tasks: Optional list of task dictionaries
-=======
-    Evaluates verification strategy strength by analyzing command types,
-    diversity scores, and correlation with pack outcomes.
-
-    Args:
-        records: List of pack dictionaries with keys:
-            - pack_id: Execution pack identifier
-            - verification_commands: List of verification command strings
-            - success: Boolean indicating pack success/failure
-            - task_title: Optional task title
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+            - sessions: List of session dictionaries with:
+                - session_id: Session identifier
+                - tool_calls: List of tool call dictionaries with:
+                    - tool_name: Name of tool
+                    - command: Bash command (for verification commands)
+                    - turn_index: Turn number for timing
+                    - file_path: File being edited (to detect verification gaps)
+                - total_turns: Total turns in session
+                - edited_files: List of files edited in session
 
     Returns:
         Dict with:
             - total_packs: Total number of packs analyzed
-<<<<<<< HEAD
-            - packs_with_verification: Packs with non-empty verification
-            - unique_commands: Count of distinct verification commands
-            - avg_commands_per_pack: Average commands per pack
-            - command_type_distribution: Breakdown by type (test/lint/etc)
-            - multi_stage_percentage: Percentage using multiple types
-            - single_stage_count: Packs with only one command type
-            - no_verification_count: Packs without verification
-            - avg_file_coverage: Average file coverage per command
-            - success_by_diversity: Success rates by diversity level
-            - weak_verification_packs: Packs with insufficient verification
-            - common_command_patterns: Most frequent command combinations
-=======
-            - packs_with_verification: Count of packs with verification commands
-            - verification_rate: Percentage of packs with verification
-            - unique_commands: Count of unique verification commands across all packs
-            - command_type_distribution: Dict mapping command types to counts
-            - multi_stage_packs: Count of packs using multiple command types
-            - multi_stage_rate: Percentage of packs with multi-stage verification
-            - avg_diversity_score: Average diversity score across packs
-            - success_rate_by_diversity: Dict mapping diversity levels to success rates
-            - weak_verification_packs: Examples of packs with weak verification
-            - examples: Example packs with different verification patterns
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+            - total_verification_commands: Total verification commands
+            - unique_verification_tools: Count of distinct verification types
+            - verification_tools_used: List of verification tools identified
+            - verification_density: Percentage of tool calls that are verification
+            - verification_by_category: Breakdown by verification category
+            - early_verification_rate: Percentage of verifications in first third
+            - mid_verification_rate: Percentage in middle third
+            - late_verification_rate: Percentage in last third
+            - targeted_test_count: Count of targeted test runs (single file)
+            - broad_test_count: Count of broad test runs (full suite)
+            - test_scope_breadth: Ratio of targeted to broad tests
+            - missing_type_check_count: Typed code edited without type check
+            - missing_build_check_count: Core files edited without build
+            - tdd_signals_count: Tests run before implementation
+            - verification_coverage_score: Overall score 0-1
+            - over_reliance_on_single_tool: Boolean if >75% one tool
+            - dominant_verification_tool: Most used verification tool
 
     Raises:
         ValueError: If records is not a list
@@ -145,261 +87,187 @@ def analyze_pack_verification_command_diversity(records: object) -> dict[str, An
     if not isinstance(records, list):
         raise ValueError("records must be a list of pack dictionaries")
 
-<<<<<<< HEAD
-    if not records:
-        return _empty_result()
-
     total_packs = 0
-    packs_with_verification = 0
-    all_commands: list[str] = []
-    commands_per_pack: list[int] = []
+    total_tool_calls = 0
+    total_verification_commands = 0
 
-    command_type_counts: Counter[str] = Counter()
-    multi_stage_count = 0
-    single_stage_count = 0
-    no_verification_count = 0
+    # Track verification tools
+    verification_tools_counter: Counter[str] = Counter()
+    verification_categories: Counter[str] = Counter()
 
-    file_coverage_ratios: list[float] = []
+    # Track timing
+    early_verifications = 0
+    mid_verifications = 0
+    late_verifications = 0
 
-    # Track success by diversity level
-    diversity_success: defaultdict[int, list[bool]] = defaultdict(list)
+    # Track test scope
+    targeted_test_count = 0
+    broad_test_count = 0
 
-    weak_packs: list[dict[str, Any]] = []
-    command_combinations: Counter[tuple[str, ...]] = Counter()
-=======
-    total_packs = 0
-    packs_with_verification = 0
-    all_commands: set[str] = set()
-    command_type_counts: Counter[str] = Counter()
-    multi_stage_packs = 0
-    diversity_scores: list[float] = []
-    weak_verification_packs: list[dict[str, Any]] = []
-    examples: list[dict[str, Any]] = []
-
-    # For success correlation
-    diversity_buckets: dict[str, dict[str, int]] = {
-        "none": {"success": 0, "failure": 0},
-        "low": {"success": 0, "failure": 0},
-        "medium": {"success": 0, "failure": 0},
-        "high": {"success": 0, "failure": 0},
-    }
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+    # Track gaps
+    missing_type_check_count = 0
+    missing_build_check_count = 0
+    tdd_signals_count = 0
 
     for record in records:
         if not isinstance(record, Mapping):
             continue
 
-<<<<<<< HEAD
-        total_packs += 1
-        pack_id = _string(record.get("pack_id", "unknown"))
-        verification_cmd = _string(record.get("verification_command", ""))
-        expected_files = record.get("expected_files", [])
-        success = record.get("success")
-
-        if not verification_cmd:
-            no_verification_count += 1
-            diversity_success[0].append(success if isinstance(success, bool) else False)
-            weak_packs.append({
-                "pack_id": pack_id,
-                "reason": "No verification command",
-                "verification_command": "",
-            })
-            continue
-
-        packs_with_verification += 1
-
-        # Extract individual commands (split by && or ;)
-        commands = _split_commands(verification_cmd)
-        all_commands.extend(commands)
-        commands_per_pack.append(len(commands))
-
-        # Classify command types
-        types_used = set()
-        for cmd in commands:
-            cmd_type = _classify_command(cmd)
-            command_type_counts[cmd_type] += 1
-            types_used.add(cmd_type)
-
-        # Check multi-stage vs single-stage
-        if len(types_used) > 1:
-            multi_stage_count += 1
-        elif len(types_used) == 1:
-            single_stage_count += 1
-
-        # Track diversity level for correlation
-        diversity_level = len(types_used)
-        if isinstance(success, bool):
-            diversity_success[diversity_level].append(success)
-
-        # Calculate file coverage
-        if isinstance(expected_files, list) and expected_files:
-            # Check how many expected files are covered by verification
-            covered_count = sum(
-                1 for file in expected_files
-                if any(_file_in_command(file, cmd) for cmd in commands)
-            )
-            coverage_pct = _percentage(covered_count, len(expected_files))
-            file_coverage_ratios.append(coverage_pct)
-
-        # Track command type combinations
-        if types_used:
-            combination = tuple(sorted(types_used))
-            command_combinations[combination] += 1
-
-        # Identify weak verification (only "other" type or very generic)
-        if types_used == {"other"} or (len(commands) == 1 and len(commands[0]) < 10):
-            weak_packs.append({
-                "pack_id": pack_id,
-                "reason": "Weak verification strategy",
-                "verification_command": verification_cmd,
-            })
-
-    # Calculate metrics
-    unique_commands_count = len(set(all_commands))
-    avg_commands_per_pack = _average(commands_per_pack)
-    multi_stage_pct = _percentage(multi_stage_count, packs_with_verification)
-    avg_file_coverage = _average(file_coverage_ratios)
-
-    # Calculate success rates by diversity
-    success_by_diversity = []
-    for diversity in sorted(diversity_success.keys()):
-        successes = diversity_success[diversity]
-        if successes:
-            success_rate = _percentage(sum(successes), len(successes))
-            success_by_diversity.append({
-                "diversity_level": diversity,
-                "total_packs": len(successes),
-                "success_rate": success_rate,
-            })
-
-    # Format command type distribution
-    total_commands = sum(command_type_counts.values())
-    type_distribution = [
-        {
-            "type": cmd_type,
-            "count": count,
-            "percentage": _percentage(count, total_commands),
-        }
-        for cmd_type, count in command_type_counts.most_common()
-    ]
-
-    # Format common patterns
-    common_patterns = [
-        {"types": list(combo), "count": count}
-        for combo, count in command_combinations.most_common(10)
-    ]
-=======
-        pack_id = _string(record.get("pack_id"))
-        verification_commands = _normalize_commands(record.get("verification_commands"))
-        success = bool(record.get("success", True))
-        task_title = _string(record.get("task_title"))
-
         total_packs += 1
 
-        # Track verification presence
-        if verification_commands:
-            packs_with_verification += 1
-            all_commands.update(verification_commands)
+        sessions = _get_sessions(record)
+        for session in sessions:
+            if not isinstance(session, Mapping):
+                continue
 
-        # Classify commands by type
-        command_types = [_classify_command(cmd) for cmd in verification_commands]
-        unique_types = set(command_types)
+            tool_calls = _get_tool_calls(session)
+            total_turns = _int(session.get("total_turns", len(tool_calls)))
+            edited_files = _get_edited_files(session)
 
-        for cmd_type in command_types:
-            command_type_counts[cmd_type] += 1
+            session_tool_count = 0
+            session_verification_count = 0
+            has_type_check = False
+            has_build_check = False
+            edits_typed_code = False
+            edits_core_code = False
 
-        # Check for multi-stage verification
-        if len(unique_types) >= 2:
-            multi_stage_packs += 1
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, Mapping):
+                    continue
 
-        # Calculate diversity score for this pack
-        diversity_score = _calculate_diversity_score(unique_types)
-        diversity_scores.append(diversity_score)
+                session_tool_count += 1
+                tool_name = _string(tool_call.get("tool_name", ""))
 
-        # Categorize diversity level
-        diversity_level = _categorize_diversity(diversity_score)
-        if success:
-            diversity_buckets[diversity_level]["success"] += 1
-        else:
-            diversity_buckets[diversity_level]["failure"] += 1
+                if tool_name == "Bash":
+                    command = _string(tool_call.get("command", ""))
+                    verification_info = _identify_verification(command)
 
-        # Identify weak verification strategies
-        if diversity_score < MIN_DIVERSITY_SCORE and len(weak_verification_packs) < 5:
-            weak_verification_packs.append({
-                "pack_id": pack_id,
-                "task_title": task_title or "unknown",
-                "verification_commands": verification_commands,
-                "command_types": sorted(unique_types),
-                "diversity_score": diversity_score,
-            })
+                    if verification_info:
+                        session_verification_count += 1
+                        verification_tools_counter[verification_info["tool"]] += 1
+                        verification_categories[verification_info["category"]] += 1
 
-        # Collect diverse examples
-        if len(examples) < 10:
-            examples.append({
-                "pack_id": pack_id,
-                "task_title": task_title or "unknown",
-                "verification_commands": verification_commands,
-                "command_types": sorted(unique_types),
-                "diversity_score": diversity_score,
-                "multi_stage": len(unique_types) >= 2,
-            })
+                        # Track timing
+                        turn_index = _int(tool_call.get("turn_index", 0))
+                        timing = _calculate_timing_bucket(turn_index, total_turns)
+                        if timing == "early":
+                            early_verifications += 1
+                        elif timing == "mid":
+                            mid_verifications += 1
+                        elif timing == "late":
+                            late_verifications += 1
+
+                        # Track test scope
+                        if verification_info["category"] == "test":
+                            if _is_targeted_test(command):
+                                targeted_test_count += 1
+                            else:
+                                broad_test_count += 1
+
+                        # Track type and build checks
+                        if verification_info["category"] == "type":
+                            has_type_check = True
+                        if verification_info["category"] == "build":
+                            has_build_check = True
+
+                        # TDD signal: verification before Edit
+                        if turn_index > 0 and _has_prior_edit(tool_calls, turn_index):
+                            pass  # Normal: verification after edit
+                        elif turn_index == 0 or not _has_prior_edit(tool_calls, turn_index):
+                            tdd_signals_count += 1
+
+                elif tool_name == "Edit":
+                    file_path = _string(tool_call.get("file_path", ""))
+                    if _is_typed_file(file_path):
+                        edits_typed_code = True
+                    if _is_core_file(file_path):
+                        edits_core_code = True
+
+            # Check for gaps
+            if edits_typed_code and not has_type_check:
+                missing_type_check_count += 1
+            if edits_core_code and not has_build_check:
+                missing_build_check_count += 1
+
+            total_tool_calls += session_tool_count
+            total_verification_commands += session_verification_count
 
     # Calculate metrics
-    verification_rate = _percentage(packs_with_verification, total_packs)
-    multi_stage_rate = _percentage(multi_stage_packs, packs_with_verification)
-    avg_diversity_score = _average(sum(diversity_scores), len(diversity_scores))
+    unique_verification_tools = len(verification_tools_counter)
+    verification_tools_used = list(verification_tools_counter.keys())
+    verification_density = _percentage(total_verification_commands, total_tool_calls)
 
-    # Calculate success rates by diversity level
-    success_rate_by_diversity = {}
-    for level, counts in diversity_buckets.items():
-        total_in_level = counts["success"] + counts["failure"]
-        success_rate_by_diversity[level] = _percentage(counts["success"], total_in_level)
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+    # Timing distribution
+    total_verifications = early_verifications + mid_verifications + late_verifications
+    early_verification_rate = _percentage(early_verifications, total_verifications)
+    mid_verification_rate = _percentage(mid_verifications, total_verifications)
+    late_verification_rate = _percentage(late_verifications, total_verifications)
+
+    # Test scope breadth
+    total_tests = targeted_test_count + broad_test_count
+    test_scope_breadth = _ratio(targeted_test_count, total_tests)
+
+    # Over-reliance detection
+    dominant_tool = ""
+    over_reliance = False
+    if verification_tools_counter:
+        dominant_tool, dominant_count = verification_tools_counter.most_common(1)[0]
+        if total_verification_commands > 0:
+            over_reliance = (dominant_count / total_verification_commands) > 0.75
+
+    # Calculate coverage score
+    verification_coverage_score = _calculate_coverage_score(
+        unique_verification_tools,
+        verification_density,
+        missing_type_check_count,
+        missing_build_check_count,
+        total_packs,
+    )
 
     return {
         "total_packs": total_packs,
-        "packs_with_verification": packs_with_verification,
-<<<<<<< HEAD
-        "unique_commands": unique_commands_count,
-        "avg_commands_per_pack": avg_commands_per_pack,
-        "command_type_distribution": type_distribution,
-        "multi_stage_percentage": multi_stage_pct,
-        "single_stage_count": single_stage_count,
-        "no_verification_count": no_verification_count,
-        "avg_file_coverage": avg_file_coverage,
-        "success_by_diversity": success_by_diversity,
-        "weak_verification_packs": weak_packs[:20],  # Limit to 20 examples
-        "common_command_patterns": common_patterns,
+        "total_verification_commands": total_verification_commands,
+        "unique_verification_tools": unique_verification_tools,
+        "verification_tools_used": verification_tools_used,
+        "verification_density": verification_density,
+        "verification_by_category": dict(verification_categories),
+        "early_verification_rate": early_verification_rate,
+        "mid_verification_rate": mid_verification_rate,
+        "late_verification_rate": late_verification_rate,
+        "targeted_test_count": targeted_test_count,
+        "broad_test_count": broad_test_count,
+        "test_scope_breadth": test_scope_breadth,
+        "missing_type_check_count": missing_type_check_count,
+        "missing_build_check_count": missing_build_check_count,
+        "tdd_signals_count": tdd_signals_count,
+        "verification_coverage_score": verification_coverage_score,
+        "over_reliance_on_single_tool": over_reliance,
+        "dominant_verification_tool": dominant_tool,
     }
 
 
-def _empty_result() -> dict[str, Any]:
-    """Return empty result structure."""
-    return {
-        "total_packs": 0,
-        "packs_with_verification": 0,
-        "unique_commands": 0,
-        "avg_commands_per_pack": 0.0,
-        "command_type_distribution": [],
-        "multi_stage_percentage": 0.0,
-        "single_stage_count": 0,
-        "no_verification_count": 0,
-        "avg_file_coverage": 0.0,
-        "success_by_diversity": [],
-        "weak_verification_packs": [],
-        "common_command_patterns": [],
-=======
-        "verification_rate": verification_rate,
-        "unique_commands": len(all_commands),
-        "command_type_distribution": dict(command_type_counts),
-        "multi_stage_packs": multi_stage_packs,
-        "multi_stage_rate": multi_stage_rate,
-        "avg_diversity_score": avg_diversity_score,
-        "success_rate_by_diversity": success_rate_by_diversity,
-        "weak_verification_packs": weak_verification_packs,
-        "examples": examples[:5],  # Limit to 5 examples
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
-    }
+def _get_sessions(record: Mapping[str, Any]) -> list[Any]:
+    """Extract sessions list from pack record."""
+    sessions = record.get("sessions")
+    if isinstance(sessions, list):
+        return sessions
+    return []
+
+
+def _get_tool_calls(session: Mapping[str, Any]) -> list[Any]:
+    """Extract tool calls list from session."""
+    tool_calls = session.get("tool_calls")
+    if isinstance(tool_calls, list):
+        return tool_calls
+    return []
+
+
+def _get_edited_files(session: Mapping[str, Any]) -> list[str]:
+    """Extract edited files list from session."""
+    edited_files = session.get("edited_files")
+    if isinstance(edited_files, list):
+        return [_string(f) for f in edited_files]
+    return []
 
 
 def _string(value: object) -> str:
@@ -407,140 +275,76 @@ def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-<<<<<<< HEAD
-def _split_commands(verification_cmd: str) -> list[str]:
-    """Split verification command into individual commands.
+def _int(value: object) -> int:
+    """Convert value to int, returning 0 for invalid values."""
+    if value is None:
+        return 0
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
 
-    Splits on && or ; while preserving quoted sections.
+
+def _identify_verification(command: str) -> dict[str, str] | None:
+    """Identify if command is a verification command and its type.
+
+    Returns:
+        Dict with 'tool' and 'category' or None if not verification
     """
-    if not verification_cmd:
-        return []
+    command_lower = command.lower()
 
-    # Simple split on && and ; (more sophisticated parsing would handle quotes)
-    parts = re.split(r'\s*(?:&&|;)\s*', verification_cmd)
-    return [p.strip() for p in parts if p.strip()]
+    for category, tools in VERIFICATION_TOOLS.items():
+        for tool in tools:
+            if tool in command_lower:
+                return {"tool": tool, "category": category}
 
-
-def _classify_command(command: str) -> str:
-    """Classify command by type (test/lint/typecheck/build/other).
-
-    Returns the first matching type or "other" if no match.
-    """
-    cmd_lower = command.lower()
-
-    for cmd_type, patterns in COMMAND_PATTERNS.items():
-        for pattern in patterns:
-            if re.search(pattern, cmd_lower):
-                return cmd_type
-
-    return "other"
+    return None
 
 
-def _file_in_command(filename: str, command: str) -> bool:
-    """Check if filename appears in command string."""
-    # Simple substring check (could be enhanced)
-    return filename in command
-=======
-def _normalize_commands(value: object) -> list[str]:
-    """Normalize verification command list."""
-    if isinstance(value, str):
-        commands = [value]
-    elif isinstance(value, (list, tuple)):
-        commands = [c for c in value if isinstance(c, str)]
+def _is_targeted_test(command: str) -> bool:
+    """Check if test command targets a specific file/test."""
+    # Heuristic: command contains "test_" or "tests/" followed by specific path
+    return "test_" in command or ("tests/" in command and "::" in command)
+
+
+def _is_typed_file(file_path: str) -> bool:
+    """Check if file is likely typed code (TypeScript, Python with types)."""
+    return file_path.endswith((".ts", ".tsx", ".py"))
+
+
+def _is_core_file(file_path: str) -> bool:
+    """Check if file is core infrastructure (src, lib, build config)."""
+    return any(
+        part in file_path.lower()
+        for part in ["src/", "lib/", "package.json", "cargo.toml", "setup.py", "pyproject.toml"]
+    )
+
+
+def _has_prior_edit(tool_calls: list[Any], current_turn: int) -> bool:
+    """Check if there was an Edit before the current turn."""
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, Mapping):
+            continue
+        turn = _int(tool_call.get("turn_index", 0))
+        if turn >= current_turn:
+            break
+        if _string(tool_call.get("tool_name", "")) == "Edit":
+            return True
+    return False
+
+
+def _calculate_timing_bucket(turn_index: int, total_turns: int) -> str:
+    """Calculate timing bucket (early/mid/late) for a turn."""
+    if total_turns <= 0:
+        return "early"
+    ratio = turn_index / total_turns
+    if ratio < 0.33:
+        return "early"
+    elif ratio < 0.67:
+        return "mid"
     else:
-        return []
-
-    # Normalize command strings
-    normalized = []
-    for cmd in commands:
-        cmd = cmd.strip()
-        if cmd:
-            normalized.append(cmd)
-
-    return normalized
-
-
-def _classify_command(command: str) -> str:
-    """Classify verification command by type.
-
-    Args:
-        command: Verification command string
-
-    Returns:
-        Command type: test, lint, build, typecheck, or other
-    """
-    cmd_lower = command.lower()
-
-    # Lint commands (check before test to avoid "test" in path matching)
-    lint_keywords = ["ruff", "lint", "eslint", "pylint", "flake8", "black", "prettier"]
-    if any(keyword in cmd_lower for keyword in lint_keywords):
-        return COMMAND_TYPE_LINT
-
-    # Typecheck commands (check before test to avoid "test" in path matching)
-    typecheck_keywords = ["mypy", "typecheck", "type-check", "pyright", "tsc"]
-    if any(keyword in cmd_lower for keyword in typecheck_keywords):
-        return COMMAND_TYPE_TYPECHECK
-
-    # Build commands
-    build_keywords = ["build", "compile", "make", "cargo build", "npm run build"]
-    if any(keyword in cmd_lower for keyword in build_keywords):
-        return COMMAND_TYPE_BUILD
-
-    # Test commands (check last to avoid matching paths like "tests/")
-    test_keywords = ["pytest", "jest", "mocha", "vitest", "unittest", "npm test", " test"]
-    if any(keyword in cmd_lower for keyword in test_keywords):
-        return COMMAND_TYPE_TEST
-
-    return COMMAND_TYPE_OTHER
-
-
-def _calculate_diversity_score(command_types: set[str]) -> float:
-    """Calculate diversity score based on command type variety.
-
-    Diversity score is a percentage representing how many different
-    verification types are used out of the four main categories.
-
-    Args:
-        command_types: Set of command type strings
-
-    Returns:
-        Diversity score from 0.0 to 100.0
-    """
-    if not command_types:
-        return 0.0
-
-    # Count how many of the four main types are present
-    main_types = {
-        COMMAND_TYPE_TEST,
-        COMMAND_TYPE_LINT,
-        COMMAND_TYPE_BUILD,
-        COMMAND_TYPE_TYPECHECK,
-    }
-
-    present_main_types = command_types & main_types
-    score = (len(present_main_types) / len(main_types)) * 100.0
-
-    return round(score, 2)
-
-
-def _categorize_diversity(diversity_score: float) -> str:
-    """Categorize diversity score into levels.
-
-    Args:
-        diversity_score: Diversity score from 0.0 to 100.0
-
-    Returns:
-        Diversity level: none, low, medium, or high
-    """
-    if diversity_score == 0.0:
-        return "none"
-    elif diversity_score < GOOD_DIVERSITY_SCORE:
-        return "low"
-    elif diversity_score < EXCELLENT_DIVERSITY_SCORE:
-        return "medium"
-    else:
-        return "high"
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+        return "late"
 
 
 def _percentage(numerator: int | float, denominator: int | float) -> float:
@@ -550,16 +354,55 @@ def _percentage(numerator: int | float, denominator: int | float) -> float:
     return round((numerator / denominator) * 100.0, 2)
 
 
-<<<<<<< HEAD
-def _average(values: list[int] | list[float]) -> float:
-    """Calculate average of numeric values."""
-    if not values:
+def _ratio(numerator: int | float, denominator: int | float) -> float:
+    """Calculate ratio, returning 0.0 if denominator is 0."""
+    if denominator <= 0:
         return 0.0
-    return round(sum(values) / len(values), 2)
-=======
-def _average(total: float | int, count: int) -> float:
-    """Calculate average, returning 0.0 if count is 0."""
-    if count <= 0:
-        return 0.0
-    return round(total / count, 2)
->>>>>>> relay/claude-code/add-pack-verification-command-diversity-analyzer-01KR3TTY
+    return round(numerator / denominator, 2)
+
+
+def _calculate_coverage_score(
+    unique_tools: int,
+    verification_density: float,
+    missing_type_checks: int,
+    missing_build_checks: int,
+    total_packs: int,
+) -> float:
+    """Calculate overall verification coverage score (0-1).
+
+    Scoring components:
+    - Tool diversity (0-0.30): More tools = better coverage
+    - Verification density (0-0.30): >15% is good
+    - Type check discipline (0-0.20): Penalty for missing checks
+    - Build check discipline (0-0.20): Penalty for missing checks
+    """
+    # Tool diversity component (target: >3 tools)
+    if unique_tools >= 3:
+        diversity_component = 0.30
+    else:
+        diversity_component = (unique_tools / 3.0) * 0.30
+
+    # Verification density component (target: >15%)
+    if verification_density >= 15.0:
+        density_component = 0.30
+    else:
+        density_component = (verification_density / 15.0) * 0.30
+
+    # Type check discipline (penalty for missing checks)
+    if total_packs == 0:
+        type_component = 0.20
+    else:
+        missing_rate = missing_type_checks / total_packs
+        penalty = min(missing_rate, 1.0)
+        type_component = 0.20 * (1.0 - penalty)
+
+    # Build check discipline (penalty for missing checks)
+    if total_packs == 0:
+        build_component = 0.20
+    else:
+        missing_rate = missing_build_checks / total_packs
+        penalty = min(missing_rate, 1.0)
+        build_component = 0.20 * (1.0 - penalty)
+
+    score = diversity_component + density_component + type_component + build_component
+    return round(max(0.0, min(1.0, score)), 3)
