@@ -1,28 +1,27 @@
-"""Pack user notification completeness and session boundary discipline analyzer.
+"""Pack notification completeness and session boundary discipline analyzer.
 
-Analyzes whether Claude Code sessions communicate important outcomes to users,
-detecting silent failures, missing outcome reporting, and unnecessary file creation.
+Analyzes how well agents communicate outcomes, errors, and progress to users
+across sessions in a pack. Ensures user visibility into agent actions and
+outcomes per global instructions (communicate via text, not tools).
 
-Notification metrics:
-- Session completion: % sessions ending with summary/outcome text
-- Error escalation: % errors communicated to user vs silently handled
-- Clarification usage: % sessions using AskUserQuestion when appropriate
-- Outcome reporting: % sessions reporting URLs, results, metrics
-- File creation discipline: % sessions avoiding unnecessary .md creation
+Combines two perspectives:
+1. Notification completeness: Final messages, error escalation, outcome reporting
+2. Session boundary discipline: Explicit completion, progress updates, communication style
 
-Anti-patterns detected:
-- Silent failures: tool error not followed by user message
-- Missing PR URLs: gh pr create without reporting URL
-- Proactive documentation: .md file creation without user request
-- Missing outcome messages: session ends without final user communication
-- Assumption-driven execution: not asking for clarification when needed
+Metrics tracked:
+- Session completion: Sessions ending with clear outcome summary
+- Error communication: All errors/failures communicated to user
+- Progress updates: Intermediate updates during long operations (>5min)
+- Outcome reporting: URLs, results, metrics reported to user
+- Communication discipline: Markdown usage, tool communication violations
+- Clarification usage: AskUserQuestion when appropriate
 
 Quality indicators:
-- High notification completeness: >90% sessions end with outcome message
-- High error escalation: >95% errors communicated to user
-- Good clarification usage: >20% sessions ask questions when needed
-- High outcome reporting: >80% sessions report results (URLs, hashes, metrics)
-- High creation discipline: <5% sessions create unnecessary .md files
+- High explicit completion rate (target 100%): All sessions end with clear summary
+- High error notification rate (target 100%): All errors communicated
+- Appropriate progress updates: Regular status during long operations
+- High outcome reporting: PR URLs, commit hashes, results shared
+- Zero tool communication violations: Direct text communication only
 """
 
 from __future__ import annotations
@@ -30,45 +29,105 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-def analyze_pack_notification_completeness(records: object) -> dict[str, Any]:
-    """Analyze user notification completeness and session boundary discipline.
+# Completion indicators to detect in final messages
+COMPLETION_INDICATORS = (
+    "done",
+    "complete",
+    "finished",
+    "successfully",
+    "committed",
+    "implemented",
+    "created",
+    "fixed",
+    "updated",
+    "summary",
+    "result",
+    "outcome",
+)
 
-    Evaluates whether sessions properly communicate outcomes to users.
+# Error/failure terms to detect
+ERROR_INDICATORS = (
+    "error",
+    "fail",
+    "exception",
+    "traceback",
+    "stderr",
+    "exit code",
+    "timeout",
+    "issue",
+    "problem",
+    "cannot",
+    "unable",
+    "blocked",
+)
+
+# Progress update indicators
+PROGRESS_INDICATORS = (
+    "working on",
+    "starting",
+    "processing",
+    "analyzing",
+    "implementing",
+    "in progress",
+    "currently",
+    "next",
+    "step",
+)
+
+
+def analyze_pack_notification_completeness(records: object) -> dict[str, Any]:
+    """Analyze notification completeness and communication discipline in packs.
+
+    Evaluates how well agents communicate outcomes, errors, and progress to users,
+    ensuring transparency and adherence to communication guidelines.
 
     Args:
         records: List of pack dictionaries with keys:
             - pack_id: Pack identifier
             - sessions: List of session dictionaries with:
                 - session_id: Session identifier
+                - duration_minutes: Session duration in minutes (optional)
                 - messages: List of message dictionaries with:
                     - message_index: Message number
-                    - role: Message role (assistant/user)
-                    - text_content: Message text content
+                    - role: Message role (assistant/user, optional)
+                    - text: Message text content (or text_content)
+                    - is_final_message: Boolean if last message (optional)
                     - tool_calls: List of tool calls
-                    - tool_results: List of tool results
+                    - tool_results: List of tool results (optional)
+                - errors_encountered: List of error dictionaries (optional):
+                    - error_type: Type of error
+                    - error_message: Error message
+                    - turn_index: When error occurred
+                    - was_communicated: Boolean if user was notified
 
     Returns:
         Dict with:
             - total_packs: Total number of packs analyzed
             - total_sessions: Total number of sessions
-            - sessions_with_final_message: Sessions ending with user-facing text
-            - notification_completeness_score: % sessions with final outcome
-            - total_tool_errors: Total tool errors encountered
-            - errors_escalated_to_user: Errors followed by user message
-            - error_escalation_rate: % errors communicated to user
-            - silent_failures: Errors not communicated to user
+            - sessions_with_explicit_completion: Sessions ending with outcome summary
+            - sessions_without_completion: Sessions ending abruptly
+            - explicit_completion_rate: Percentage with explicit completion
+            - total_errors: Total errors encountered
+            - errors_communicated: Errors notified to user
+            - errors_silent: Errors not communicated
+            - error_notification_rate: Percentage of errors communicated
+            - long_sessions: Sessions >5 minutes
+            - long_sessions_with_progress: Long sessions with progress updates
+            - progress_update_frequency: Percentage of long sessions with updates
+            - messages_with_markdown: Messages using markdown formatting
+            - total_messages: Total messages analyzed
+            - markdown_usage_consistency: Percentage using markdown
+            - tool_communication_violations: Count of Bash echo/comment communication
             - total_sessions_with_pr_creation: Sessions creating PRs
             - pr_creation_with_url_reported: PR creations with URL in output
             - missing_pr_urls: PR creations without URL reporting
-            - total_md_file_creations: Total .md file Write/create operations
-            - proactive_md_creations: .md creations without user request
-            - proactive_md_creation_rate: % .md files created proactively
             - sessions_using_askuser: Sessions using AskUserQuestion
             - clarification_usage_rate: % sessions asking for clarification
-            - example_good_notification: Example of good outcome reporting
-            - example_silent_failure: Example of silent error
+            - example_good_completion: Example of clear completion summary
+            - example_poor_completion: Example of abrupt termination
+            - example_good_error_notification: Example of clear error communication
+            - example_poor_error_handling: Example of silent error handling
             - example_missing_pr_url: Example of PR without URL
-            - example_proactive_md: Example of proactive .md creation
 
     Raises:
         ValueError: If records is not a list
@@ -80,30 +139,35 @@ def analyze_pack_notification_completeness(records: object) -> dict[str, Any]:
 
     total_packs = 0
     total_sessions = 0
-    sessions_with_final_message = 0
+    sessions_with_explicit_completion = 0
+    sessions_without_completion = 0
 
-    # Error escalation tracking
-    total_tool_errors = 0
-    errors_escalated_to_user = 0
-    silent_failures = 0
+    total_errors = 0
+    errors_communicated = 0
+    errors_silent = 0
+
+    long_sessions = 0
+    long_sessions_with_progress = 0
+
+    messages_with_markdown = 0
+    total_messages = 0
+
+    tool_communication_violations = 0
 
     # PR URL tracking
     total_sessions_with_pr_creation = 0
     pr_creation_with_url_reported = 0
     missing_pr_urls = 0
 
-    # Markdown file creation tracking
-    total_md_file_creations = 0
-    proactive_md_creations = 0
-
     # AskUserQuestion usage
     sessions_using_askuser = 0
 
     # Examples
-    example_good_notification: dict[str, Any] = {}
-    example_silent_failure: dict[str, Any] = {}
+    example_good_completion: dict[str, Any] = {}
+    example_poor_completion: dict[str, Any] = {}
+    example_good_error_notification: dict[str, Any] = {}
+    example_poor_error_handling: dict[str, Any] = {}
     example_missing_pr_url: dict[str, Any] = {}
-    example_proactive_md: dict[str, Any] = {}
 
     for record in records:
         if not isinstance(record, Mapping):
@@ -117,114 +181,110 @@ def analyze_pack_notification_completeness(records: object) -> dict[str, Any]:
                 continue
 
             total_sessions += 1
+            session_id = session.get("session_id", "unknown")
+            duration_minutes = _extract_number(session.get("duration_minutes"))
 
             messages = _get_messages(session)
-            if not messages:
-                continue
-
-            # Session-level flags
+            final_message_text = ""
+            has_progress_updates = False
             session_has_pr_creation = False
             session_has_pr_url_report = False
-            session_has_md_creation = False
-            session_has_explicit_md_request = False
             session_uses_askuser = False
 
-            # Track last assistant message
-            last_assistant_message_text = ""
-            last_assistant_message_idx = -1
-
-            # Track errors and escalation
-            error_indices: list[int] = []
-            escalated_error_indices: set[int] = set()
-
-            for msg_idx, message in enumerate(messages):
+            for message in messages:
                 if not isinstance(message, Mapping):
                     continue
 
+                total_messages += 1
+
+                # Support both text and text_content fields
+                text = _string(message.get("text") or message.get("text_content"))
+                is_final = message.get("is_final_message") is True
                 role = _string(message.get("role", ""))
-                text_content = _string(message.get("text_content", ""))
 
-                # Track user requests for .md creation
-                if role == "user" and text_content:
-                    if _mentions_md_creation_request(text_content):
-                        session_has_explicit_md_request = True
+                # Check markdown usage
+                if _has_markdown_formatting(text):
+                    messages_with_markdown += 1
 
-                # Track assistant messages
-                if role == "assistant":
-                    last_assistant_message_text = text_content
-                    last_assistant_message_idx = msg_idx
+                # Check for tool-based communication violations
+                tool_calls = _get_tool_calls(message)
+                if _has_tool_communication_violation(tool_calls, text):
+                    tool_communication_violations += 1
 
-                    # Check for AskUserQuestion usage
-                    tool_calls = _get_tool_calls(message)
-                    for tc in tool_calls:
-                        if isinstance(tc, Mapping):
-                            tool_name = _string(tc.get("tool_name"))
-                            if tool_name == "AskUserQuestion":
-                                session_uses_askuser = True
+                # Track progress indicators
+                if _has_progress_indicator(text):
+                    has_progress_updates = True
 
-                            # Check for PR creation
-                            if tool_name == "Bash":
-                                command = _string(tc.get("command", ""))
-                                if "gh pr create" in command or "git push" in command.lower():
-                                    session_has_pr_creation = True
+                # Check for AskUserQuestion usage
+                for tc in tool_calls:
+                    if isinstance(tc, Mapping):
+                        tool_name = _string(tc.get("tool_name"))
+                        if tool_name == "AskUserQuestion":
+                            session_uses_askuser = True
 
-                            # Check for .md file creation
-                            if tool_name in ("Write", "Edit"):
-                                file_path = _string(tc.get("file_path", ""))
-                                if file_path.endswith(".md"):
-                                    session_has_md_creation = True
+                        # Check for PR creation
+                        if tool_name == "Bash":
+                            command = _string(tc.get("command", ""))
+                            if "gh pr create" in command or "git push" in command.lower():
+                                session_has_pr_creation = True
 
-                    # Check tool results for errors
-                    tool_results = _get_tool_results(message)
-                    for tr in tool_results:
-                        if isinstance(tr, Mapping):
-                            if _is_tool_error(tr):
-                                total_tool_errors += 1
-                                error_indices.append(msg_idx)
+                # Check if text mentions PR URL
+                if text and ("github.com" in text.lower() or "pr #" in text.lower()):
+                    session_has_pr_url_report = True
 
-                    # Check if text mentions PR URL
-                    if text_content and ("github.com" in text_content.lower() or "pr #" in text_content.lower()):
-                        session_has_pr_url_report = True
+                # Capture final message (either marked or last assistant message)
+                if is_final or (role == "assistant" and text):
+                    final_message_text = text
 
-            # Determine if session has final notification
-            if last_assistant_message_text and last_assistant_message_idx == len(messages) - 1:
-                # Last message is from assistant with text content
-                sessions_with_final_message += 1
-
-                # Capture good example
-                if not example_good_notification and (
-                    "complete" in last_assistant_message_text.lower()
-                    or "done" in last_assistant_message_text.lower()
-                    or "github.com" in last_assistant_message_text.lower()
-                ):
-                    example_good_notification = {
-                        "session_id": session.get("session_id", "unknown"),
-                        "final_message": last_assistant_message_text[:200],
+            # Check for explicit completion
+            has_completion = _has_completion_indicator(final_message_text)
+            if has_completion:
+                sessions_with_explicit_completion += 1
+                if not example_good_completion:
+                    example_good_completion = {
+                        "session_id": session_id,
+                        "final_message": final_message_text[:200],
+                    }
+            else:
+                sessions_without_completion += 1
+                if not example_poor_completion:
+                    example_poor_completion = {
+                        "session_id": session_id,
+                        "final_message": final_message_text[:200] if final_message_text else "(no final message)",
                     }
 
-            # Check for error escalation
-            for error_idx in error_indices:
-                # Look for user-facing message after error
-                escalated = False
-                for msg_idx in range(error_idx + 1, len(messages)):
-                    msg = messages[msg_idx]
-                    if isinstance(msg, Mapping):
-                        role = _string(msg.get("role", ""))
-                        text = _string(msg.get("text_content", ""))
-                        if role == "assistant" and text:
-                            # Found assistant text after error - likely escalated
-                            escalated = True
-                            errors_escalated_to_user += 1
-                            escalated_error_indices.add(error_idx)
-                            break
+            # Check long session progress updates
+            if duration_minutes is not None and duration_minutes > 5:
+                long_sessions += 1
+                if has_progress_updates:
+                    long_sessions_with_progress += 1
 
-                if not escalated:
-                    silent_failures += 1
-                    if not example_silent_failure:
-                        example_silent_failure = {
-                            "session_id": session.get("session_id", "unknown"),
-                            "error_index": error_idx,
-                        }
+            # Check error notification completeness (from structured errors_encountered)
+            errors = session.get("errors_encountered")
+            if isinstance(errors, list):
+                for error in errors:
+                    if not isinstance(error, Mapping):
+                        continue
+
+                    total_errors += 1
+                    was_communicated = error.get("was_communicated") is True
+
+                    if was_communicated:
+                        errors_communicated += 1
+                        if not example_good_error_notification:
+                            example_good_error_notification = {
+                                "session_id": session_id,
+                                "error_type": error.get("error_type"),
+                                "error_message": _string(error.get("error_message"))[:200],
+                            }
+                    else:
+                        errors_silent += 1
+                        if not example_poor_error_handling:
+                            example_poor_error_handling = {
+                                "session_id": session_id,
+                                "error_type": error.get("error_type"),
+                                "error_message": _string(error.get("error_message"))[:200],
+                            }
 
             # PR URL tracking
             if session_has_pr_creation:
@@ -235,17 +295,7 @@ def analyze_pack_notification_completeness(records: object) -> dict[str, Any]:
                     missing_pr_urls += 1
                     if not example_missing_pr_url:
                         example_missing_pr_url = {
-                            "session_id": session.get("session_id", "unknown"),
-                        }
-
-            # Markdown file creation tracking
-            if session_has_md_creation:
-                total_md_file_creations += 1
-                if not session_has_explicit_md_request:
-                    proactive_md_creations += 1
-                    if not example_proactive_md:
-                        example_proactive_md = {
-                            "session_id": session.get("session_id", "unknown"),
+                            "session_id": session_id,
                         }
 
             # AskUser tracking
@@ -253,32 +303,39 @@ def analyze_pack_notification_completeness(records: object) -> dict[str, Any]:
                 sessions_using_askuser += 1
 
     # Calculate metrics
-    notification_completeness_score = _percentage(sessions_with_final_message, total_sessions)
-    error_escalation_rate = _percentage(errors_escalated_to_user, total_tool_errors)
+    explicit_completion_rate = _percentage(sessions_with_explicit_completion, total_sessions)
+    error_notification_rate = _percentage(errors_communicated, total_errors)
+    progress_update_frequency = _percentage(long_sessions_with_progress, long_sessions)
+    markdown_usage_consistency = _percentage(messages_with_markdown, total_messages)
     clarification_usage_rate = _percentage(sessions_using_askuser, total_sessions)
-    proactive_md_creation_rate = _percentage(proactive_md_creations, total_md_file_creations)
 
     return {
         "total_packs": total_packs,
         "total_sessions": total_sessions,
-        "sessions_with_final_message": sessions_with_final_message,
-        "notification_completeness_score": notification_completeness_score,
-        "total_tool_errors": total_tool_errors,
-        "errors_escalated_to_user": errors_escalated_to_user,
-        "error_escalation_rate": error_escalation_rate,
-        "silent_failures": silent_failures,
+        "sessions_with_explicit_completion": sessions_with_explicit_completion,
+        "sessions_without_completion": sessions_without_completion,
+        "explicit_completion_rate": explicit_completion_rate,
+        "total_errors": total_errors,
+        "errors_communicated": errors_communicated,
+        "errors_silent": errors_silent,
+        "error_notification_rate": error_notification_rate,
+        "long_sessions": long_sessions,
+        "long_sessions_with_progress": long_sessions_with_progress,
+        "progress_update_frequency": progress_update_frequency,
+        "messages_with_markdown": messages_with_markdown,
+        "total_messages": total_messages,
+        "markdown_usage_consistency": markdown_usage_consistency,
+        "tool_communication_violations": tool_communication_violations,
         "total_sessions_with_pr_creation": total_sessions_with_pr_creation,
         "pr_creation_with_url_reported": pr_creation_with_url_reported,
         "missing_pr_urls": missing_pr_urls,
-        "total_md_file_creations": total_md_file_creations,
-        "proactive_md_creations": proactive_md_creations,
-        "proactive_md_creation_rate": proactive_md_creation_rate,
         "sessions_using_askuser": sessions_using_askuser,
         "clarification_usage_rate": clarification_usage_rate,
-        "example_good_notification": example_good_notification,
-        "example_silent_failure": example_silent_failure,
+        "example_good_completion": example_good_completion,
+        "example_poor_completion": example_poor_completion,
+        "example_good_error_notification": example_good_error_notification,
+        "example_poor_error_handling": example_poor_error_handling,
         "example_missing_pr_url": example_missing_pr_url,
-        "example_proactive_md": example_proactive_md,
     }
 
 
@@ -306,64 +363,23 @@ def _get_tool_calls(message: Mapping[str, Any]) -> list[Any]:
     return []
 
 
-def _get_tool_results(message: Mapping[str, Any]) -> list[Any]:
-    """Extract tool results list from message."""
-    tool_results = message.get("tool_results")
-    if isinstance(tool_results, list):
-        return tool_results
-    return []
-
-
 def _string(value: object) -> str:
     """Convert value to string, stripping whitespace."""
     return value.strip() if isinstance(value, str) else ""
 
 
-def _is_tool_error(tool_result: Mapping[str, Any]) -> bool:
-    """Check if tool result indicates an error.
-
-    Heuristic: looks for error indicators in result.
-    """
-    error_field = tool_result.get("error")
-    if error_field:
-        return True
-
-    # Check for exit code != 0 (for Bash)
-    exit_code = tool_result.get("exit_code")
-    if exit_code is not None and exit_code != 0:
-        return True
-
-    # Check for error text in output
-    output = _string(tool_result.get("output", ""))
-    if output and any(indicator in output.lower() for indicator in ["error:", "exception:", "failed:", "traceback"]):
-        return True
-
-    return False
-
-
-def _mentions_md_creation_request(text: str) -> bool:
-    """Check if user text explicitly requests .md file creation.
-
-    Examples: "create a README", "write documentation", "add a CHANGELOG"
-    """
-    text_lower = text.lower()
-
-    explicit_requests = [
-        "create a readme",
-        "create readme",
-        "write a readme",
-        "add a readme",
-        "make a readme",
-        "create documentation",
-        "write documentation",
-        "add documentation",
-        "create a changelog",
-        "write a changelog",
-        "create .md",
-        "create markdown",
-    ]
-
-    return any(req in text_lower for req in explicit_requests)
+def _extract_number(value: object) -> int | float | None:
+    """Extract numeric value from object."""
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            if "." in value:
+                return float(value)
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _percentage(numerator: int | float, denominator: int | float) -> float:
@@ -371,3 +387,94 @@ def _percentage(numerator: int | float, denominator: int | float) -> float:
     if denominator <= 0:
         return 0.0
     return round((numerator / denominator) * 100.0, 2)
+
+
+def _has_completion_indicator(text: str) -> bool:
+    """Check if text contains completion indicators."""
+    if not text:
+        return False
+
+    text_lower = text.lower()
+    return any(indicator in text_lower for indicator in COMPLETION_INDICATORS)
+
+
+def _has_error_indicator(text: str) -> bool:
+    """Check if text contains error indicators."""
+    if not text:
+        return False
+
+    text_lower = text.lower()
+    return any(indicator in text_lower for indicator in ERROR_INDICATORS)
+
+
+def _has_progress_indicator(text: str) -> bool:
+    """Check if text contains progress update indicators."""
+    if not text:
+        return False
+
+    text_lower = text.lower()
+    return any(indicator in text_lower for indicator in PROGRESS_INDICATORS)
+
+
+def _has_markdown_formatting(text: str) -> bool:
+    """Check if text uses markdown formatting."""
+    if not text:
+        return False
+
+    # Check for common markdown patterns
+    markdown_patterns = [
+        "**",  # Bold
+        "##",  # Headers
+        "- ",  # Lists
+        "* ",  # Lists
+        "`",   # Code
+        "```", # Code blocks
+        "[",   # Links
+    ]
+
+    return any(pattern in text for pattern in markdown_patterns)
+
+
+def _has_tool_communication_violation(tool_calls: list[Any], message_text: str) -> bool:
+    """Check if message uses tool-based communication instead of direct text.
+
+    Violations include:
+    - Bash echo commands used to communicate with user
+    - Code comments added solely for user communication
+    """
+    for call in tool_calls:
+        if not isinstance(call, Mapping):
+            continue
+
+        tool_name = _string(call.get("tool_name"))
+
+        # Check for Bash echo violations
+        if tool_name.lower() == "bash":
+            command = _string(call.get("command"))
+            if command:
+                command_lower = command.lower()
+                # Detect echo commands that appear to communicate with user
+                if command_lower.startswith("echo") and not _is_technical_echo(command):
+                    return True
+
+    return False
+
+
+def _is_technical_echo(command: str) -> bool:
+    """Check if echo command is for technical purposes, not user communication.
+
+    Technical uses: writing to files, piping to commands, environment setup.
+    Non-technical: echo statements that print user-facing messages.
+    """
+    command_lower = command.lower()
+
+    # Technical patterns
+    if ">" in command or ">>" in command:  # Redirecting to file
+        return True
+    if "|" in command:  # Piping to another command
+        return True
+    if "$" in command and "=" not in command:  # Echoing environment variables
+        return True
+
+    # Non-technical: standalone echo for user communication
+    return False
