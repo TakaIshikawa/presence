@@ -112,6 +112,8 @@ class PersonaGuardConfig:
     enabled: bool = True
     min_score: float = 0.55
     min_phrase_overlap: float = 0.08
+    phrase_overlap_reference_phrases: int = 24
+    min_phrase_overlap_floor: float = 0.03
     max_banned_markers: int = 0
     max_abstraction_ratio: float = 0.18
     min_grounding_score: float = 0.5
@@ -223,11 +225,14 @@ class PersonaGuard:
         recent_tokens = _content_tokens(" ".join(recent_texts))
         candidate_phrases = _phrases(candidate_tokens)
         recent_phrases = _phrases(recent_tokens)
+        phrase_overlap_count = len(candidate_phrases & recent_phrases)
+        phrase_count = len(candidate_phrases)
         phrase_overlap = (
-            len(candidate_phrases & recent_phrases) / len(candidate_phrases)
+            phrase_overlap_count / phrase_count
             if candidate_phrases
             else 0.0
         )
+        phrase_overlap_min = self._phrase_overlap_minimum(phrase_count)
 
         normalized = _normalize(content)
         banned_hits = [
@@ -245,7 +250,10 @@ class PersonaGuard:
 
         return {
             "recent_posts": len(recent_texts),
+            "phrase_count": phrase_count,
+            "phrase_overlap_count": phrase_overlap_count,
             "phrase_overlap": round(phrase_overlap, 4),
+            "phrase_overlap_min": round(phrase_overlap_min, 4),
             "banned_markers": banned_hits,
             "banned_marker_count": len(banned_hits),
             "abstraction_ratio": round(abstraction_ratio, 4),
@@ -255,12 +263,30 @@ class PersonaGuard:
             "artifact_hits": artifact_hits[:8],
         }
 
+    def _phrase_overlap_minimum(self, phrase_count: int) -> float:
+        """Return a length-adjusted minimum phrase-overlap ratio.
+
+        Short posts keep the configured threshold. Longer content has more
+        room for original phrasing, so the required overlap ratio tapers down
+        while never dropping below the configured floor.
+        """
+        if phrase_count <= 0:
+            return self.config.min_phrase_overlap
+        reference = max(1, self.config.phrase_overlap_reference_phrases)
+        if phrase_count <= reference:
+            return self.config.min_phrase_overlap
+        adjusted = self.config.min_phrase_overlap * (reference / phrase_count) ** 0.5
+        return max(self.config.min_phrase_overlap_floor, adjusted)
+
     def _failure_reasons(self, metrics: dict) -> list[str]:
         reasons = []
-        if metrics["phrase_overlap"] < self.config.min_phrase_overlap:
+        phrase_overlap_min = metrics.get(
+            "phrase_overlap_min", self.config.min_phrase_overlap
+        )
+        if metrics["phrase_overlap"] < phrase_overlap_min:
             reasons.append(
                 f"phrase overlap {metrics['phrase_overlap']:.2f} below minimum "
-                f"{self.config.min_phrase_overlap:.2f}"
+                f"{phrase_overlap_min:.2f}"
             )
         if metrics["banned_marker_count"] > self.config.max_banned_markers:
             reasons.append(

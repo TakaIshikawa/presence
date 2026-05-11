@@ -490,8 +490,8 @@ class TestContentTypeRouting:
         format_directives = pipeline.generator.generate_candidates.call_args.kwargs[
             "format_directives"
         ]
-        assert "One actionable tip" in format_directives[0]
-        assert "Open with a genuine question" in format_directives[1]
+        assert "One reusable product-building lesson" in format_directives[0]
+        assert "Open with the product question" in format_directives[1]
         assert result.content_format == "tip"
 
     @patch("evaluation.format_performance.FormatPerformanceAnalyzer")
@@ -540,7 +540,7 @@ class TestContentTypeRouting:
             "format_directives"
         ]
         format_stats = result.filter_stats["format_selection"]
-        assert "Open with a genuine question" in format_directives[0]
+        assert "Open with the product question" in format_directives[0]
         assert result.content_format == "question"
         assert format_stats["selected_format"] == "question"
         assert format_stats["selected_formats"][0] == "question"

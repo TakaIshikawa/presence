@@ -39,6 +39,33 @@ def test_persona_guard_passes_grounded_author_like_content():
     assert result.metrics["grounding_score"] == 1.0
 
 
+def test_persona_guard_keeps_short_content_overlap_threshold_fixed():
+    guard = PersonaGuard()
+
+    result = guard.check(
+        "I checked the branch in worker.py after the timeout surfaced.",
+        RECENT_POSTS,
+    )
+
+    assert result.metrics["phrase_count"] <= 24
+    assert result.metrics["phrase_overlap_min"] == 0.08
+
+
+def test_persona_guard_lowers_overlap_threshold_for_long_content():
+    guard = PersonaGuard()
+    content = (
+        "I traced the queue worker timeout in worker.py and kept the retry path explicit. "
+        + " ".join(f"fresh product signal {index}" for index in range(80))
+    )
+
+    result = guard.check(content, RECENT_POSTS)
+
+    assert result.metrics["phrase_count"] > 24
+    assert 0.03 <= result.metrics["phrase_overlap_min"] < 0.08
+    assert result.metrics["phrase_overlap_count"] > 0
+    assert not any("phrase overlap" in reason for reason in result.reasons)
+
+
 def test_persona_guard_fails_generic_salesy_content():
     guard = PersonaGuard()
 
