@@ -219,13 +219,15 @@ def main():
                 logger.warning(f"  Failed to store knowledge links: {e}")
 
         # Embed content for future semantic dedup
-        if embedder and content_id:
+        if embedder and content_id and result.final_content.strip():
             try:
                 vectors = embedder.embed_batch([result.final_content])
                 if vectors:
                     db.set_content_embedding(content_id, serialize_embedding(vectors[0]))
             except Exception as e:
                 logger.warning(f"Embedding failed (non-fatal): {e}")
+        elif embedder and content_id:
+            logger.info("Skipping embedding for empty generated content")
 
         # Determine outcome and post if passes threshold
         passes = result.final_score >= config.synthesis.eval_threshold * 10

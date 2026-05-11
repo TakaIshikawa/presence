@@ -332,6 +332,18 @@ def _resolve_env_var(value: str) -> str:
     return value
 
 
+def _load_dotenv(base_path: Path) -> None:
+    """Load repo-local .env values before resolving ${ENV_VAR} config entries."""
+    env_path = base_path / ".env"
+    if not env_path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(env_path, override=False)
+
+
 def _require(data: dict, *keys: str, section: str) -> any:
     """Traverse nested keys and return the value, raising ValueError if missing.
 
@@ -377,6 +389,7 @@ def _persona_guard_publish_mode(value: str | None) -> str:
 
 def load_config(config_path: Optional[str] = None) -> Config:
     """Load configuration from YAML file."""
+    base_path: Path
     if config_path is None:
         # Look for config.local.yaml first, then config.yaml
         base_path = Path(__file__).parent.parent
@@ -387,6 +400,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
             config_path = local_config
         else:
             config_path = default_config
+    else:
+        base_path = Path(config_path).expanduser().resolve().parent
+
+    _load_dotenv(base_path)
 
     with open(config_path, "r") as f:
         data = yaml.safe_load(f)

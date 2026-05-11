@@ -195,33 +195,33 @@ operations:
   - monitoring
   runtimeType: check
 runs:
-- runId: run-1776925173131
+- runId: run-1778494508456
   operationId: run-daily
   sessionId: launchd-automated
-  startedAt: '2026-04-23 06:12:59'
-  completedAt: '2026-04-23 06:12:59'
+  startedAt: '2026-04-25 14:59:48'
+  completedAt: '2026-04-25 14:59:48'
   status: completed
   summary: Daily digest via launchd (state synced from database)
   costUsd: 0.0
   agent:
     agentType: launchd
     model: n/a
-- runId: run-1776925173131
+- runId: run-1778495131144
   operationId: run-weekly
   sessionId: launchd-automated
-  startedAt: '2026-04-12 03:01:36'
-  completedAt: '2026-04-12 03:01:36'
+  startedAt: '2026-05-11 10:25:31'
+  completedAt: '2026-05-11 10:25:31'
   status: completed
   summary: Weekly blog via launchd (state synced from database)
   costUsd: 0.0
   agent:
     agentType: launchd
     model: n/a
-- runId: run-1776928527790
+- runId: run-1778502150902
   operationId: run-poll
   sessionId: launchd-automated
-  startedAt: '2026-04-23T07:14:18.821395+00:00'
-  completedAt: '2026-04-23T07:14:18.821395+00:00'
+  startedAt: '2026-05-11T12:20:05.205977+00:00'
+  completedAt: '2026-05-11T12:20:05.205977+00:00'
   status: completed
   summary: Automated poll via launchd (state synced from database)
   costUsd: 0.0
@@ -230,7 +230,7 @@ runs:
     model: n/a
 alerts:
   status: alert
-  generatedAt: '2026-04-23T07:15:27.790191+00:00'
+  generatedAt: '2026-05-11T12:22:30.902882+00:00'
   thresholds:
     max_consecutive_publish_failures: 3
     max_ingestion_age_minutes: 60
@@ -246,8 +246,8 @@ alerts:
       summary: Consecutive publish failures within threshold
     stale_ingestion:
       status: ok
-      latestAt: '2026-04-23T07:14:18.821395+00:00'
-      ageMinutes: 1.15
+      latestAt: '2026-05-11T12:20:05.205977+00:00'
+      ageMinutes: 2.43
       threshold: 60
       summary: Ingestion freshness within threshold
     queue_backlog:
@@ -258,7 +258,7 @@ alerts:
     evaluation_pass_rate:
       status: alert
       passed: 0
-      total: 3
+      total: 7
       passRate: 0.0
       threshold: 0.5
       windowHours: 24

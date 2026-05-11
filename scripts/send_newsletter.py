@@ -18,10 +18,6 @@ from output.newsletter import (
     NewsletterSubjectCandidate,
     ButtondownClient,
 )
-from output.newsletter_preview import (
-    build_preview_payload as _build_shared_preview_payload,
-    write_preview_artifact as _write_shared_preview_artifact,
-)
 from output.link_health import LinkHealthChecker, LinkHealthReport
 
 
@@ -212,17 +208,27 @@ def _preview_payload(
     link_health: dict | None = None,
 ) -> dict:
     """Build the structured newsletter preview payload."""
-    return _build_shared_preview_payload(
-        db,
-        config,
-        content,
-        selected_subject,
-        candidates,
-        manual_subject,
-        week_start,
-        week_end,
-        link_health=link_health,
-    )
+    payload = {
+        "selected_subject": selected_subject,
+        "subject": selected_subject,
+        "body_markdown": content.body_markdown,
+        "source_content_ids": list(content.source_content_ids or []),
+        "subject_candidates": [_candidate_to_dict(candidate) for candidate in candidates],
+        "subject_selection": _subject_selection_payload(
+            selected_subject,
+            candidates,
+            manual_subject,
+        ),
+        "week_range": {
+            "start": week_start.isoformat(),
+            "end": week_end.isoformat(),
+        },
+        "utm_metadata": _utm_metadata(config, content),
+        "metadata": dict(getattr(content, "metadata", None) or {}),
+    }
+    if link_health is not None:
+        payload["link_health"] = link_health
+    return payload
 
 
 def _format_preview_json(payload: dict) -> str:
@@ -271,7 +277,14 @@ def _format_preview_markdown(payload: dict) -> str:
 
 def _write_preview_artifact(path: Path, payload: dict) -> None:
     """Write a newsletter preview as JSON or Markdown based on extension."""
-    _write_shared_preview_artifact(path, payload)
+    suffix = path.suffix.lower()
+    rendered = (
+        _format_preview_markdown(payload)
+        if suffix in {".md", ".markdown"}
+        else _format_preview_json(payload)
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered, encoding="utf-8")
 
 
 def _persist_subject_candidates(

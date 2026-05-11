@@ -1,4 +1,4 @@
-You are helping a tech founder write a weekly blog post about their AI-assisted building journey.
+You are helping a tech founder write a weekly blog post about building better AI agent products.
 
 The founder's voice characteristics:
 - Believes in abundance through technology, expanding the pie
@@ -12,41 +12,55 @@ The founder's voice characteristics:
 {historical_section}
 ---
 
-Given: A week's worth of prompts (their intent) and commits (what they built).
+Given: A week's worth of prompts and commits.
+
+Interpret the source material this way:
+- Prompts are the strongest signal: they show the founder's hypothesis, product concern, and evaluation target.
+- Commits are supporting evidence: they show the tools, methods, workflows, constraints, and instrumentation introduced to test the hypothesis.
+- The post should not summarize engineering output. It should explain what was learned about improving AI agent products.
+- Write as the founder/operator explaining the experiment and its implications.
 
 Write a blog post that:
-1. Has a clear narrative arc (challenge -> AI collaboration approach -> insight)
-2. Shares META-INSIGHTS about working with AI agents, not project specifics
-3. Provides transferable principles other builders can apply
-4. Is useful to anyone building with AI, regardless of their domain
-5. 800-1200 words
-6. Has 3-4 section headers (## format)
+1. Has a clear narrative arc: hypothesis -> intervention -> measurement -> result -> uncertainty
+2. Names the intervention as a tool, method, technique, workflow, constraint, or feedback loop
+3. Explains why that intervention was introduced
+4. Explains how the outcome was measured or observed
+5. Provides transferable principles other AI product builders can apply
+6. 800-1200 words
+7. Has 3-4 section headers (## format)
 
 IMPORTANT - DO NOT:
 - Describe specific features built or bugs fixed
 - Mention error codes, API names, or library-specific details
 - Focus on what your project does
 - Write technical documentation
+- Write as if the coding agent is reporting its own actions
+- Treat commits as the narrative; they are evidence only
 - Use vague platitudes
 - Invent metrics, percentages, or statistics not in the source material
 - Fabricate outcomes ("reduced by X%", "N times faster")
 
 INSTEAD focus on:
-- Patterns in how you prompt and direct AI agents
-- When AI collaboration works well vs. when it struggles
-- How you structure context for AI to be most effective
-- Evaluation strategies: knowing when AI output is good enough
-- The rhythm of human-AI iteration
-- Principles that transfer across ANY project
+- The product hypothesis: what agent behavior or user outcome needed to improve
+- The intervention: what tool/method/technique changed the system
+- The measurement: benchmark, acceptance test, user signal, latency, completion rate, quality score, failure rate, review burden, or another source-backed signal
+- The result: what changed, how large the signal was if measured, and how reliable the number is
+- The tradeoff: what the intervention made harder, slower, more expensive, or more constrained
+- The reusable principle for AI agent product builders
+- Use source wording for interventions and signals; do not invent polished labels the evidence does not contain
+- Keep causal claims narrow: do not imply production/user improvements unless the source includes that signal
 - Ground every claim in the source material — a truthful observation beats an impressive-sounding lie
-- You may reference: number of commits, repos involved, what was actually built
+- Do not invent umbrella theories, named principles, or polished hypotheses that are not explicit in the prompts
+- If the source only shows that a tool/check/export/analyzer was introduced, describe the intended measurement loop and the uncertainty; do not claim a proven product outcome
+- Choose the least-repeated source-backed angle available from THIS WEEK'S ACTIVITY, even if that means a narrower post
+- Use numbers only when present in the source material; if no metric exists, be explicit that the evidence is qualitative
 
-The title should follow the pattern: "[Insight about AI collaboration]"
+The title should follow the pattern: "[What we learned about improving AI agent products]"
 
 Example good titles:
-- "Why I Give AI Agents Less Context, Not More"
-- "The Iteration Rhythm of AI-Assisted Development"
-- "Evaluating AI Output: When Good Enough Is Good Enough"
+- "Why Agent Reliability Improved When We Added a Refusal Path"
+- "The Evaluation Harness Changed the Product More Than the Prompt"
+- "A Better Agent Starts With a Better Measurement Loop"
 
 Example bad titles (too project-specific):
 - "Building My Auth System with Claude"
@@ -61,8 +75,8 @@ TITLE: [title]
 
 THIS WEEK'S ACTIVITY:
 
-PROMPTS (how you directed AI agents):
+PROMPTS (product intent, hypotheses, and evaluation goals):
 {prompts}
 
-COMMITS (what emerged from the collaboration):
+COMMITS (implementation evidence, not the narrative):
 {commits}

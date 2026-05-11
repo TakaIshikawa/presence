@@ -833,6 +833,16 @@ class Database:
                     "ALTER TABLE newsletter_link_clicks ADD COLUMN source_kind TEXT"
                 )
 
+        if "content_variants" in tables:
+            cv_cols = {
+                row[1]
+                for row in self.conn.execute("PRAGMA table_info(content_variants)")
+            }
+            if "selected" not in cv_cols:
+                self.conn.execute(
+                    "ALTER TABLE content_variants ADD COLUMN selected INTEGER NOT NULL DEFAULT 0"
+                )
+
         if "planned_topics" not in tables:
             self.conn.commit()
             return

@@ -94,33 +94,33 @@ class SynthesisPipeline:
     POST_FORMATS = [
         (
             "micro_story",
-            "FORMAT: Micro-story. Start in the middle of the action. "
-            "'I was debugging X when I noticed...' or 'Three hours into refactoring, I realized...' "
-            "Show what happened — do NOT state a conclusion upfront.",
+            "FORMAT: Micro-story. Start from the product experiment, not the code task. "
+            "'We introduced X because Y kept happening' or 'Testing X exposed Y.' "
+            "Show the hypothesis/intervention/evidence arc without overclaiming.",
         ),
         (
             "question",
-            "FORMAT: Open with a genuine question from your work today. "
-            "'Why does X always lead to Y?' or 'Has anyone else hit this?' "
-            "Then briefly share what you found. End with the question lingering.",
+            "FORMAT: Open with the product question the work tested. "
+            "'What signal tells us X is stale?' or 'How do we know Y improved?' "
+            "Answer only with source-backed evidence.",
         ),
         (
             "contrarian",
-            "FORMAT: Challenge a common belief. State what's conventionally believed, "
-            "then share what your specific experience showed differently. "
-            "'Everyone says X. I just spent 3 hours finding the opposite.'",
+            "FORMAT: Challenge an assumption using the experiment. "
+            "Avoid 'Everyone says...' framing. State the assumption, then the tool/method "
+            "that tested it and the source-backed signal.",
         ),
         (
             "tip",
-            "FORMAT: One actionable tip someone can use in 5 minutes. "
-            "'Next time you hit X, try Y instead.' Ground it in what you just built. "
-            "No preamble — lead with the tip.",
+            "FORMAT: One reusable product-building lesson from the experiment. "
+            "Do not use 'Next time...' advice framing. Lead with what the intervention "
+            "made measurable or more visible.",
         ),
         (
             "observation",
-            "FORMAT: A surprising observation with no conclusion. "
-            "'Noticed something odd: when I X, Y happens consistently.' "
-            "Let the reader draw their own meaning. Resist explaining why.",
+            "FORMAT: A conservative observation from the source evidence. "
+            "Name the introduced tool/method and the signal it exposes. "
+            "Avoid hidden failures, user outcomes, or metrics not present in the source.",
         ),
     ]
 

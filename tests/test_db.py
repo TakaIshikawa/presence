@@ -883,6 +883,46 @@ class TestInitSchemaMigrations:
             }
             assert "selected" in cols
 
+    def test_migration_adds_content_variant_selected_before_schema_indexes(
+        self, schema_path
+    ):
+        """Old DBs with pre-selected content_variants should initialize cleanly."""
+        with Database(":memory:") as db:
+            db.conn.execute("""
+                CREATE TABLE generated_content (
+                    id INTEGER PRIMARY KEY,
+                    content_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    published INTEGER DEFAULT 0
+                )
+            """)
+            db.conn.execute("""
+                CREATE TABLE content_variants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_id INTEGER NOT NULL REFERENCES generated_content(id),
+                    platform TEXT NOT NULL,
+                    variant_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata JSON,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(content_id, platform, variant_type)
+                )
+            """)
+            db.conn.commit()
+
+            db.init_schema(schema_path)
+
+            cols = {
+                row[1]
+                for row in db.conn.execute("PRAGMA table_info(content_variants)")
+            }
+            assert "selected" in cols
+            indexes = {
+                row[1]
+                for row in db.conn.execute("PRAGMA index_list(content_variants)")
+            }
+            assert "idx_content_variants_selected" in indexes
+
     def test_migration_adds_campaign_id_before_schema_indexes(self, schema_path):
         """Old DBs without planned_topics.campaign_id should initialize cleanly."""
         with Database(":memory:") as db:

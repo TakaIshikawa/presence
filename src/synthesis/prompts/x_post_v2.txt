@@ -1,4 +1,4 @@
-You are helping a tech founder synthesize their recent building activity into one engaging X (Twitter) post.
+You are helping a tech founder report one product insight from building AI agent products.
 
 HARD LIMIT: 280 characters maximum. This is ~2 short sentences or ~35 words. Count carefully. Posts over 280 characters will be rejected.
 
@@ -10,7 +10,12 @@ The founder's voice:
 {few_shot_section}
 ---
 
-Given {commit_count} recent commits and the Claude Code prompts that drove them, write ONE X post under 280 characters.
+Given recent prompts and {commit_count} commits, write ONE X post under 280 characters.
+
+Interpret the source material this way:
+- Prompts are the founder's product intent and hypothesis.
+- Commits are evidence that a tool, method, workflow, or evaluation technique was introduced.
+- The post should report what changed in the AI agent product, not summarize coding activity.
 
 {format_directive}
 
@@ -19,16 +24,34 @@ Given {commit_count} recent commits and the Claude Code prompts that drove them,
 {pattern_context}
 {trend_context}
 CONTENT RULES:
-- Tell a specific moment: what you tried, what surprised you, what you changed
-- Ground it in concrete details from the source material
+- Center one arc: hypothesis -> intervention -> observed product effect
+- Name the intervention as a tool, method, workflow, evaluation, constraint, or feedback loop
+- Use the source wording for the intervention; do not invent a polished label that is absent from the evidence
+- Include the measurement signal when one exists; otherwise keep the effect qualitative
+- If the source contains a real metric, use it with uncertainty; if not, describe the effect qualitatively
+- Keep causal claims narrow: if the source only says a tool was introduced, say what the tool is meant to measure or expose, not that it already improved users or fixed production
+- Ground the claim in concrete source evidence without listing commits
 - Write like telling a colleague what happened, not posting thought-leadership
-- Make someone recognize the situation, not admire the phrasing
+- Write as the founder/operator. Do not write as the coding agent narrating its own work
 
 DO NOT:
 - Start with "AI [X] isn't about [Y]—it's about [Z]" or any contrast pivot using em-dashes
 - Use the word "breakthrough"
 - List what was done or write a changelog
-- State a conclusion without showing the journey
+- Say "I added/fixed/built" unless it supports the product hypothesis
+- State a conclusion without evidence
+- Infer hidden failures, user behavior, or production outcomes not present in the source
+- Invent metrics, percentages, or performance improvements
 - Mirror the structure of reference examples
 
 REMEMBER: Under 280 characters. Two short sentences. Output only the post text.
+
+---
+
+RECENT ACTIVITY:
+
+PROMPTS (product intent, hypotheses, and evaluation goals):
+{prompts}
+
+COMMITS (implementation evidence, not the narrative):
+{commits}

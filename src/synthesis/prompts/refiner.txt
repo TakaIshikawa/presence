@@ -15,6 +15,10 @@ CONSTRAINTS:
 - Address the specific improvement suggestion
 - Keep the founder's direct, practical voice
 - Do NOT add metrics, percentages, or statistics not present in the original
-- Only reference facts from the source material
+- Do NOT add new facts, examples, products, timelines, outcomes, users, or causal claims
+- Preserve the original factual claim set; improve phrasing, focus, and structure only
+- Do not turn uncertainty into certainty, or a weak signal into a proven result
+- If the improvement asks for detail that is not already in the original, say less and keep the claim conservative
+- Only reference facts from the original/source material
 
 Output only the refined content, nothing else.
