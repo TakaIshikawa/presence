@@ -32,13 +32,21 @@ STRUCTURE:
 
 CONTENT RULES:
 - Develop ONE idea with depth — don't cover multiple topics
+- Before writing, internally choose the evidence contract:
+  1. One source-backed intervention, using source wording
+  2. One source-backed signal/effect, or "no measured effect yet"
+  3. One uncertainty boundary: what the source does NOT prove
+  4. Any tempting but forbidden narrative details absent from the source
 - Ground every claim in the source material below
 - Prefer product/evaluation details over implementation details
 - Use the source wording for interventions and signals; do not invent polished labels the evidence does not contain
+- Use at least three concrete nouns from the source material below
+- If a noun, failure mode, user behavior, product area, tool, timeline, or metric does not appear in the source, do not introduce it
 - Use this pattern when supported: "We introduced X to improve Y. Early signal: Z. The uncertainty is..."
 - Keep causal claims narrow: do not imply production/user improvements unless the source includes that signal
 - If Z is a real metric in the source, state it precisely and say how it was measured
 - If there is no measured Z, do not fake one; describe the observed signal qualitatively
+- If the source does not prove an outcome, make the essay about making a signal observable, not about a solved product failure
 - Write like explaining to a smart colleague over coffee, not a blog post
 - Paragraphs are fine — this is an essay, not a tweet
 - Write as the founder/operator. Do not write as the coding agent narrating its own work

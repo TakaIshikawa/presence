@@ -29,7 +29,8 @@ _NUMBER_RE = re.compile(
 _FACTUAL_VERB_RE = re.compile(
     r"\b(?:is|are|was|were|uses?|requires?|supports?|ships?|adds?|added|removes?|"
     r"removed|changed|changes|launched|released|deprecated|replaced|introduced|"
-    r"enables?|blocks?|fails?|fixed|fixes)\b",
+    r"enables?|blocks?|fails?|fixed|fixes|caught|catches|revealed|reveals|"
+    r"exposed|exposes|measured|measures|noticed|detects?|detected|builds?|built)\b",
     re.IGNORECASE,
 )
 
@@ -38,6 +39,18 @@ _PROPER_TERM_RE = re.compile(
 )
 
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9.+#-]*")
+
+_SOURCE_SENSITIVE_TERM_RE = re.compile(
+    r"""
+    \b(?:
+        auth|login|token|permission|user|users|customer|customers|production|
+        shipped|shipping|stale|freshness|latency|failure|failures|outage|
+        benchmark|score|quality|report|audit|exposure|file-write|tool|
+        acceptance|metric|measurement|signal|workflow|handoff
+    )s?\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 _STOPWORDS = {
     "about",
@@ -207,6 +220,20 @@ class ClaimChecker:
                 return False, matched_terms, "metric value not found in sources"
             return False, matched_terms, "metric context not found in sources"
 
+        source_sensitive_terms = [
+            term for term in claim.terms if self._is_source_sensitive_term(term)
+        ]
+        missing_sensitive_terms = [
+            term for term in source_sensitive_terms if term not in matched_terms
+        ]
+        if missing_sensitive_terms:
+            return (
+                False,
+                matched_terms,
+                "source-sensitive terms not found in sources: "
+                + ", ".join(missing_sensitive_terms[:5]),
+            )
+
         if len(claim.terms) == 1:
             if matched_terms:
                 return True, matched_terms, ""
@@ -237,6 +264,10 @@ class ClaimChecker:
             normalized = self._normalize_term(term)
             if normalized not in _STOPWORDS and normalized not in terms:
                 terms.append(normalized)
+        for match in _SOURCE_SENSITIVE_TERM_RE.finditer(sentence):
+            normalized = self._normalize_term(match.group(0))
+            if normalized not in _STOPWORDS and normalized not in terms:
+                terms.append(normalized)
         return terms
 
     def _keywords(self, sentence: str, exclude: list[str]) -> list[str]:
@@ -262,6 +293,9 @@ class ClaimChecker:
 
     def _looks_numeric(self, term: str) -> bool:
         return bool(re.search(r"\d|zero|one|two|three|four|five|six|seven|eight|nine|ten", term))
+
+    def _is_source_sensitive_term(self, term: str) -> bool:
+        return _SOURCE_SENSITIVE_TERM_RE.fullmatch(term) is not None
 
     def _normalize(self, text: str) -> str:
         normalized = text.lower()

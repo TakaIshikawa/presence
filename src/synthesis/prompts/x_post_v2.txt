@@ -26,11 +26,18 @@ Interpret the source material this way:
 CONTENT RULES:
 - Center one arc: hypothesis -> intervention -> observed product effect
 - Name the intervention as a tool, method, workflow, evaluation, constraint, or feedback loop
+- Before writing, internally choose the evidence contract:
+  1. One source-backed intervention, using source wording
+  2. One source-backed signal/effect, or "no measured effect yet"
+  3. One uncertainty boundary: what the source does NOT prove
 - Use the source wording for the intervention; do not invent a polished label that is absent from the evidence
 - Include the measurement signal when one exists; otherwise keep the effect qualitative
 - If the source contains a real metric, use it with uncertainty; if not, describe the effect qualitatively
 - Keep causal claims narrow: if the source only says a tool was introduced, say what the tool is meant to measure or expose, not that it already improved users or fixed production
 - Ground the claim in concrete source evidence without listing commits
+- Use at least two concrete nouns from the source material below
+- If a noun, failure mode, user behavior, product area, tool, or metric does not appear in the source, do not introduce it
+- If the source does not support an outcome, use framing like "to make X visible", "to test whether Y", or "early signal:" rather than "improved/fixed/reduced"
 - Write like telling a colleague what happened, not posting thought-leadership
 - Write as the founder/operator. Do not write as the coding agent narrating its own work
 
@@ -41,6 +48,7 @@ DO NOT:
 - Say "I added/fixed/built" unless it supports the product hypothesis
 - State a conclusion without evidence
 - Infer hidden failures, user behavior, or production outcomes not present in the source
+- Invent a narrative domain such as auth, tokens, stale data, file-write tools, users, or production incidents unless those exact ideas appear in the source
 - Invent metrics, percentages, or performance improvements
 - Mirror the structure of reference examples
 

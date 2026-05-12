@@ -51,6 +51,19 @@ def test_longer_prompts_prevent_invented_principles():
         assert "do not claim" in text.lower()
 
 
+def test_active_prompts_require_evidence_contract():
+    for name in (
+        "x_post_v2.txt",
+        "x_long_post_v2.txt",
+        "x_thread_v2.txt",
+        "blog_post_v2.txt",
+    ):
+        text = _prompt(name)
+        assert "evidence contract" in text
+        assert "what the source does NOT prove" in text
+        assert "does not appear in the source" in text
+
+
 def test_refiner_preserves_original_claim_set():
     text = _prompt("refiner.txt")
     assert "Do NOT add new facts" in text

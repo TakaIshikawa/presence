@@ -31,6 +31,12 @@ Create an X thread (3-5 tweets) that:
 6. Keeps each tweet max 280 characters
 7. Sounds like an operator explaining an experiment, not a changelog
 
+Before drafting, internally choose the evidence contract:
+- Intervention: one exact tool/method/workflow/signal from the source
+- Measurement: one exact source-backed metric, check, report, acceptance test, failure mode, or "no measured effect yet"
+- Boundary: what the source does NOT prove yet
+- Forbidden additions: any tempting story element not present in the source
+
 BANNED OPENERS (never start Tweet 1 with these):
 - "Today's insight:"
 - "Today's breakthrough:"
@@ -55,11 +61,14 @@ INSTEAD focus on:
 - Result: what improved, what did not, and how confident the measurement is
 - Transfer: what another builder can reuse
 - Use source wording for interventions and signals; do not invent polished labels the evidence does not contain
+- Use at least two concrete nouns from the source material below in the thread
+- Do not introduce a noun, failure mode, product area, user behavior, tool, timeline, or metric that does not appear in the source
 - Keep causal claims narrow: do not imply production/user improvements unless the source includes that signal
 - Ground every claim in the source material below
 - Do not add abstract labels like "Hypothesis:" or "Principle:" unless the exact idea is explicit in the prompts
 - A closing principle must be a conservative restatement of the source evidence, not a new theory
 - If the evidence only shows that an analyzer/export/check was introduced, describe what it is designed to expose; do not claim it already changed decisions or users
+- If the source does not prove an outcome, make the thread about making a signal observable, not about a solved product failure
 - You may mention commit volume only as weak evidence of effort, not as the story
 - Use measured numbers only when present in the source; otherwise say "early signal", "qualitative signal", or omit the metric
 - A truthful observation beats an impressive-sounding lie

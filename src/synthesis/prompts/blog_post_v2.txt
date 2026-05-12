@@ -29,6 +29,12 @@ Write a blog post that:
 6. 800-1200 words
 7. Has 3-4 section headers (## format)
 
+Before drafting, internally choose the evidence contract:
+- Intervention: one exact tool/method/workflow/signal from the source
+- Measurement: one exact source-backed metric, check, report, acceptance test, failure mode, or "no measured effect yet"
+- Boundary: what the source does NOT prove yet
+- Forbidden additions: any attractive story element not present in the source
+
 IMPORTANT - DO NOT:
 - Describe specific features built or bugs fixed
 - Mention error codes, API names, or library-specific details
@@ -48,6 +54,8 @@ INSTEAD focus on:
 - The tradeoff: what the intervention made harder, slower, more expensive, or more constrained
 - The reusable principle for AI agent product builders
 - Use source wording for interventions and signals; do not invent polished labels the evidence does not contain
+- Use concrete nouns from the source material below throughout the post
+- Do not introduce a noun, failure mode, product area, user behavior, tool, timeline, or metric that does not appear in the source
 - Keep causal claims narrow: do not imply production/user improvements unless the source includes that signal
 - Ground every claim in the source material — a truthful observation beats an impressive-sounding lie
 - Do not invent umbrella theories, named principles, or polished hypotheses that are not explicit in the prompts

@@ -55,3 +55,30 @@ def test_factual_claim_without_source_terms_is_unsupported():
 
     assert result.supported is False
     assert result.unsupported_claims[0].kind == "factual"
+
+
+def test_source_sensitive_product_claim_requires_source_terms():
+    checker = ClaimChecker()
+
+    result = checker.check(
+        "The second agent caught a silent token failure that had been shipping to users.",
+        source_commits=["fix mobile score screen spacing and button alignment"],
+        source_prompts=["polish the scores screen for mobile"],
+    )
+
+    assert result.supported is False
+    assert result.unsupported_claims[0].kind == "factual"
+    assert "token" in result.unsupported_claims[0].terms
+    assert "users" in result.unsupported_claims[0].terms
+
+
+def test_source_sensitive_product_claim_passes_when_source_supports_terms():
+    checker = ClaimChecker()
+
+    result = checker.check(
+        "The agent caught a token failure in the login workflow.",
+        source_commits=["add login workflow check for token failure"],
+        source_prompts=["test whether the agent catches token failure during login"],
+    )
+
+    assert result.supported is True
