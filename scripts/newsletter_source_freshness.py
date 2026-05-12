@@ -1,88 +1,54 @@
 #!/usr/bin/env python3
-"""Report stale or repeatedly reused source content in newsletter sends."""
+"""Report newsletter source freshness and reuse."""
 
 from __future__ import annotations
 
 import argparse
-import logging
+import sqlite3
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from output.newsletter_source_freshness import (  # noqa: E402
-    DEFAULT_DAYS,
-    DEFAULT_MAX_REUSE_COUNT,
+from evaluation.newsletter_source_freshness import (  # noqa: E402
     DEFAULT_MAX_SOURCE_AGE_DAYS,
-    build_newsletter_source_freshness,
+    DEFAULT_REUSE_THRESHOLD,
+    build_newsletter_source_freshness_report,
     format_newsletter_source_freshness_json,
     format_newsletter_source_freshness_text,
 )
 from runner import script_context  # noqa: E402
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=DEFAULT_DAYS,
-        help=f"Number of days to look back (default: {DEFAULT_DAYS})",
-    )
-    parser.add_argument(
-        "--max-source-age-days",
-        type=int,
-        default=DEFAULT_MAX_SOURCE_AGE_DAYS,
-        help=(
-            "Warn when a source was created more than this many days before "
-            f"the send (default: {DEFAULT_MAX_SOURCE_AGE_DAYS})"
-        ),
-    )
-    parser.add_argument(
-        "--max-reuse-count",
-        type=int,
-        default=DEFAULT_MAX_REUSE_COUNT,
-        help=(
-            "Warn when a source appears in more than this many filtered sends "
-            f"(default: {DEFAULT_MAX_REUSE_COUNT})"
-        ),
-    )
-    parser.add_argument(
-        "--issue-id",
-        default=None,
-        help="Only inspect newsletter sends with this issue_id",
-    )
-    parser.add_argument(
-        "--format",
-        choices=("text", "json"),
-        default="text",
-        help="Output format (default: text)",
-    )
+    parser.add_argument("--max-source-age-days", type=_positive_int, default=DEFAULT_MAX_SOURCE_AGE_DAYS)
+    parser.add_argument("--reuse-threshold", type=_positive_int, default=DEFAULT_REUSE_THRESHOLD)
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    logging.basicConfig(
-        level=logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
     try:
+        args = parse_args(argv)
         with script_context() as (_config, db):
-            report = build_newsletter_source_freshness(
+            report = build_newsletter_source_freshness_report(
                 db,
-                days=args.days,
                 max_source_age_days=args.max_source_age_days,
-                max_reuse_count=args.max_reuse_count,
-                issue_id=args.issue_id,
+                reuse_threshold=args.reuse_threshold,
             )
-    except ValueError as exc:
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-
-    if args.format == "json":
+    if args.json or args.format == "json":
         print(format_newsletter_source_freshness_json(report))
     else:
         print(format_newsletter_source_freshness_text(report))
