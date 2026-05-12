@@ -52,6 +52,16 @@ _SOURCE_SENSITIVE_TERM_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+_FRESHNESS_TERM_RE = re.compile(
+    r"""
+    \b(?:
+        latest|current|currently|today|yesterday|recently|now|newly|
+        this\s+week|this\s+month|this\s+quarter|this\s+year
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 _STOPWORDS = {
     "about",
     "after",
@@ -94,7 +104,6 @@ _STOPWORDS = {
     "need",
     "new",
     "not",
-    "now",
     "only",
     "over",
     "post",
@@ -106,7 +115,6 @@ _STOPWORDS = {
     "there",
     "this",
     "through",
-    "today",
     "using",
     "when",
     "where",
@@ -234,6 +242,18 @@ class ClaimChecker:
                 + ", ".join(missing_sensitive_terms[:5]),
             )
 
+        freshness_terms = [term for term in claim.terms if self._is_freshness_term(term)]
+        missing_freshness_terms = [
+            term for term in freshness_terms if term not in matched_terms
+        ]
+        if missing_freshness_terms:
+            return (
+                False,
+                matched_terms,
+                "temporal freshness terms not found in sources: "
+                + ", ".join(missing_freshness_terms[:5]),
+            )
+
         if len(claim.terms) == 1:
             if matched_terms:
                 return True, matched_terms, ""
@@ -268,6 +288,10 @@ class ClaimChecker:
             normalized = self._normalize_term(match.group(0))
             if normalized not in _STOPWORDS and normalized not in terms:
                 terms.append(normalized)
+        for match in _FRESHNESS_TERM_RE.finditer(sentence):
+            normalized = self._normalize_term(match.group(0))
+            if normalized not in terms:
+                terms.append(normalized)
         return terms
 
     def _keywords(self, sentence: str, exclude: list[str]) -> list[str]:
@@ -296,6 +320,9 @@ class ClaimChecker:
 
     def _is_source_sensitive_term(self, term: str) -> bool:
         return _SOURCE_SENSITIVE_TERM_RE.fullmatch(term) is not None
+
+    def _is_freshness_term(self, term: str) -> bool:
+        return _FRESHNESS_TERM_RE.fullmatch(term) is not None
 
     def _normalize(self, text: str) -> str:
         normalized = text.lower()

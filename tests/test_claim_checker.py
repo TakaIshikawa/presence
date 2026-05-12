@@ -82,3 +82,38 @@ def test_source_sensitive_product_claim_passes_when_source_supports_terms():
     )
 
     assert result.supported is True
+
+
+def test_freshness_claim_extracted_without_numbers_or_proper_nouns():
+    checker = ClaimChecker()
+
+    claims = checker.extract_claims("The docs are current today.")
+
+    assert len(claims) == 1
+    assert claims[0].kind == "factual"
+    assert "current" in claims[0].terms
+    assert "today" in claims[0].terms
+
+
+def test_freshness_claim_requires_matching_temporal_evidence():
+    checker = ClaimChecker()
+
+    result = checker.check(
+        "The docs are current today.",
+        linked_knowledge=["The docs cover setup and deployment."],
+    )
+
+    assert result.supported is False
+    assert result.unsupported_claims[0].kind == "factual"
+    assert "temporal freshness terms not found" in result.unsupported_claims[0].reason
+
+
+def test_freshness_claim_supported_by_matching_temporal_evidence():
+    checker = ClaimChecker()
+
+    result = checker.check(
+        "The docs are current today.",
+        linked_knowledge=["The docs are current today for setup and deployment."],
+    )
+
+    assert result.supported is True
