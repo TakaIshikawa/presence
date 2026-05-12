@@ -1885,6 +1885,102 @@ class Database:
             "pipeline_runs": self.get_pipeline_runs_for_content(content_id),
         }
 
+    def get_content_evidence_packet(self, content_id: int) -> dict | None:
+        """Return a compact JSON-ready evidence packet for prompt builders."""
+        if not self._table_exists("generated_content"):
+            return None
+        content = self.get_generated_content(content_id)
+        if not content:
+            return None
+
+        packet = dict(content)
+        packet.pop("content_embedding", None)
+        packet["source_commits"] = self._safe_source_commits_for_content(content)
+        packet["source_messages"] = self._safe_source_messages_for_content(content)
+        packet["source_github_activity"] = self._safe_source_github_activity_for_content(content)
+        packet["claim_check"] = (
+            self.get_claim_check_summary(content_id)
+            if self._table_exists("content_claim_checks")
+            else None
+        )
+        packet["persona_guard"] = (
+            self.get_persona_guard_summary(content_id)
+            if self._table_exists("content_persona_guard")
+            else None
+        )
+        packet["feedback"] = self._feedback_for_content_evidence(content_id)
+        return self._json_ready(packet)
+
+    def _safe_source_commits_for_content(self, content: dict) -> list[dict]:
+        refs = self._content_source_refs(content.get("source_commits"))
+        if not refs:
+            return []
+        if not self._table_exists("github_commits"):
+            return [
+                {"commit_sha": ref, "source_index": index, "matched": False}
+                for index, ref in enumerate(refs)
+            ]
+        return self.get_source_commits_for_content(int(content["id"]))
+
+    def _safe_source_messages_for_content(self, content: dict) -> list[dict]:
+        refs = self._content_source_refs(content.get("source_messages"))
+        if not refs:
+            return []
+        if not self._table_exists("claude_messages"):
+            return [
+                {"message_uuid": ref, "source_index": index, "matched": False}
+                for index, ref in enumerate(refs)
+            ]
+        return self.get_source_messages_for_content(int(content["id"]))
+
+    def _safe_source_github_activity_for_content(self, content: dict) -> list[dict]:
+        refs = self._content_source_refs(content.get("source_activity_ids"))
+        if not refs:
+            return []
+        if not self._table_exists("github_activity"):
+            return [
+                {"activity_id": ref, "source_index": index, "matched": False}
+                for index, ref in enumerate(refs)
+            ]
+        return self.get_source_github_activity_for_content(int(content["id"]))
+
+    def _feedback_for_content_evidence(self, content_id: int, limit: int = 5) -> list[dict]:
+        if not self._table_exists("content_feedback"):
+            return []
+        tags_expr = "cf.tags" if self._has_table_column("content_feedback", "tags") else "NULL AS tags"
+        cursor = self.conn.execute(
+            f"""SELECT cf.id, cf.content_id, cf.feedback_type, cf.notes,
+                      cf.replacement_text, {tags_expr}, cf.created_at
+               FROM content_feedback cf
+               WHERE cf.content_id = ?
+               ORDER BY cf.created_at DESC, cf.id DESC
+               LIMIT ?""",
+            (content_id, limit),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["tags"] = self._parse_json_list(item.get("tags"))
+            rows.append(item)
+        return rows
+
+    def _content_source_refs(self, value) -> list[str]:
+        refs = value if isinstance(value, list) else self._parse_json_list(value)
+        return [str(ref) for ref in refs]
+
+    def _json_ready(self, value):
+        if isinstance(value, dict):
+            return {str(key): self._json_ready(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._json_ready(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._json_ready(item) for item in value]
+        if isinstance(value, sqlite3.Row):
+            return self._json_ready(dict(value))
+        if isinstance(value, bytes):
+            return value.hex()
+        return value
+
     def mark_published(self, content_id: int, url: str, tweet_id: str = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
         cursor = self.conn.execute(
@@ -8217,6 +8313,13 @@ class Database:
     def _has_table_column(self, table: str, column: str) -> bool:
         rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
         return column in {row[1] for row in rows}
+
+    def _table_exists(self, table: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        return row is not None
 
     def get_unused_knowledge(self, days: int = 30) -> list[dict]:
         """Get knowledge items ingested but never used in generation.
