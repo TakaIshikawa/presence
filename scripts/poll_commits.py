@@ -475,7 +475,10 @@ def main() -> None:
                 logger.warning(f"Failed to store prediction (non-fatal): {e}")
 
         # Determine outcome and post if passes threshold
-        passes = pipeline_result.final_score >= config.synthesis.eval_threshold * 10
+        passes = (
+            pipeline_result.final_score >= config.synthesis.eval_threshold * 10
+            and pipeline_result.comparison.reject_reason is None
+        )
         outcome = None
         rejection_reason = None
 

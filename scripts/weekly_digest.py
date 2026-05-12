@@ -258,7 +258,10 @@ def main(argv: list[str] | None = None):
             logger.info("Skipping embedding for empty generated content")
 
         # Determine outcome and publish if passes threshold
-        passes = result.final_score >= config.synthesis.eval_threshold * 10
+        passes = (
+            result.final_score >= config.synthesis.eval_threshold * 10
+            and result.comparison.reject_reason is None
+        )
         outcome = None
         rejection_reason = None
 

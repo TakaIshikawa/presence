@@ -412,7 +412,7 @@ class TestContentTypeRouting:
 
         result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS, content_type="x_thread")
 
-        assert result.final_score == 0
+        assert result.final_score == 9.5
         assert "Thread validation failed" in result.comparison.reject_reason
         assert "numbering" in result.comparison.reject_reason
         assert result.filter_stats["thread_validation_valid"] is False
@@ -1063,7 +1063,7 @@ class TestPipelineResult:
 
         result = pipeline.run(SAMPLE_PROMPTS, SAMPLE_COMMITS)
 
-        assert result.final_score == 0
+        assert result.final_score == 9.5
         assert result.persona_guard_summary["status"] == "failed"
         assert result.filter_stats["persona_guard"]["passed"] is False
         assert "Persona guard failed" in result.comparison.reject_reason

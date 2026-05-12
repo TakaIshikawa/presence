@@ -222,7 +222,10 @@ def main():
                 logger.warning(f"Embedding failed (non-fatal): {e}")
 
         # Determine outcome
-        passes = pr.final_score >= config.synthesis.eval_threshold * 10
+        passes = (
+            pr.final_score >= config.synthesis.eval_threshold * 10
+            and pr.comparison.reject_reason is None
+        )
         outcome = None
         rejection_reason = None
 
