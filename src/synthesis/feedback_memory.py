@@ -1,7 +1,9 @@
 """Prompt-safe synthesis guidance from durable content feedback."""
 
+from collections import defaultdict
 from dataclasses import dataclass
 import re
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -143,3 +145,89 @@ class FeedbackMemory:
         if len(replacement) <= 160:
             return "Prefer concise revisions that keep one clear idea."
         return "Prefer revised framing that is specific, grounded, and less generic."
+
+
+def build_feedback_memory_context(
+    db,
+    content_type: str | None = None,
+    *,
+    feedback_types: list[str] | tuple[str, ...] = ("reject", "revise", "prefer"),
+    limit: int = 12,
+    days: int | None = 30,
+    char_budget: int = 1200,
+) -> str:
+    """Format recent structured content feedback into bounded prompt context."""
+    budget = max(0, int(char_budget))
+    if not db or budget <= 0:
+        return ""
+
+    getter = getattr(db, "get_recent_content_feedback", None)
+    if not getter:
+        return ""
+
+    rows = getter(
+        content_type=content_type,
+        feedback_types=list(feedback_types),
+        limit=max(0, int(limit)),
+        days=days,
+    )
+    if not rows:
+        return ""
+
+    lines = ["Recent content feedback memory:"]
+    for feedback_type in feedback_types:
+        grouped = _group_feedback_rows(rows, str(feedback_type))
+        for tag in sorted(grouped):
+            heading = f"{feedback_type}"
+            if tag:
+                heading += f" [{tag}]"
+            lines.append(f"{heading}:")
+            for row in grouped[tag]:
+                note = FeedbackMemory._sentence(FeedbackMemory._clean(row.get("notes", "")), 160)
+                replacement = FeedbackMemory._sentence(
+                    FeedbackMemory._clean(row.get("replacement_text", "")), 180
+                )
+                content_label = FeedbackMemory._clean(row.get("content_type", ""))
+
+                item_parts = []
+                if content_label:
+                    item_parts.append(content_label)
+                if note:
+                    item_parts.append(note)
+                elif replacement:
+                    item_parts.append("Replacement example available.")
+                if replacement:
+                    item_parts.append(f"Replacement: {replacement}")
+
+                if item_parts:
+                    lines.append("- " + " | ".join(item_parts))
+
+    return _bounded_lines(lines, budget)
+
+
+def _group_feedback_rows(rows: list[dict[str, Any]], feedback_type: str) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("feedback_type") != feedback_type:
+            continue
+        grouped[_feedback_tag(row)].append(row)
+    return grouped
+
+
+def _feedback_tag(row: dict[str, Any]) -> str:
+    tags = row.get("tags", row.get("tag", ""))
+    if isinstance(tags, (list, tuple, set)):
+        tags = ", ".join(str(tag).strip() for tag in tags if str(tag).strip())
+    return FeedbackMemory._clean(str(tags))
+
+
+def _bounded_lines(lines: list[str], budget: int) -> str:
+    kept: list[str] = []
+    length = 0
+    for line in lines:
+        extra = len(line) + (1 if kept else 0)
+        if length + extra > budget:
+            break
+        kept.append(line)
+        length += extra
+    return "\n".join(kept).strip()
