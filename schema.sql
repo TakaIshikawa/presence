@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS content_feedback (
     feedback_type TEXT NOT NULL CHECK (feedback_type IN ('reject', 'revise', 'prefer')),
     notes TEXT,
     replacement_text TEXT,
+    tags TEXT,  -- JSON array of compact machine-readable feedback tags
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_content_feedback_content ON content_feedback(content_id);

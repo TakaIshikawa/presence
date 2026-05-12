@@ -216,9 +216,15 @@ class Database:
                     feedback_type TEXT NOT NULL CHECK (feedback_type IN ('reject', 'revise', 'prefer')),
                     notes TEXT,
                     replacement_text TEXT,
+                    tags TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            feedback_cols = {
+                row[1] for row in self.conn.execute("PRAGMA table_info(content_feedback)")
+            }
+            if "tags" not in feedback_cols:
+                self.conn.execute("ALTER TABLE content_feedback ADD COLUMN tags TEXT")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_content_feedback_content ON content_feedback(content_id)")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_content_feedback_type_created "
@@ -3735,15 +3741,17 @@ class Database:
         feedback_type: str,
         notes: str = "",
         replacement_text: str | None = None,
+        tags: list[str] | tuple[str, ...] | None = None,
     ) -> int:
         """Record durable user feedback for generated content."""
         if feedback_type not in {"reject", "revise", "prefer"}:
             raise ValueError("feedback_type must be one of: reject, revise, prefer")
+        normalized_tags = self._normalize_content_feedback_tags(tags)
         cursor = self.conn.execute(
             """INSERT INTO content_feedback
-               (content_id, feedback_type, notes, replacement_text)
-               VALUES (?, ?, ?, ?)""",
-            (content_id, feedback_type, notes, replacement_text),
+               (content_id, feedback_type, notes, replacement_text, tags)
+               VALUES (?, ?, ?, ?, ?)""",
+            (content_id, feedback_type, notes, replacement_text, json.dumps(normalized_tags)),
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -3752,6 +3760,7 @@ class Database:
         self,
         content_type: str | None = None,
         feedback_types: list[str] | tuple[str, ...] | None = None,
+        tags: list[str] | tuple[str, ...] | None = None,
         limit: int = 10,
         days: int | None = None,
     ) -> list[dict]:
@@ -3765,6 +3774,14 @@ class Database:
             placeholders = ", ".join("?" for _ in feedback_types)
             clauses.append(f"cf.feedback_type IN ({placeholders})")
             params.extend(feedback_types)
+        if tags:
+            normalized_tags = self._normalize_content_feedback_tags(tags)
+            tag_clauses = []
+            for tag in normalized_tags:
+                tag_clauses.append("cf.tags LIKE ?")
+                params.append(f'%"{tag}"%')
+            if tag_clauses:
+                clauses.append(f"({' OR '.join(tag_clauses)})")
         if days is not None:
             clauses.append("cf.created_at >= datetime('now', ?)")
             params.append(f"-{max(0, int(days))} days")
@@ -3772,7 +3789,7 @@ class Database:
         params.append(limit)
         cursor = self.conn.execute(
             f"""SELECT cf.id, cf.content_id, cf.feedback_type, cf.notes,
-                      cf.replacement_text, cf.created_at,
+                      cf.replacement_text, cf.tags, cf.created_at,
                       gc.content, gc.content_type
                FROM content_feedback cf
                INNER JOIN generated_content gc ON gc.id = cf.content_id
@@ -3781,7 +3798,38 @@ class Database:
                LIMIT ?""",
             params,
         )
-        return [dict(row) for row in cursor.fetchall()]
+        feedback = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["tags"] = self._parse_json_list(item.get("tags"))
+            feedback.append(item)
+        return feedback
+
+    def _normalize_content_feedback_tags(
+        self,
+        tags: list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        """Normalize compact machine-readable content feedback tags."""
+        if tags is None:
+            return []
+        if isinstance(tags, (str, bytes)) or not isinstance(tags, (list, tuple)):
+            raise ValueError("tags must be a list of strings")
+        normalized = []
+        seen = set()
+        for tag in tags:
+            if not isinstance(tag, str):
+                raise ValueError("tags must be strings")
+            value = tag.strip().lower().replace("-", "_").replace(" ", "_")
+            if not value:
+                continue
+            if not re.fullmatch(r"[a-z0-9_]{1,64}", value):
+                raise ValueError(
+                    "tags must contain only lowercase letters, numbers, and underscores"
+                )
+            if value not in seen:
+                seen.add(value)
+                normalized.append(value)
+        return normalized
 
     # Auto-classification
     def auto_classify_posts(
