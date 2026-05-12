@@ -85,8 +85,15 @@ def _tweet_id_from_url(url: Optional[str]) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _bluesky_post_id_from_url(url: Optional[str]) -> Optional[str]:
-    parsed = urlparse(url or "")
+def _bluesky_post_id_from_ref(url: Optional[str]) -> Optional[str]:
+    value = (url or "").strip()
+    if not value:
+        return None
+    if value.startswith("at://"):
+        match = re.search(r"/app\.bsky\.feed\.post/([^/?#]+)", value)
+        return match.group(1) if match else None
+
+    parsed = urlparse(value)
     if parsed.netloc.lower() not in {"bsky.app", "www.bsky.app"}:
         return None
     match = re.search(r"/profile/[^/]+/post/([^/?#]+)", parsed.path)
@@ -5391,15 +5398,18 @@ class Database:
             if row:
                 return int(row["id"])
 
-        bluesky_post_id = _bluesky_post_id_from_url(url)
+        bluesky_post_id = _bluesky_post_id_from_ref(url)
         if bluesky_post_id:
             cursor = self.conn.execute(
-                """SELECT id, bluesky_uri
+                """SELECT id, bluesky_uri, published_url
                    FROM generated_content
-                   WHERE bluesky_uri IS NOT NULL AND bluesky_uri != ''"""
+                   WHERE (bluesky_uri IS NOT NULL AND bluesky_uri != '')
+                      OR (published_url IS NOT NULL AND published_url != '')"""
             )
             for row in cursor.fetchall():
-                if str(row["bluesky_uri"]).rstrip("/").endswith(f"/{bluesky_post_id}"):
+                row_bluesky_id = _bluesky_post_id_from_ref(row["bluesky_uri"])
+                row_published_id = _bluesky_post_id_from_ref(row["published_url"])
+                if bluesky_post_id in {row_bluesky_id, row_published_id}:
                     return int(row["id"])
         return None
 

@@ -108,6 +108,131 @@ def test_matches_links_after_stripping_utm_parameters(db):
     assert report.unmatched_links == []
 
 
+def test_insert_link_clicks_resolves_normalized_published_url_with_tracking(db):
+    content_id = _published_content(
+        db,
+        "blog_post",
+        "https://example.com/blog/post?ref=archive",
+    )
+    send_id = db.insert_newsletter_send(
+        issue_id="issue-normalized",
+        subject="Weekly",
+        content_ids=[content_id],
+        subscriber_count=100,
+    )
+
+    db.insert_newsletter_link_clicks(
+        newsletter_send_id=send_id,
+        issue_id="issue-normalized",
+        link_clicks=[
+            {
+                "url": (
+                    "https://example.com/blog/post?utm_source=newsletter"
+                    "&ref=archive&utm_campaign=w"
+                ),
+                "clicks": 3,
+            }
+        ],
+        fetched_at="2026-04-24T02:00:00+00:00",
+    )
+
+    rows = db.list_newsletter_link_clicks(newsletter_send_id=send_id)
+    assert rows[0]["content_id"] == content_id
+    assert rows[0]["source_kind"] == "published_url"
+
+
+def test_insert_link_clicks_resolves_x_status_variant_by_tweet_id(db):
+    content_id = _published_content(db, "x_post", "https://x.com/taka/status/111")
+    db.conn.execute(
+        "UPDATE generated_content SET tweet_id = ? WHERE id = ?",
+        ("1234567890", content_id),
+    )
+    db.conn.commit()
+    send_id = db.insert_newsletter_send(
+        issue_id="issue-x-alias",
+        subject="Weekly",
+        content_ids=[content_id],
+        subscriber_count=100,
+    )
+
+    db.insert_newsletter_link_clicks(
+        newsletter_send_id=send_id,
+        issue_id="issue-x-alias",
+        link_clicks=[
+            {
+                "url": "https://twitter.com/taka/status/1234567890?utm_medium=email",
+                "clicks": 5,
+            }
+        ],
+        fetched_at="2026-04-24T02:00:00+00:00",
+    )
+
+    rows = db.list_newsletter_link_clicks(newsletter_send_id=send_id)
+    assert rows[0]["content_id"] == content_id
+    assert rows[0]["source_kind"] == "published_url"
+
+
+def test_insert_link_clicks_resolves_bluesky_url_by_stored_uri(db):
+    content_id = _published_content(db, "bluesky_post", None)
+    db.conn.execute(
+        "UPDATE generated_content SET bluesky_uri = ? WHERE id = ?",
+        ("at://did:plc:abc/app.bsky.feed.post/3lpostid", content_id),
+    )
+    db.conn.commit()
+    send_id = db.insert_newsletter_send(
+        issue_id="issue-bsky-uri",
+        subject="Weekly",
+        content_ids=[content_id],
+        subscriber_count=100,
+    )
+
+    db.insert_newsletter_link_clicks(
+        newsletter_send_id=send_id,
+        issue_id="issue-bsky-uri",
+        link_clicks=[
+            {
+                "url": "https://bsky.app/profile/taka.example/post/3lpostid?utm_source=newsletter",
+                "clicks": 4,
+            }
+        ],
+        fetched_at="2026-04-24T02:00:00+00:00",
+    )
+
+    rows = db.list_newsletter_link_clicks(newsletter_send_id=send_id)
+    assert rows[0]["content_id"] == content_id
+    assert rows[0]["source_kind"] == "published_url"
+
+
+def test_insert_link_clicks_resolves_bluesky_uri_by_published_url(db):
+    content_id = _published_content(
+        db,
+        "bluesky_post",
+        "https://bsky.app/profile/taka.example/post/3lpublished",
+    )
+    send_id = db.insert_newsletter_send(
+        issue_id="issue-bsky-published",
+        subject="Weekly",
+        content_ids=[content_id],
+        subscriber_count=100,
+    )
+
+    db.insert_newsletter_link_clicks(
+        newsletter_send_id=send_id,
+        issue_id="issue-bsky-published",
+        link_clicks=[
+            {
+                "url": "at://did:plc:abc/app.bsky.feed.post/3lpublished",
+                "clicks": 2,
+            }
+        ],
+        fetched_at="2026-04-24T02:00:00+00:00",
+    )
+
+    rows = db.list_newsletter_link_clicks(newsletter_send_id=send_id)
+    assert rows[0]["content_id"] == content_id
+    assert rows[0]["source_kind"] == "published_url"
+
+
 def test_uses_newsletter_body_urls_from_send_metadata(db):
     content_id = _published_content(db, "x_thread", "https://x.com/taka/status/1")
     send_id = db.insert_newsletter_send(
