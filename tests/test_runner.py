@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -75,73 +75,10 @@ class TestScriptContextExceptionHandling:
         mock_db.close.assert_called_once()
 
 
-class TestUpdateMonitoringCallsSubprocess:
-    """Test update_monitoring() subprocess invocation when script exists."""
+class TestUpdateMonitoringNoOp:
+    """Test update_monitoring() remains a safe compatibility hook."""
 
-    @patch("runner.subprocess.run")
-    @patch("runner.PROJECT_ROOT", Path("/fake/project"))
-    def test_calls_subprocess_when_script_exists(self, mock_run):
-        """Verify subprocess.run is called with correct args when sync script exists."""
+    def test_update_monitoring_does_not_raise(self):
         from runner import update_monitoring
 
-        with patch("runner.Path.exists", return_value=True):
-            update_monitoring("daily_digest")
-
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        assert call_args[0] == sys.executable
-        assert call_args[1] == "/fake/project/scripts/update_operations_state.py"
-        assert call_args[2:] == ["--operation", "daily_digest"]
-
-        # Verify subprocess flags
-        call_kwargs = mock_run.call_args[1]
-        assert call_kwargs["check"] is False
-        assert call_kwargs["capture_output"] is True
-
-
-class TestUpdateMonitoringNoOpWhenScriptMissing:
-    """Test update_monitoring() does nothing when script doesn't exist."""
-
-    @patch("runner.subprocess.run")
-    @patch("runner.PROJECT_ROOT", Path("/fake/project"))
-    def test_no_subprocess_call_when_script_missing(self, mock_run):
-        """Verify no subprocess call when update_operations_state.py doesn't exist."""
-        from runner import update_monitoring
-
-        with patch("runner.Path.exists", return_value=False):
-            update_monitoring("poll_replies")
-
-        mock_run.assert_not_called()
-
-
-class TestUpdateMonitoringSwallowsExceptions:
-    """Test update_monitoring() silently catches all exceptions."""
-
-    @patch("runner.subprocess.run")
-    @patch("runner.PROJECT_ROOT", Path("/fake/project"))
-    def test_swallows_subprocess_error(self, mock_run):
-        """Verify exceptions from subprocess.run are silently caught."""
-        mock_run.side_effect = RuntimeError("subprocess failed")
-
-        from runner import update_monitoring
-
-        with patch("runner.Path.exists", return_value=True):
-            # Should not raise despite subprocess error
-            update_monitoring("build_knowledge")
-
-        mock_run.assert_called_once()
-
-    @patch("runner.Path.exists")
-    @patch("runner.subprocess.run")
-    @patch("runner.PROJECT_ROOT", Path("/fake/project"))
-    def test_swallows_path_exists_error(self, mock_run, mock_exists):
-        """Verify exceptions from Path.exists() are silently caught."""
-        mock_exists.side_effect = OSError("filesystem error")
-
-        from runner import update_monitoring
-
-        # Should not raise despite filesystem error
-        update_monitoring("cross_post")
-
-        mock_exists.assert_called_once()
-        mock_run.assert_not_called()
+        update_monitoring("daily_digest")

@@ -1,8 +1,6 @@
 """Shared script runner utilities."""
 
-import sys
 import logging
-import subprocess
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Generator
@@ -55,14 +53,5 @@ def _sync_curated_sources(config: Config, db: Database) -> None:
 
 
 def update_monitoring(operation: str) -> None:
-    """Sync run state to operations.yaml for tact monitoring."""
-    try:
-        sync_script = PROJECT_ROOT / "scripts" / "update_operations_state.py"
-        if sync_script.exists():
-            subprocess.run(
-                [sys.executable, str(sync_script), "--operation", operation],
-                check=False,
-                capture_output=True,
-            )
-    except (OSError, subprocess.SubprocessError, ValueError) as e:
-        logger.debug(f"Failed to update monitoring for operation '{operation}': {e}")
+    """Compatibility hook for scripts that report completion."""
+    logger.debug("Monitoring update skipped for operation '%s'", operation)

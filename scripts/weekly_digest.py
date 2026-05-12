@@ -133,13 +133,15 @@ def main(argv: list[str] | None = None):
             max_estimated_cost_per_run=config.synthesis.max_estimated_cost_per_run,
             max_daily_estimated_cost=config.synthesis.max_daily_estimated_cost,
         )
-        blog_writer = BlogWriter(
-            config.paths.static_site,
-            default_social_image_path=getattr(
-                config.blog, "default_social_image_path", None
-            ),
-            manifest_path=_configured_blog_manifest_path(config),
+        default_social_image_path = getattr(
+            config.blog,
+            "default_social_image_path",
+            None,
         )
+        writer_kwargs = {"manifest_path": _configured_blog_manifest_path(config)}
+        if isinstance(default_social_image_path, str) and default_social_image_path:
+            writer_kwargs["default_social_image_path"] = default_social_image_path
+        blog_writer = BlogWriter(config.paths.static_site, **writer_kwargs)
 
         # Get this week's date range (last 7 days by default, UTC)
         week_start, week_end = _date_range(args)

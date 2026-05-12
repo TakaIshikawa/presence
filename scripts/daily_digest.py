@@ -15,6 +15,7 @@ from ingestion.claude_session_summary import build_session_summaries, summaries_
 from synthesis.pipeline import SynthesisPipeline
 from output.x_client import XClient, parse_thread_content
 from output.bluesky_client import BlueskyClient
+from output.publish_caps import daily_platform_limits_from_config, utc_day_bounds
 from evaluation.posting_schedule import (
     PostingScheduleAnalyzer,
     embargo_windows_from_config,
@@ -25,6 +26,44 @@ from knowledge.embeddings import VoyageEmbeddings, serialize_embedding
 from knowledge.store import KnowledgeStore
 
 logger = logging.getLogger(__name__)
+
+
+def _count_platform_publications(db, platform: str, since: str) -> int:
+    method = getattr(db, "count_platform_publications_since", None)
+    if not callable(method):
+        return 0
+    value = method(platform, since)
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
+def _count_platform_queue_items(db, platform: str, start: str, end: str) -> int:
+    method = getattr(db, "count_platform_queue_items_between", None)
+    if not callable(method):
+        return 0
+    value = method(platform, start, end)
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
+def _capped_platforms_for_today(db, config, platforms: list[str], now: datetime) -> list[str]:
+    limits = daily_platform_limits_from_config(config)
+    if not limits:
+        return []
+
+    day_start, day_end = utc_day_bounds(now)
+    start_iso = day_start.isoformat()
+    end_iso = day_end.isoformat()
+    capped: list[str] = []
+    for platform in platforms:
+        limit = limits.get(platform)
+        if limit is None:
+            continue
+        effective_count = (
+            _count_platform_publications(db, platform, start_iso)
+            + _count_platform_queue_items(db, platform, start_iso, end_iso)
+        )
+        if effective_count >= limit:
+            capped.append(platform)
+    return capped
 
 
 def _github_activity_id(row: dict) -> str:
@@ -284,7 +323,34 @@ def main():
 
             if not should_queue:
                 now = datetime.now(timezone.utc)
-                if is_embargoed(now, embargo_windows):
+                target_platforms = ["x"]
+                if bluesky_client:
+                    target_platforms.append("bluesky")
+                capped_platforms = _capped_platforms_for_today(
+                    db,
+                    config,
+                    target_platforms,
+                    now,
+                )
+                if capped_platforms:
+                    next_slot = next_allowed_slot(now + timedelta(days=1), embargo_windows)
+                    queue_platform = (
+                        "all" if len(target_platforms) > 1 else capped_platforms[0]
+                    )
+                    db.queue_for_publishing(
+                        content_id,
+                        next_slot.isoformat(),
+                        platform=queue_platform,
+                    )
+                    logger.info(
+                        "Daily cap reached for %s; queued for %s",
+                        ", ".join(capped_platforms),
+                        next_slot.isoformat(),
+                    )
+                    outcome = "queued"
+                    rejection_reason = None
+                    should_queue = True
+                elif is_embargoed(now, embargo_windows):
                     next_slot = next_allowed_slot(now, embargo_windows)
                     db.queue_for_publishing(content_id, next_slot.isoformat(), platform='all')
                     logger.info(f"Publishing embargo active; queued for {next_slot.isoformat()}")

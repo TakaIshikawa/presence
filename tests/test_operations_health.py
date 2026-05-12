@@ -11,7 +11,7 @@ from evaluation.operations_health import (
     format_operations_health,
     summarize_operations_health,
 )
-from update_operations_state import build_webhook_payload
+from output.webhook_alerts import build_webhook_payload
 
 
 NOW = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)

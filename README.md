@@ -54,7 +54,6 @@ scripts/                       # Cron-driven entry points (macOS LaunchAgents)
 ├── build_knowledge.py         # Build knowledge store from ingested content
 ├── backfill_embeddings.py     # One-time embedding backfill for semantic dedup
 ├── eval_pipeline.py           # Dry-run pipeline evaluation harness
-├── update_operations_state.py # Sync run state to tact monitoring
 ├── manage.sh                  # LaunchAgent lifecycle manager (start/stop/status/logs)
 └── curate.py                  # Manual curation CLI
 

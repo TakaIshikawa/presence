@@ -201,19 +201,6 @@ operations_health:
   max_model_cost_24h: 5.0
   max_single_run_model_cost: 1.0
 
-# Operational state alerts written into .tact/config/operations.yaml
-operations:
-  alerts:
-    max_consecutive_publish_failures: 3
-    max_ingestion_age_minutes: 60
-    max_queue_backlog_items: 10
-    evaluation_window_hours: 24
-    min_evaluation_runs: 3
-    min_evaluation_pass_rate: 0.5
-    webhook_enabled: false
-    webhook_url: ""
-    webhook_min_level: "alert"
-
 # Image generation for visual posts
 image_gen:
   provider: "pillow"

@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from fetch_engagement import backfill_tweet_ids
-from update_operations_state import sync_operation
 
 
 # --- helpers ---
@@ -222,20 +221,6 @@ class TestEngagementFeedbackFlow:
             (content_id,),
         ).fetchone()[0]
         assert count == 2
-
-    def test_operations_state_reads_poll_and_pipeline(self, db):
-        """sync_operation should read timestamps from presence DB tables."""
-        # Use set_last_poll_time to insert poll_state
-        db.set_last_poll_time(datetime.now(timezone.utc))
-
-        cursor = db.conn.cursor()
-        ops_data = {"runs": []}
-        result = sync_operation(cursor, ops_data, "run-poll")
-
-        assert result is True
-        assert len(ops_data["runs"]) == 1
-        assert ops_data["runs"][0]["operationId"] == "run-poll"
-
 
 class TestNewsletterMetricsFlow:
     def test_newsletter_send_readable_by_metrics_backfill(self, db):

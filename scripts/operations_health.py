@@ -14,8 +14,17 @@ from evaluation.operations_health import (
     summarize_operations_health,
     thresholds_from_config,
 )
+from output.webhook_alerts import deliver_webhook_alerts
 from runner import script_context
-from update_operations_state import deliver_operations_alerts, webhook_config_from_config
+
+
+def _webhook_config(config) -> dict:
+    source = getattr(getattr(config, "operations", None), "alerts", None)
+    return {
+        "webhook_url": getattr(source, "webhook_url", ""),
+        "webhook_enabled": getattr(source, "webhook_enabled", False),
+        "webhook_min_level": getattr(source, "webhook_min_level", "alert"),
+    }
 
 
 def main() -> None:
@@ -49,10 +58,10 @@ def main() -> None:
             db,
             thresholds=thresholds_from_config(config),
         )
-        webhook_result = deliver_operations_alerts(
+        webhook_result = deliver_webhook_alerts(
             db.conn,
             summary,
-            webhook_config_from_config(config),
+            **_webhook_config(config),
             source="operations_health",
             http_timeout=config.timeouts.http_seconds,
             dry_run=args.webhook_dry_run,
