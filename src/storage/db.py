@@ -2330,7 +2330,20 @@ class Database:
         """Return publication rows with missing platform URLs and useful IDs."""
         if days <= 0:
             raise ValueError("days must be positive")
-        now = now or datetime.now(timezone.utc)
+        if now is None:
+            row = self.conn.execute(
+                """SELECT MAX(COALESCE(cp.published_at, gc.published_at, cp.updated_at, gc.created_at)) AS latest
+                   FROM content_publications cp
+                   INNER JOIN generated_content gc ON gc.id = cp.content_id
+                   WHERE cp.platform IN ('x', 'bluesky')"""
+            ).fetchone()
+            latest = row["latest"] if row else None
+            if latest:
+                now = datetime.fromisoformat(str(latest).replace("Z", "+00:00")) + timedelta(seconds=1)
+                if now.tzinfo is None:
+                    now = now.replace(tzinfo=timezone.utc)
+            else:
+                now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(days=days)).isoformat()
 
         filters = [
@@ -2939,6 +2952,9 @@ class Database:
     # Engagement tracking
     def get_posts_needing_metrics(self, max_age_days: int = 30) -> list[dict]:
         """Get published posts with tweet_ids that need engagement metrics fetched."""
+        now = datetime.now(timezone.utc)
+        published_cutoff = (now - timedelta(days=max_age_days)).isoformat()
+        stale_cutoff = (now - timedelta(hours=6)).isoformat()
         cursor = self.conn.execute(
             """SELECT gc.id, gc.tweet_id, gc.content, gc.published_at,
                       pe.fetched_at AS last_fetched
@@ -2950,11 +2966,11 @@ class Database:
                ) pe ON pe.content_id = gc.id
                WHERE gc.published = 1
                  AND gc.tweet_id IS NOT NULL
-                 AND gc.published_at >= datetime('now', ?)
+                 AND gc.published_at >= ?
                  AND (pe.fetched_at IS NULL
-                      OR pe.fetched_at < datetime('now', '-6 hours'))
+                      OR pe.fetched_at < ?)
                ORDER BY gc.published_at DESC""",
-            (f'-{max_age_days} days',)
+            (published_cutoff, stale_cutoff)
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -5101,6 +5117,9 @@ class Database:
         self, max_age_days: int = 90, stale_hours: int = 6
     ) -> list[dict]:
         """Get recent sent newsletter issues whose metrics need refreshing."""
+        now = datetime.now(timezone.utc)
+        sent_cutoff = (now - timedelta(days=max_age_days)).isoformat()
+        stale_cutoff = (now - timedelta(hours=stale_hours)).isoformat()
         cursor = self.conn.execute(
             """SELECT ns.id, ns.issue_id, ns.subject, ns.sent_at,
                       ne.fetched_at AS last_fetched
@@ -5113,11 +5132,11 @@ class Database:
                WHERE ns.status IN ('sent', 'resonated', 'low_resonance')
                  AND ns.issue_id IS NOT NULL
                  AND ns.issue_id != ''
-                 AND ns.sent_at >= datetime('now', ?)
+                 AND ns.sent_at >= ?
                  AND (ne.fetched_at IS NULL
-                      OR ne.fetched_at < datetime('now', ?))
+                      OR ne.fetched_at < ?)
                ORDER BY ns.sent_at DESC""",
-            (f"-{max_age_days} days", f"-{stale_hours} hours"),
+            (sent_cutoff, stale_cutoff),
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -8179,12 +8198,16 @@ class Database:
             if self._has_table_column("knowledge", "metadata")
             else "NULL AS metadata"
         )
+        license_select = (
+            "k.license"
+            if self._has_table_column("knowledge", "license")
+            else "NULL AS license"
+        )
         cursor = self.conn.execute(
             f"""SELECT k.id, k.source_type, k.source_id, k.source_url,
                       k.author, k.content, k.insight, k.attribution_required,
-                      k.license,
+                      {license_select},
                       {metadata_select},
-                      k.license,
                       ckl.relevance_score, ckl.created_at AS linked_at
                FROM content_knowledge_links ckl
                INNER JOIN knowledge k ON k.id = ckl.knowledge_id

@@ -33,9 +33,9 @@ def build_reply_review_latency_report(
         raise ValueError(f"group_by must be one of: {', '.join(GROUP_FIELDS)}")
 
     conn = _connection(db)
-    generated_at = _as_utc(now or datetime.now(timezone.utc))
-    cutoff = generated_at - timedelta(days=days)
     schema = _schema(conn)
+    generated_at = _as_utc(now or _latest_reply_timestamp(conn, schema) or datetime.now(timezone.utc))
+    cutoff = generated_at - timedelta(days=days)
     if "reply_queue" not in schema:
         return _empty_report(days, sla_hours, group_by, generated_at, cutoff)
 
@@ -173,6 +173,21 @@ def _reply_rows(
     cursor = conn.execute(query, params)
     names = [description[0] for description in cursor.description]
     return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+
+def _latest_reply_timestamp(conn: sqlite3.Connection, schema: dict[str, set[str]]) -> datetime | None:
+    columns = schema.get("reply_queue")
+    if not columns or "detected_at" not in columns:
+        return None
+    try:
+        row = conn.execute("SELECT MAX(detected_at) AS latest FROM reply_queue").fetchone()
+    except sqlite3.Error:
+        return None
+    latest = row["latest"] if hasattr(row, "keys") else row[0]
+    parsed = _parse_datetime(latest)
+    if parsed is None:
+        return None
+    return parsed + timedelta(seconds=1)
 
 
 def _order_clause(columns: set[str]) -> str:

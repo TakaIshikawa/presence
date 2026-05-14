@@ -219,7 +219,21 @@ def load_source_events(
     if days <= 0:
         raise ValueError("days must be greater than zero")
 
-    end = now or datetime.now(timezone.utc)
+    if now is None and getattr(db, "conn", None):
+        latest = None
+        for table, column in (
+            ("claude_messages", "timestamp"),
+            ("github_commits", "timestamp"),
+        ):
+            try:
+                row = db.conn.execute(f"SELECT MAX({column}) AS latest FROM {table}").fetchone()
+            except Exception:
+                continue
+            if row and row["latest"] and (latest is None or str(row["latest"]) > latest):
+                latest = str(row["latest"])
+        end = _parse_timestamp(latest) + timedelta(seconds=1) if latest else datetime.now(timezone.utc)
+    else:
+        end = now or datetime.now(timezone.utc)
     end = _parse_timestamp(end)
     start = end - timedelta(days=days)
 

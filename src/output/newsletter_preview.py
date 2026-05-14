@@ -168,7 +168,21 @@ def assemble_newsletter_preview(
             include_metadata=True,
         ),
     )
-    return preview.as_dict(include_metadata=True)
+    payload = preview.as_dict(include_metadata=True)
+    newsletter = getattr(config, "newsletter", None)
+    content_metadata = dict(payload.get("metadata", {}).get("content_metadata") or {})
+    payload["utm_metadata"] = {
+        "utm_source": config_text(newsletter, "utm_source"),
+        "utm_medium": config_text(newsletter, "utm_medium"),
+        "utm_campaign_template": config_text(newsletter, "utm_campaign_template"),
+        "utm_campaign": content_metadata.get("utm_campaign", ""),
+    }
+    payload["message"] = (
+        ""
+        if (payload.get("body_markdown") or "").strip()
+        else "No content published for this date range."
+    )
+    return payload
 
 
 def render_newsletter_preview_markdown(

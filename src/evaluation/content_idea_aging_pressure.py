@@ -360,5 +360,5 @@ def _csv_escape(value: str) -> str:
     if not value:
         return ""
     if "," in value or '"' in value or "\n" in value:
-        return f'"{value.replace('"', '""')}"'
+        return f'"{value.replace(chr(34), chr(34) * 2)}"'
     return value

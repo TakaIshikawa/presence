@@ -56,13 +56,17 @@ def _covered_activity_refs(db: Database) -> set[str]:
 def _row_to_item(row: Any) -> dict[str, Any]:
     item = dict(row)
     item["activity_id"] = _activity_id(item)
+    try:
+        number = int(item["number"])
+    except (TypeError, ValueError):
+        number = item["number"]
     return {
         "id": item["id"],
         "activity_id": item["activity_id"],
         "repo": item["repo_name"],
         "repo_name": item["repo_name"],
         "activity_type": item["activity_type"],
-        "number": item["number"],
+        "number": number,
         "title": item["title"],
         "state": item["state"],
         "url": item["url"],

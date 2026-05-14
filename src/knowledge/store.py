@@ -58,7 +58,6 @@ class KnowledgeItem:
             "attribution_required": self.attribution_required,
             "license": self.license,
             "approved": self.approved,
-            "metadata": self.metadata or {},
         }
 
 
@@ -313,7 +312,6 @@ class KnowledgeStore:
             "insight",
             "embedding",
             "attribution_required",
-            "license",
             "approved",
         ]
         values = [
@@ -325,9 +323,11 @@ class KnowledgeStore:
             item.insight,
             embedding_blob,
             1 if item.attribution_required else 0,
-            item.license,
             1 if item.approved else 0,
         ]
+        if self._has_knowledge_column("license"):
+            columns.append("license")
+            values.append(item.license)
         if self._has_knowledge_column("published_at"):
             columns.append("published_at")
             values.append(item.published_at)
@@ -343,9 +343,10 @@ class KnowledgeStore:
             "insight",
             "embedding",
             "attribution_required",
-            "license",
             "approved",
         ]
+        if "license" in columns:
+            update_columns.append("license")
         if "published_at" in columns:
             update_columns.append("published_at")
         if "ingested_at" in columns:

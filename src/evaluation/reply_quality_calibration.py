@@ -516,19 +516,19 @@ def format_text_report(report: dict[str, Any]) -> str:
         "Reply Quality Calibration Report",
         "=" * 88,
         "",
-        f"Window: {report['days']} days",
-        f"Threshold: {report['threshold']:.1f}",
+        f"Window: {report.get('days', 0)} days",
+        f"Threshold: {float(report.get('threshold', DEFAULT_THRESHOLD)):.1f}",
         (
             f"Rows: {report['sample_size']} total, "
-            f"{report['scored_sample_size']} scored, "
-            f"{report['final_sample_size']} final decisions"
+            f"{report.get('scored_sample_size', 0)} scored, "
+            f"{report.get('final_sample_size', 0)} final decisions"
         ),
-        f"Statuses: {report['status_counts']}",
+        f"Statuses: {report.get('status_counts', {})}",
         "",
     ]
 
-    distribution = report["score_distribution"]
-    if distribution["count"]:
+    distribution = report.get("score_distribution", {"count": 0})
+    if distribution.get("count"):
         lines.extend(
             [
                 "Score Distribution",
@@ -547,7 +547,14 @@ def format_text_report(report: dict[str, Any]) -> str:
         lines.append("No scored reply drafts matched.")
         return "\n".join(lines)
 
-    rec = report["threshold_recommendation"]
+    rec = {
+        "current_threshold": float(report.get("threshold", DEFAULT_THRESHOLD)),
+        "recommended_threshold": float(report.get("threshold", DEFAULT_THRESHOLD)),
+        "direction": "hold",
+        "expected_mismatch_rate": 0.0,
+        "rationale": "No scored reply drafts matched.",
+        **report.get("threshold_recommendation", {}),
+    }
     lines.extend(
         [
             "Threshold Recommendation",
@@ -567,24 +574,24 @@ def format_text_report(report: dict[str, Any]) -> str:
             "Likely Calibration Misses",
             (
                 "  False positives: "
-                f"{report['likely_false_positive_count']} approved/posted below threshold"
+                f"{report.get('likely_false_positive_count', 0)} approved/posted below threshold"
             ),
             (
                 "  False negatives: "
-                f"{report['likely_false_negative_count']} dismissed at or above threshold"
+                f"{report.get('likely_false_negative_count', 0)} dismissed at or above threshold"
             ),
             "",
         ]
     )
 
-    flags = report["common_rejection_flags"]
+    flags = report.get("common_rejection_flags", [])
     if flags:
         lines.append("Common Rejection Flags")
         for item in flags[:8]:
             lines.append(f"  {item['flag']}: {item['count']}")
         lines.append("")
 
-    tuning = report["intents_needing_threshold_tuning"]
+    tuning = report.get("intents_needing_threshold_tuning", [])
     if tuning:
         lines.append("Intents Needing Threshold Tuning")
         for item in tuning:
@@ -597,7 +604,7 @@ def format_text_report(report: dict[str, Any]) -> str:
         lines.append("")
 
     lines.append("Groups")
-    for group_name, values in report["groups"].items():
+    for group_name, values in report.get("groups", {}).items():
         lines.append(f"  {group_name}:")
         for key, stats in values.items():
             lines.append(
@@ -713,7 +720,7 @@ def _intent_threshold_tuning(
     for intent, intent_rows in sorted(grouped.items()):
         if len(intent_rows) < 2:
             continue
-        rec = _threshold_recommendation(intent_rows, current_threshold)
+        rec = _calibration_threshold_recommendation(intent_rows, current_threshold)
         if rec["recommended_threshold"] == current_threshold:
             continue
         if rec["recommended_mismatch_count"] >= rec["current_mismatch_count"]:

@@ -7,6 +7,7 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -159,8 +160,10 @@ def list_reply_context_gap_records(
         where.append(f"LOWER(COALESCE(platform, '')) IN ({placeholders})")
         params.extend(platforms)
     if "detected_at" in columns:
-        where.append("(detected_at IS NULL OR datetime(detected_at) >= datetime('now', ?))")
-        params.append(f"-{days} days")
+        reference_time = datetime.now(timezone.utc)
+        cutoff = (reference_time - timedelta(days=days)).isoformat()
+        where.append("(detected_at IS NULL OR datetime(detected_at) >= datetime(?))")
+        params.append(cutoff)
 
     query = "SELECT * FROM reply_queue"
     if where:

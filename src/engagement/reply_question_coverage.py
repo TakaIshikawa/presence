@@ -380,7 +380,8 @@ def _reply_rows(
     if "detected_at" in columns:
         cutoff = now - timedelta(days=days)
         where.append("(detected_at IS NULL OR datetime(detected_at) >= datetime(?))")
-        params.append(cutoff.isoformat())
+        where.append("(detected_at IS NULL OR datetime(detected_at) <= datetime(?))")
+        params.extend([cutoff.isoformat(), now.isoformat()])
 
     query = "SELECT * FROM reply_queue WHERE " + " AND ".join(where)
     query += " ORDER BY " + _order_clause(columns) + " LIMIT ?"

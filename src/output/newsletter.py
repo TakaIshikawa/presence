@@ -480,7 +480,7 @@ class NewsletterAssembler:
 
         performance_scores = [row["performance_score"] for row in scored_rows]
         baseline = median(performance_scores)
-        spread = max(max(performance_scores) - min(performance_scores), 1.0)
+        spread = max(max(performance_scores) - baseline, 1.0)
 
         token_weights = defaultdict(float)
         subject_signals = []

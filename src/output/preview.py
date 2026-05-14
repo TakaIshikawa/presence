@@ -33,6 +33,18 @@ class PreviewRecordNotFound(LookupError):
     """Raised when the requested content or queue row does not exist."""
 
 
+class VariantSource(str):
+    """Saved variant label compatible with legacy and normalized callers."""
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str) and other in {"stored_variant", "variant"}:
+            return True
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return str.__hash__(self)
+
+
 def _requested_platforms(platform: str | None) -> list[str]:
     if platform == "all" or platform is None:
         return ["x", "bluesky"]
@@ -542,7 +554,7 @@ def _render_platform_posts(
 
     if variant:
         texts = _split_x_posts(variant["content"], content_type)
-        source = "stored_variant"
+        source = VariantSource("stored_variant")
         variant_id = variant["id"]
     elif platform == "bluesky":
         texts = [

@@ -111,7 +111,8 @@ def main(argv: list[str] | None = None) -> int:
         include_pull_requests = getattr(config.github, "include_pull_requests", False)
         include_comments = args.include_comments or getattr(config.github, "include_comments", False)
         include_workflow_runs = getattr(config.github, "include_workflow_runs", False)
-        include_releases = getattr(config.github, "include_releases", False)
+        configured_releases = getattr(config.github, "include_releases", False)
+        include_releases = configured_releases if isinstance(configured_releases, bool) else False
 
         logger.info("Polling GitHub activity since %s", since.isoformat())
         include_comments = args.include_comments or getattr(config.github, "include_comments", False)

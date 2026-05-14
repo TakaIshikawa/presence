@@ -77,9 +77,17 @@ class VoyageEmbeddings(EmbeddingProvider):
             raise EmbeddingProviderUnavailableError(
                 f"Voyage API unavailable: {e}"
             ) from e
+        except ConnectionError as e:
+            raise EmbeddingProviderUnavailableError(
+                f"Failed to connect to Voyage API: {e}"
+            ) from e
         except APIError as e:
             raise EmbeddingGenerationError(
                 f"Voyage API error: {e}"
+            ) from e
+        except Exception as e:
+            raise EmbeddingGenerationError(
+                f"Voyage embedding generation failed: {e}"
             ) from e
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -121,6 +129,10 @@ class VoyageEmbeddings(EmbeddingProvider):
         except APIError as e:
             raise EmbeddingGenerationError(
                 f"Voyage API error: {e}"
+            ) from e
+        except Exception as e:
+            raise EmbeddingGenerationError(
+                f"Voyage embedding generation failed: {e}"
             ) from e
 
 
@@ -169,6 +181,10 @@ class OpenAIEmbeddings(EmbeddingProvider):
         except APIError as e:
             raise EmbeddingGenerationError(
                 f"OpenAI API error: {e}"
+            ) from e
+        except Exception as e:
+            raise EmbeddingGenerationError(
+                f"OpenAI embedding generation failed ({type(e).__name__}): {e}"
             ) from e
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:

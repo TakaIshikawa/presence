@@ -87,10 +87,10 @@ def build_reply_knowledge_gap_report(
         raise ValueError("min_quality must be between 0 and 10")
 
     conn = _connection(db)
-    generated_at = _as_utc(now or datetime.now(timezone.utc))
-    cutoff = generated_at - timedelta(days=days)
     statuses = _normalize_status_filter(status)
     schema = _schema(conn)
+    generated_at = _as_utc(now or _latest_reply_timestamp(conn, schema) or datetime.now(timezone.utc))
+    cutoff = generated_at - timedelta(days=days)
     if "reply_queue" not in schema:
         return _empty_report(days, statuses, min_quality, generated_at, cutoff)
 
@@ -244,6 +244,24 @@ def _reply_rows(
     cursor = conn.execute(query, params)
     names = [description[0] for description in cursor.description]
     return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+
+def _latest_reply_timestamp(conn: sqlite3.Connection, schema: dict[str, set[str]]) -> datetime | None:
+    columns = schema.get("reply_queue")
+    if not columns:
+        return None
+    time_column = _first_present(columns, ("detected_at", "reviewed_at", "created_at"))
+    if not time_column:
+        return None
+    try:
+        row = conn.execute(f"SELECT MAX({time_column}) AS latest FROM reply_queue").fetchone()
+    except sqlite3.Error:
+        return None
+    latest = row["latest"] if hasattr(row, "keys") else row[0]
+    parsed = _parse_datetime(latest)
+    if parsed is None:
+        return None
+    return parsed + timedelta(seconds=1)
 
 
 def _knowledge_link_counts(

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from evaluation.performance_brief import PerformanceBriefBuilder
-from test_performance_brief import seed_performance_brief
+from tests.test_performance_brief import seed_performance_brief
 from weekly_performance_brief import (
     artifact_path,
     format_json_brief,

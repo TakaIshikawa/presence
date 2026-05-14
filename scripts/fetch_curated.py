@@ -609,7 +609,6 @@ def main(argv: list[str] | None = None):
                         "link_metadata_timeout_seconds",
                         DEFAULT_LINK_METADATA_TIMEOUT_SECONDS,
                     ),
-                    dry_run=dry_run,
                 )
                 if count:
                     action = "Would ingest" if dry_run else "Ingested"

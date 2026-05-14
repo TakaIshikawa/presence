@@ -145,9 +145,9 @@ def main() -> None:
                     novelty=pred.novelty,
                     actionability=pred.actionability,
                     raw_response=pred.raw_response,
-                    prompt_type=pred.prompt_type,
-                    prompt_version=pred.prompt_version,
-                    prompt_hash=pred.prompt_hash,
+                    prompt_type=getattr(pred, "prompt_type", "engagement_prediction"),
+                    prompt_version=getattr(pred, "prompt_version", args.prompt_version),
+                    prompt_hash=getattr(pred, "prompt_hash", None),
                 )
                 evaluated += 1
 
