@@ -46,6 +46,7 @@ _DATE_WINDOW_TEST_FILES = {
     "test_newsletter_section_balancer.py",
     "test_newsletter_source_reference_audit.py",
     "test_newsletter_topic_balance.py",
+    "test_newsletter_topic_planner.py",
     "test_presence_context.py",
     "test_proactive_action_outcomes.py",
     "test_proactive_action_target_audit.py",
