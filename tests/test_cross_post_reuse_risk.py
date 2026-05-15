@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -70,13 +70,15 @@ def test_platform_filter_limits_candidates():
 
 def test_cli_json_output(capsys, tmp_path):
     db_path = tmp_path / "reuse.db"
+    created_at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=2)
+    reused_at = created_at + timedelta(hours=1)
     conn = sqlite3.connect(db_path)
     conn.executescript(
-        """CREATE TABLE generated_content (
+        f"""CREATE TABLE generated_content (
             id INTEGER PRIMARY KEY, platform TEXT, content_type TEXT, content TEXT, created_at TEXT
         );
-        INSERT INTO generated_content VALUES (1, 'x', 'post', 'Duplicate copy', '2026-05-01T10:00:00+00:00');
-        INSERT INTO generated_content VALUES (2, 'linkedin', 'post', 'Duplicate copy', '2026-05-01T11:00:00+00:00');"""
+        INSERT INTO generated_content VALUES (1, 'x', 'post', 'Duplicate copy', '{created_at.isoformat()}');
+        INSERT INTO generated_content VALUES (2, 'linkedin', 'post', 'Duplicate copy', '{reused_at.isoformat()}');"""
     )
     conn.close()
 
