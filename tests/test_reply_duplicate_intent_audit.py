@@ -223,14 +223,16 @@ def test_cli_outputs_json_and_markdown_and_returns_issue_status(monkeypatch, cap
         lambda: _script_context(conn),
     )
 
-    json_exit = audit_reply_duplicate_intents_script.main(["--format", "json", "--limit", "5"])
+    json_exit = audit_reply_duplicate_intents_script.main(
+        ["--format", "json", "--limit", "5", "--days", "30"]
+    )
     payload = json.loads(capsys.readouterr().out)
 
     assert json_exit == 1
     assert payload["artifact_type"] == "reply_duplicate_intent_audit"
     assert payload["groups"][0]["reasons"] == ["same_target_mention"]
 
-    markdown_exit = audit_reply_duplicate_intents_script.main(["--format", "markdown"])
+    markdown_exit = audit_reply_duplicate_intents_script.main(["--format", "markdown", "--days", "30"])
     markdown = capsys.readouterr().out
     assert markdown_exit == 1
     assert "# Reply Duplicate Intent Audit" in markdown
