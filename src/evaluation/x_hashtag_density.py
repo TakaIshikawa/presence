@@ -437,6 +437,8 @@ def _load_x_post_rows(
         include_publications=can_join_publications and "published_at" in publication_columns,
     )
     cutoff_days = recent_days + baseline_days
+    now = datetime.now(timezone.utc)
+    cutoff_timestamp = now.replace(microsecond=0).isoformat().replace('+00:00', 'Z')
     from_expr = "generated_content"
     if can_join_publications:
         from_expr = (
@@ -449,10 +451,10 @@ def _load_x_post_rows(
         f"""SELECT {', '.join(selected)}
             FROM {from_expr}
             WHERE {content_prefix}content_type IN ({', '.join('?' for _ in X_CONTENT_TYPES)})
-              AND datetime({timestamp_expr}) >= datetime('now', ?)
+              AND datetime({timestamp_expr}) >= datetime(?, ?)
             ORDER BY datetime({timestamp_expr}) DESC, {content_prefix}id DESC
             LIMIT ?""",
-        (*X_CONTENT_TYPES, f"-{cutoff_days} days", limit),
+        (*X_CONTENT_TYPES, cutoff_timestamp, f"-{cutoff_days} days", limit),
     )
     rows = _cursor_dicts(cursor)
 

@@ -39,6 +39,7 @@ _DATE_WINDOW_TEST_FILES = {
     "test_discussion_digest.py",
     "test_eval_batch_report.py",
     "test_feedback_rejection_motifs.py",
+    "test_github_activity_conversion.py",
     "test_hotfix_commit_idea_seeder.py",
     "test_image_prompt_reuse.py",
     "test_issue_idea_seeder.py",
@@ -67,6 +68,7 @@ _DATE_WINDOW_TEST_FILES = {
     "test_thread_hook_performance.py",
     "test_visual_alt_text_coverage.py",
     "test_visual_asset_ledger.py",
+    "test_x_hashtag_density.py",
 }
 
 
