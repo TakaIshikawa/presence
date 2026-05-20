@@ -203,7 +203,13 @@ def test_cli_supports_json_source_topic_and_lookback_flags(db, capsys):
     def fake_script_context():
         yield None, db
 
-    with patch("content_idea_funnel.script_context", fake_script_context):
+    def build_report_with_fixed_now(db, **kwargs):
+        return build_content_idea_funnel_report(db, now=NOW, **kwargs)
+
+    with patch("content_idea_funnel.script_context", fake_script_context), patch(
+        "content_idea_funnel.build_content_idea_funnel_report",
+        build_report_with_fixed_now,
+    ):
         exit_code = main(
             [
                 "--lookback-days",

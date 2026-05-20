@@ -106,10 +106,21 @@ def test_from_db_cli_and_missing_table(tmp_path, capsys):
 
     db_path = tmp_path / "snapshots.sqlite"
     conn.backup(sqlite3.connect(db_path))
-    assert script.main(["--db", str(db_path), "--low-remaining", "5", "--limit", "5"]) == 0
-    assert json.loads(capsys.readouterr().out)["summary"]["issue_count"] == 1
-    assert script.main(["--db", str(db_path), "--format", "text"]) == 0
-    assert "API Rate-limit Endpoint Starvation" in capsys.readouterr().out
+    original_builder = script.build_api_rate_limit_endpoint_starvation_report_from_db
+
+    def build_report_with_fixed_now(conn, **kwargs):
+        return original_builder(conn, now=NOW, **kwargs)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            script,
+            "build_api_rate_limit_endpoint_starvation_report_from_db",
+            build_report_with_fixed_now,
+        )
+        assert script.main(["--db", str(db_path), "--low-remaining", "5", "--limit", "5"]) == 0
+        assert json.loads(capsys.readouterr().out)["summary"]["issue_count"] == 1
+        assert script.main(["--db", str(db_path), "--format", "text"]) == 0
+        assert "API Rate-limit Endpoint Starvation" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         script.parse_args(["--limit", "0"])
 

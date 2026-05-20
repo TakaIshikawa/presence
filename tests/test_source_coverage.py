@@ -166,7 +166,13 @@ def test_cli_json_output_is_deterministic(db, capsys):
     def fake_script_context():
         yield None, db
 
-    with patch("source_coverage.script_context", fake_script_context):
+    def summarize_with_fixed_now(db, **kwargs):
+        return summarize_source_coverage(db, now=NOW, **kwargs)
+
+    with patch("source_coverage.script_context", fake_script_context), patch(
+        "source_coverage.summarize_source_coverage",
+        summarize_with_fixed_now,
+    ):
         main(["--days", "30", "--repo", "acme/app", "--limit", "1", "--json"])
 
     output = capsys.readouterr().out

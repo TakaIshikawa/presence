@@ -207,7 +207,13 @@ def test_cli_prints_json_when_flag_is_passed(db, capsys):
     def fake_script_context():
         yield None, db
 
-    with patch("content_idea_source_roi.script_context", fake_script_context):
+    def build_report_with_fixed_now(db, **kwargs):
+        return build_content_idea_source_roi_report(db, now=NOW, **kwargs)
+
+    with patch("content_idea_source_roi.script_context", fake_script_context), patch(
+        "content_idea_source_roi.build_content_idea_source_roi_report",
+        build_report_with_fixed_now,
+    ):
         exit_code = main(["--days", "30", "--min-ideas", "1", "--json"])
 
     payload = json.loads(capsys.readouterr().out)
@@ -225,7 +231,13 @@ def test_cli_prints_readable_table_by_default(db, capsys):
     def fake_script_context():
         yield None, db
 
-    with patch("content_idea_source_roi.script_context", fake_script_context):
+    def build_report_with_fixed_now(db, **kwargs):
+        return build_content_idea_source_roi_report(db, now=NOW, **kwargs)
+
+    with patch("content_idea_source_roi.script_context", fake_script_context), patch(
+        "content_idea_source_roi.build_content_idea_source_roi_report",
+        build_report_with_fixed_now,
+    ):
         exit_code = main(["--days", "30"])
 
     output = capsys.readouterr().out

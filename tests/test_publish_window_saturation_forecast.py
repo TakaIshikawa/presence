@@ -172,19 +172,19 @@ def test_cli_json_and_text_output_are_deterministic(db, file_db, capsys):
         ),
     ):
         assert publish_window_saturation_forecast_script.main(["--days", "2", "--format", "json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert list(payload) == sorted(payload)
-    assert payload["channel_summary"]["x"]["scheduled_count"] == 1
-    assert payload["overloaded_windows"] == []
-    assert str(configured_queue) not in json.dumps(payload["overloaded_windows"])
+        payload = json.loads(capsys.readouterr().out)
+        assert list(payload) == sorted(payload)
+        assert payload["channel_summary"]["x"]["scheduled_count"] == 1
+        assert payload["overloaded_windows"] == []
+        assert str(configured_queue) not in json.dumps(payload["overloaded_windows"])
 
-    assert (
-        publish_window_saturation_forecast_script.main(
-            ["--db", str(file_db.db_path), "--days", "2", "--capacity", "1", "--format", "text"]
+        assert (
+            publish_window_saturation_forecast_script.main(
+                ["--db", str(file_db.db_path), "--days", "2", "--capacity", "1", "--format", "text"]
+            )
+            == 0
         )
-        == 0
-    )
-    text = capsys.readouterr().out
-    assert "Publish Window Saturation Forecast" in text
-    assert f"ids={file_queue}" in text
+        text = capsys.readouterr().out
+        assert "Publish Window Saturation Forecast" in text
+        assert f"ids={file_queue}" in text
     assert publish_window_saturation_forecast_script.main(["--days", "0"]) == 2
