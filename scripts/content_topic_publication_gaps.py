@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Report extracted content topic publication gaps."""
+
+from __future__ import annotations
+
+import argparse
+import sqlite3
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from evaluation.content_topic_publication_gaps import (  # noqa: E402
+    DEFAULT_LIMIT,
+    DEFAULT_LOOKBACK_DAYS,
+    DEFAULT_MIN_CONFIDENCE,
+    build_content_topic_publication_gaps_report_from_db,
+    format_content_topic_publication_gaps_json,
+    format_content_topic_publication_gaps_text,
+)
+from runner import script_context  # noqa: E402
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
+def _confidence(value: str) -> float:
+    parsed = float(value)
+    if not 0 <= parsed <= 1:
+        raise argparse.ArgumentTypeError("value must be between 0 and 1")
+    return parsed
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", help="SQLite database path. Defaults to configured database.")
+    parser.add_argument("--format", choices=("json", "text"), default="json")
+    parser.add_argument("--lookback-days", type=_positive_int, default=DEFAULT_LOOKBACK_DAYS)
+    parser.add_argument("--min-confidence", type=_confidence, default=DEFAULT_MIN_CONFIDENCE)
+    parser.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = parse_args(argv)
+        kwargs = {
+            "lookback_days": args.lookback_days,
+            "min_confidence": args.min_confidence,
+            "limit": args.limit,
+        }
+        if args.db:
+            with sqlite3.connect(args.db) as conn:
+                conn.row_factory = sqlite3.Row
+                report = build_content_topic_publication_gaps_report_from_db(conn, **kwargs)
+        else:
+            with script_context() as (_config, db):
+                report = build_content_topic_publication_gaps_report_from_db(db, **kwargs)
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        format_content_topic_publication_gaps_text(report)
+        if args.format == "text"
+        else format_content_topic_publication_gaps_json(report)
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
