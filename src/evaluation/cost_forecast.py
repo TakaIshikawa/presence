@@ -104,9 +104,18 @@ def positive_budget(value: float | int | None) -> float | None:
     return budget if budget > 0 else None
 
 
-def fetch_model_usage_rows(db: Any, *, lookback_days: int = 30) -> list[dict[str, Any]]:
+def fetch_model_usage_rows(
+    db: Any,
+    *,
+    lookback_days: int = 30,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
     """Read recent model usage rows with best-effort content type context."""
     lookback_days = max(1, int(lookback_days or 1))
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    cutoff = now.astimezone(timezone.utc) - timedelta(days=lookback_days)
     cursor = db.conn.execute(
         """SELECT mu.id,
                   mu.operation_name,
@@ -118,9 +127,9 @@ def fetch_model_usage_rows(db: Any, *, lookback_days: int = 30) -> list[dict[str
            FROM model_usage mu
            LEFT JOIN pipeline_runs pr ON pr.id = mu.pipeline_run_id
            LEFT JOIN generated_content gc ON gc.id = mu.content_id
-           WHERE mu.created_at >= datetime('now', ?)
+           WHERE datetime(mu.created_at) >= datetime(?)
            ORDER BY mu.created_at DESC, mu.id DESC""",
-        (f"-{lookback_days} days",),
+        (cutoff.strftime("%Y-%m-%d %H:%M:%S"),),
     )
     return [dict(row) for row in cursor.fetchall()]
 
@@ -227,7 +236,7 @@ def forecast_from_db(
 ) -> CostForecast:
     """Read usage history and produce a forecast."""
     now = now or datetime.now(timezone.utc)
-    rows = fetch_model_usage_rows(db, lookback_days=lookback_days)
+    rows = fetch_model_usage_rows(db, lookback_days=lookback_days, now=now)
     today_spend = today_model_usage_cost(db, now=now)
     return build_cost_forecast(
         rows,

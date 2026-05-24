@@ -18,6 +18,7 @@ _DATE_WINDOW_TEST_FILES = {
     "test_bluesky_reply_context_gaps.py",
     "test_campaign_evidence_gap_seeder.py",
     "test_campaign_evidence_readiness.py",
+    "test_claim_review_queue.py",
     "test_claude_blocker_idea_seeder.py",
     "test_claude_command_retry_backoff.py",
     "test_claude_command_retry_effectiveness.py",
@@ -35,11 +36,15 @@ _DATE_WINDOW_TEST_FILES = {
     "test_claude_session_tool_result_size.py",
     "test_claude_session_tool_timeout_report.py",
     "test_claude_tool_error_taxonomy.py",
+    "test_claude_work_coverage.py",
+    "test_content_feedback_trends.py",
+    "test_content_variant_freshness.py",
     "test_cost_forecast.py",
     "test_discussion_digest.py",
     "test_eval_batch_report.py",
     "test_feedback_rejection_motifs.py",
     "test_github_activity_conversion.py",
+    "test_github_activity_classifier.py",
     "test_hotfix_commit_idea_seeder.py",
     "test_image_prompt_reuse.py",
     "test_issue_idea_seeder.py",
@@ -56,8 +61,10 @@ _DATE_WINDOW_TEST_FILES = {
     "test_publication_url_audit.py",
     "test_publish_failover.py",
     "test_publish_failure_reasons.py",
+    "test_publish_failure_triage.py",
     "test_quote_opportunities.py",
     "test_release_coverage.py",
+    "test_redaction_audit.py",
     "test_reply_context_gap_report.py",
     "test_reply_duplicate_drafts.py",
     "test_reply_followup_promise_audit.py",
@@ -65,6 +72,7 @@ _DATE_WINDOW_TEST_FILES = {
     "test_reply_privacy_audit.py",
     "test_reply_question_coverage.py",
     "test_reply_review_latency.py",
+    "test_source_overlap.py",
     "test_thread_hook_performance.py",
     "test_visual_alt_text_coverage.py",
     "test_visual_asset_ledger.py",
@@ -113,7 +121,11 @@ def _stable_project_clock_for_date_window_tests(request, monkeypatch):
     ):
         return
 
-    module_now = getattr(request.module, "NOW", _DEFAULT_STABLE_NOW)
+    module_now = getattr(
+        request.module,
+        "NOW",
+        getattr(request.module, "BASE_TIME", _DEFAULT_STABLE_NOW),
+    )
     if isinstance(module_now, _datetime.date) and not isinstance(module_now, _datetime.datetime):
         module_now = _REAL_DATETIME.combine(module_now, _datetime.time.min, tzinfo=_datetime.timezone.utc)
     if not isinstance(module_now, _datetime.datetime):
