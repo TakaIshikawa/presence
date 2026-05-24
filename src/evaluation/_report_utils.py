@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import sqlite3
 from typing import Any
+from urllib.parse import urlparse
 
 
 def connection(db_or_conn: Any) -> sqlite3.Connection:
@@ -112,3 +113,32 @@ def positive(name: str, value: int | float) -> None:
     if value <= 0:
         raise ValueError(f"{name} must be positive")
 
+
+def nonnegative(name: str, value: int | float) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+
+
+def median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return round(float(ordered[mid]), 4)
+    return round((ordered[mid - 1] + ordered[mid]) / 2, 4)
+
+
+def domain(value: Any) -> str:
+    text = clean(value).lower()
+    if not text:
+        return ""
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    host = (parsed.hostname or text).lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def table_missing_columns(columns: set[str], required: set[str]) -> list[str]:
+    return sorted(required - columns)
