@@ -1,53 +1,46 @@
-"""Evaluate newsletter signup sources by downstream engagement quality."""
+"""Evaluate newsletter subscriber signup source quality."""
 from __future__ import annotations
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any
-from ._report_utils import clean, connection, expr, json_dumps, lower, now_iso, positive, schema
-ARTIFACT_TYPE="newsletter_signup_source_quality"; DEFAULT_MIN_SUBSCRIBERS=1; DEFAULT_LIMIT=50
-def build_newsletter_signup_source_quality_report(subscribers:list[dict[str,Any]],events:list[dict[str,Any]]|None=None,*,min_subscribers:int=DEFAULT_MIN_SUBSCRIBERS,limit:int=DEFAULT_LIMIT,missing_tables:list[str]|None=None,missing_columns:dict[str,list[str]]|None=None,now:Any=None)->dict[str,Any]:
- positive("min_subscribers",min_subscribers); positive("limit",limit)
- ev=defaultdict(set)
- for e in events or []:
-  sid=str(e.get("subscriber_id")); typ=lower(e.get("event_type"))
-  if typ in {"open","opened"}: ev[sid].add("open")
-  if typ in {"click","clicked"}: ev[sid].add("click")
- groups:dict[tuple[str,str],list[dict[str,Any]]]=defaultdict(list)
- for s in subscribers: groups[(clean(s.get("source"),"unknown"),clean(s.get("campaign"),""))].append(s)
- rows=[]
- for (source,campaign),items in groups.items():
-  total=len(items)
-  if total<min_subscribers: continue
-  confirmed=sum(1 for x in items if lower(x.get("status")) in {"confirmed","active","subscribed"})
-  bounced=sum(1 for x in items if "bounce" in lower(x.get("status")))
-  unsub=sum(1 for x in items if lower(x.get("status")) in {"unsubscribed","cancelled"})
-  opens=sum(1 for x in items if "open" in ev[str(x.get("subscriber_id"))])
-  clicks=sum(1 for x in items if "click" in ev[str(x.get("subscriber_id"))])
-  open_rate=round(opens/total,4); click_rate=round(clicks/total,4)
-  score=round((confirmed/total)*50 + open_rate*25 + click_rate*25 - (bounced/total)*30 - (unsub/total)*20,2)
-  rows.append({"source":source,"campaign":campaign or None,"subscriber_count":total,"confirmed_count":confirmed,"bounced_count":bounced,"unsubscribed_count":unsub,"first_open_rate":open_rate,"first_click_rate":click_rate,"quality_score":score})
- rows.sort(key=lambda r:(r["quality_score"],-r["subscriber_count"],r["source"],r["campaign"] or ""))
- shown=rows[:limit]
- return {"artifact_type":ARTIFACT_TYPE,"generated_at":now_iso(now),"thresholds":{"min_subscribers":min_subscribers,"limit":limit},"summary":{"source_count":len(rows),"subscriber_count":len(subscribers),"shown_count":len(shown)},"sources":shown,"missing_tables":sorted(missing_tables or []),"missing_columns":{k:sorted(v) for k,v in sorted((missing_columns or {}).items())}}
-def build_newsletter_signup_source_quality_report_from_db(db_or_conn:Any,**kwargs:Any)->dict[str,Any]:
- conn=connection(db_or_conn); s=schema(conn); miss=[] if "newsletter_subscribers" in s else ["newsletter_subscribers"]; mc={}
- subs=_subs(conn,s,mc) if "newsletter_subscribers" in s else []; events=[]
- for t in ("newsletter_events","newsletter_provider_events"):
-  if t in s: events+=_events(conn,t,s[t],mc)
- return build_newsletter_signup_source_quality_report(subs,events,missing_tables=miss,missing_columns=mc,**kwargs)
-def format_newsletter_signup_source_quality_json(report:dict[str,Any])->str: return json_dumps(report)
-def format_newsletter_signup_source_quality_text(report:dict[str,Any])->str:
- lines=["Newsletter Signup Source Quality",f"Generated: {report['generated_at']}",f"Totals: sources={report['summary']['source_count']} subscribers={report['summary']['subscriber_count']} shown={report['summary']['shown_count']}"]
- if report["missing_tables"]: lines.append("Missing tables: "+", ".join(report["missing_tables"]))
- if not report["sources"]: lines.append("No signup source quality rows found."); return "\n".join(lines)
- lines+=["","source | campaign | subscribers | confirmed | bounced | unsubscribed | first_open_rate | first_click_rate | quality_score"]
- for r in report["sources"]: lines.append(f"{r['source']} | {r['campaign'] or '-'} | {r['subscriber_count']} | {r['confirmed_count']} | {r['bounced_count']} | {r['unsubscribed_count']} | {r['first_open_rate']} | {r['first_click_rate']} | {r['quality_score']}")
- return "\n".join(lines)
-def _subs(conn:Any,s:dict[str,set[str]],mc:dict[str,list[str]])->list[dict[str,Any]]:
- cols=s["newsletter_subscribers"]; gid=next((c for c in ("id","subscriber_id") if c in cols),None)
- if not gid: mc["newsletter_subscribers"]=["id"]; return []
- select=[f"{gid} AS subscriber_id",expr(cols,"source","signup_source",default="'unknown'",out="source"),expr(cols,"campaign","utm_campaign",default="NULL",out="campaign"),expr(cols,"status",default="'unknown'",out="status")]
- return [dict(r) for r in conn.execute(f"SELECT {', '.join(select)} FROM newsletter_subscribers ORDER BY {gid}")]
-def _events(conn:Any,t:str,cols:set[str],mc:dict[str,list[str]])->list[dict[str,Any]]:
- sid=next((c for c in ("subscriber_id","newsletter_subscriber_id") if c in cols),None); typ=next((c for c in ("event_type","type","name") if c in cols),None)
- if not sid or not typ: mc[t]=sorted({"subscriber_id","event_type"}-cols); return []
- return [dict(r) for r in conn.execute(f"SELECT {sid} AS subscriber_id,{typ} AS event_type FROM {t} ORDER BY rowid")]
+from ._batch_report_common import *
+ARTIFACT_TYPE="newsletter_signup_source_quality"; DEFAULT_LIMIT=50; DEFAULT_BURST_THRESHOLD=3
+DISPOSABLE={"mailinator.com","10minutemail.com","guerrillamail.com","tempmail.com","yopmail.com"}
+def build_newsletter_signup_source_quality_report(rows:list[dict[str,Any]],*,limit:int=DEFAULT_LIMIT,burst_threshold:int=DEFAULT_BURST_THRESHOLD,missing_tables:list[str]|None=None,missing_columns:dict[str,list[str]]|None=None,now=None)->dict[str,Any]:
+    positive("limit",limit); positive("burst_threshold",burst_threshold)
+    source_stats=defaultdict(lambda:{"total":0,"missing_consent":0,"missing_campaign":0,"disposable_domain":0,"domain_bursts":0})
+    domain_counts=Counter(domain(r.get("email")) for r in rows if domain(r.get("email")))
+    findings=[]
+    for i,r in enumerate(rows):
+        src=clean(r.get("source") or r.get("signup_source"),"unknown"); created=dt(r.get("created_at")); d=domain(r.get("email")); campaign=clean(r.get("campaign"))
+        source_stats[src]["total"]+=1
+        reasons=[]; severity=0
+        if not clean(r.get("consented_at")): reasons.append("missing_consent_timestamp"); source_stats[src]["missing_consent"]+=1; severity+=40
+        if not campaign: reasons.append("missing_campaign_attribution"); source_stats[src]["missing_campaign"]+=1; severity+=20
+        if d in DISPOSABLE: reasons.append("disposable_domain"); source_stats[src]["disposable_domain"]+=1; severity+=30
+        if d and domain_counts[d]>=burst_threshold: reasons.append("repeated_email_domain_burst"); source_stats[src]["domain_bursts"]+=1; severity+=10+domain_counts[d]
+        if reasons:
+            findings.append({"subscriber_id":r.get("subscriber_id") or r.get("id") or i+1,"source":src,"email_domain":d or None,"created_at":created.isoformat() if created else None,"reasons":sorted(reasons),"severity":severity})
+    breakdown=[{"source":s,**v,"issue_rate":round((v["missing_consent"]+v["missing_campaign"]+v["disposable_domain"]+v["domain_bursts"])/max(v["total"],1),4)} for s,v in source_stats.items()]
+    breakdown.sort(key=lambda x:(-x["issue_rate"],x["source"]))
+    findings.sort(key=lambda f:(-f["severity"], f["created_at"] or "", str(f["subscriber_id"])), reverse=False)
+    findings=sorted(findings,key=lambda f:(-f["severity"], -(dt(f["created_at"]) or dt("1970-01-01T00:00:00+00:00")).timestamp(), str(f["subscriber_id"])))[:limit]
+    return {"artifact_type":ARTIFACT_TYPE,"generated_at":now_iso(now),"filters":{"limit":limit,"burst_threshold":burst_threshold},"totals":{"subscribers":len(rows),"sources":len(source_stats),"findings":len(findings)},"source_breakdown":breakdown,"findings":findings,"missing_tables":sorted(missing_tables or []),"missing_columns":{k:sorted(v) for k,v in sorted((missing_columns or {}).items())},"empty_state":empty_state(findings,"No newsletter signup source quality issues found.",schema_gap=bool(missing_tables or missing_columns))}
+def build_newsletter_signup_source_quality_report_from_db(db_or_conn:Any,**kw)->dict[str,Any]:
+    conn=connection(db_or_conn); s=schema(conn); mt=[] if "newsletter_subscribers" in s else ["newsletter_subscribers"]; mc={}; rows=[]
+    if not mt:
+        cols=s["newsletter_subscribers"]; req=["id"]; opt=["signup_source","source","campaign","consented_at","created_at","email"]
+        miss=[c for c in req if c not in cols]
+        if miss: mc["newsletter_subscribers"]=miss
+        else: rows=load_table(conn,"newsletter_subscribers",cols,{"id":("id",),"subscriber_id":("subscriber_id","id"),"source":("signup_source","source"),"campaign":("campaign","utm_campaign"),"consented_at":("consented_at","consent_at"),"created_at":("created_at","signed_up_at"),"email":("email","email_address")})
+    return build_newsletter_signup_source_quality_report(rows,missing_tables=mt,missing_columns=mc,**kw)
+def format_newsletter_signup_source_quality_json(r): return json_dumps(r)
+def format_newsletter_signup_source_quality_text(r):
+    lines=["Newsletter Signup Source Quality",f"Generated: {r['generated_at']}",f"Totals: subscribers={r['totals']['subscribers']} sources={r['totals']['sources']} findings={r['totals']['findings']}"]
+    if r["missing_tables"]: lines.append("Missing tables: "+", ".join(r["missing_tables"]))
+    if r["missing_columns"]: lines.append("Missing columns: "+flatten_missing(r["missing_columns"]))
+    if not r["findings"]: lines.append(r["empty_state"]["message"]); return "\n".join(lines)
+    lines += ["","source | total | missing_consent | missing_campaign | disposable | bursts"]
+    for b in r["source_breakdown"]: lines.append(f"{b['source']} | {b['total']} | {b['missing_consent']} | {b['missing_campaign']} | {b['disposable_domain']} | {b['domain_bursts']}")
+    lines += ["","subscriber_id | source | severity | reasons"]
+    for f in r["findings"]: lines.append(f"{f['subscriber_id']} | {f['source']} | {f['severity']} | {', '.join(f['reasons'])}")
+    return "\n".join(lines)

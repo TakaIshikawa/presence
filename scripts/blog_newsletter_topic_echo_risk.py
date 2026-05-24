@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Export Newsletter Signup Source Quality."""
+"""Export Blog Newsletter Topic Echo Risk."""
 from __future__ import annotations
 import argparse, sqlite3, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from evaluation.newsletter_signup_source_quality import (DEFAULT_LIMIT, DEFAULT_BURST_THRESHOLD, build_newsletter_signup_source_quality_report_from_db, format_newsletter_signup_source_quality_json, format_newsletter_signup_source_quality_text)  # noqa: E402
+from evaluation.blog_newsletter_topic_echo_risk import (DEFAULT_COOLDOWN_DAYS, DEFAULT_SIMILARITY, DEFAULT_LIMIT, build_blog_newsletter_topic_echo_risk_report_from_db, format_blog_newsletter_topic_echo_risk_json, format_blog_newsletter_topic_echo_risk_text)  # noqa: E402
 from runner import script_context  # noqa: E402
 
 def _positive_int(value: str) -> int:
@@ -35,8 +35,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--db', help='SQLite database path. Defaults to configured database.')
     parser.add_argument('--format', choices=('json','text'), default='json')
+    parser.add_argument('--cooldown-days', type=_positive_int, default=DEFAULT_COOLDOWN_DAYS)
+    parser.add_argument('--similarity-threshold', type=_share, default=DEFAULT_SIMILARITY)
     parser.add_argument('--limit', type=_positive_int, default=DEFAULT_LIMIT)
-    parser.add_argument('--burst-threshold', type=_positive_int, default=DEFAULT_BURST_THRESHOLD)
     return parser.parse_args(argv)
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,18 +46,18 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         return int(exc.code or 0)
     try:
-        kwargs = {'limit': args.limit, 'burst_threshold': args.burst_threshold}
+        kwargs = {'cooldown_days': args.cooldown_days, 'similarity_threshold': args.similarity_threshold, 'limit': args.limit}
         if args.db:
             with sqlite3.connect(args.db) as conn:
                 conn.row_factory = sqlite3.Row
-                report = build_newsletter_signup_source_quality_report_from_db(conn, **kwargs)
+                report = build_blog_newsletter_topic_echo_risk_report_from_db(conn, **kwargs)
         else:
             with script_context() as (_config, db):
-                report = build_newsletter_signup_source_quality_report_from_db(db, **kwargs)
+                report = build_blog_newsletter_topic_echo_risk_report_from_db(db, **kwargs)
     except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(format_newsletter_signup_source_quality_text(report) if args.format == 'text' else format_newsletter_signup_source_quality_json(report))
+    print(format_blog_newsletter_topic_echo_risk_text(report) if args.format == 'text' else format_blog_newsletter_topic_echo_risk_json(report))
     return 0
 
 if __name__ == '__main__':
