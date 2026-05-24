@@ -464,7 +464,11 @@ class TestBatchScoreRelevance:
         ks.embedder.embed_batch.side_effect = Exception("API error")
 
         candidates = [{"text": "test"}]
-        _batch_score_relevance(candidates, ks)
+        sleep = MagicMock()
+        _batch_score_relevance(candidates, ks, sleep=sleep)
+
+        assert [call.args[0] for call in sleep.call_args_list] == [30, 60]
+        assert ks.embedder.embed_batch.call_count == 3
         assert candidates[0]["relevance"] == 0.0
 
     def test_multiple_candidates_scored(self):

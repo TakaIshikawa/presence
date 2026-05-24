@@ -178,7 +178,16 @@ def test_cli_json_output_uses_db_path(file_db, capsys):
     )
     _set_detected_at(file_db, reply_id, "2026-04-23 08:00:00")
 
-    assert main(["--db", str(file_db.db_path), "--days", "30", "--format", "json"]) == 0
+    assert main([
+        "--db",
+        str(file_db.db_path),
+        "--days",
+        "30",
+        "--format",
+        "json",
+        "--now",
+        NOW.isoformat(),
+    ]) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["filters"]["days"] == 30
@@ -213,7 +222,7 @@ def test_cli_text_output_uses_script_context(capsys):
     )
 
     with patch("detect_reply_questions.script_context", _mock_script_context(FakeDb())):
-        assert main(["--format", "text", "--days", "30"]) == 0
+        assert main(["--format", "text", "--days", "30", "--now", NOW.isoformat()]) == 0
 
     output = capsys.readouterr().out
     assert "#ctx-ask @taro score=" in output

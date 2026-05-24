@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -37,7 +38,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stale-days", type=_positive_int, default=DEFAULT_STALE_DAYS)
     parser.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT)
     parser.add_argument("--format", choices=("json", "text"), default="json")
+    parser.add_argument(
+        "--now",
+        help="Override the current UTC timestamp for deterministic reports.",
+    )
     return parser.parse_args(argv)
+
+
+def _parse_now(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         "lookback_days": args.lookback_days,
         "stale_days": args.stale_days,
         "limit": args.limit,
+        "now": _parse_now(args.now),
     }
     try:
         if args.db:

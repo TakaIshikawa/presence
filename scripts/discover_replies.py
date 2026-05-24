@@ -4,6 +4,7 @@
 import json
 import logging
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -101,6 +102,7 @@ def _batch_score_relevance(
     candidates: list[dict],
     knowledge_store: KnowledgeStore,
     batch_size: int = 20,
+    sleep=time.sleep,
 ) -> None:
     """Score candidates against knowledge base using batch embedding.
 
@@ -109,7 +111,6 @@ def _batch_score_relevance(
     locally. Mutates each candidate dict to set 'relevance' and
     'knowledge_context' keys.
     """
-    import time
     from knowledge.store import KnowledgeItem
 
     if not candidates:
@@ -140,7 +141,7 @@ def _batch_score_relevance(
     total_batches = (len(texts) - 1) // batch_size + 1
     for i in range(0, len(texts), batch_size):
         if i > 0:
-            time.sleep(21)  # Stay under 3 RPM
+            sleep(21)  # Stay under 3 RPM
         batch = texts[i : i + batch_size]
         batch_num = i // batch_size + 1
         logger.info(f"Embedding batch {batch_num}/{total_batches} ({len(batch)} texts)")
@@ -155,7 +156,7 @@ def _batch_score_relevance(
                 if attempt < 2:
                     wait = 30 * (attempt + 1)
                     logger.warning(f"Batch {batch_num} attempt {attempt + 1} failed, retrying in {wait}s: {e}")
-                    time.sleep(wait)
+                    sleep(wait)
                 else:
                     logger.warning(f"Batch {batch_num} failed after 3 attempts: {e}")
                     for idx, c in enumerate(candidates):

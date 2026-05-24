@@ -64,7 +64,16 @@ def test_from_db_handles_optional_listed_count_and_cli(tmp_path, capsys):
 
     db_path = tmp_path / "profile.sqlite"
     conn.backup(sqlite3.connect(db_path))
-    assert script.main(["--db", str(db_path), "--expected-platform", "x", "--expected-platform", "linkedin"]) == 0
+    assert script.main([
+        "--db",
+        str(db_path),
+        "--expected-platform",
+        "x",
+        "--expected-platform",
+        "linkedin",
+        "--now",
+        NOW.isoformat(),
+    ]) == 0
     assert json.loads(capsys.readouterr().out)["summary"]["issue_count"] == 1
 
     missing = build_profile_metric_platform_coverage_report_from_db(sqlite3.connect(":memory:"), now=NOW)

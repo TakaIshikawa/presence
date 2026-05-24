@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -46,11 +47,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Include questions with approved, posted, dismissed, or otherwise resolved reply state.",
     )
+    parser.add_argument(
+        "--now",
+        help="Override the current UTC timestamp for deterministic reports.",
+    )
     return parser.parse_args(argv)
+
+
+def _parse_now(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    now = _parse_now(args.now)
     try:
         if args.db:
             with sqlite3.connect(args.db) as conn:
@@ -60,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
                     days=args.days,
                     min_score=args.min_score,
                     include_resolved=args.include_resolved,
+                    now=now,
                 )
         else:
             with script_context() as (_config, db):
@@ -68,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                     days=args.days,
                     min_score=args.min_score,
                     include_resolved=args.include_resolved,
+                    now=now,
                 )
     except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

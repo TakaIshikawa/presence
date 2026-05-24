@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -101,17 +102,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="text",
         help="Output format (default: text).",
     )
+    parser.add_argument(
+        "--now",
+        help="Override the current UTC timestamp for deterministic reports.",
+    )
     return parser.parse_args(argv)
+
+
+def _parse_now(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    now = _parse_now(args.now)
     with script_context() as (_config, db):
         results = seed_workflow_run_ideas(
             db,
             days=args.days,
             min_failures=args.min_failures,
             dry_run=args.dry_run,
+            now=now,
         )
     if args.format == "json":
         print(format_results_json(results))

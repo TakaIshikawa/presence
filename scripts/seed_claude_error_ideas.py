@@ -98,12 +98,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Report seed candidates without writing content ideas to the database",
     )
     parser.add_argument("--json", action="store_true", help="Print JSON instead of a table")
+    parser.add_argument(
+        "--now",
+        help="Override the current UTC timestamp for deterministic reports.",
+    )
     return parser.parse_args(argv)
+
+
+def _parse_now(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    now = datetime.now(timezone.utc)
+    now = _parse_now(args.now)
     with script_context() as (_config, db):
         seed_results = seed_claude_error_ideas(
             db,

@@ -165,7 +165,17 @@ def test_cli_supports_format_json_and_dry_run(db, capsys):
         return Context()
 
     with patch("seed_workflow_run_ideas.script_context", fake_script_context):
-        exit_code = main(["--days", "30", "--min-failures", "2", "--dry-run", "--format", "json"])
+        exit_code = main([
+            "--days",
+            "30",
+            "--min-failures",
+            "2",
+            "--dry-run",
+            "--format",
+            "json",
+            "--now",
+            NOW.isoformat(),
+        ])
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)

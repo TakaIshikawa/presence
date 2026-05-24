@@ -184,7 +184,7 @@ def test_main_prints_dry_run_json_without_persisting(db, capsys):
         yield None, db
 
     with patch("seed_claude_error_ideas.script_context", fake_script_context):
-        main(["--days", "30", "--min-count", "2", "--dry-run", "--json"])
+        main(["--days", "30", "--min-count", "2", "--dry-run", "--json", "--now", NOW.isoformat()])
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["seed_results"][0]["status"] == "proposed"
