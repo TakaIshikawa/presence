@@ -1,46 +1,56 @@
-"""Evaluate newsletter subscriber signup source quality."""
+"""Evaluate newsletter signup source quality and attribution gaps."""
 from __future__ import annotations
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from typing import Any
-from ._batch_report_common import *
-ARTIFACT_TYPE="newsletter_signup_source_quality"; DEFAULT_LIMIT=50; DEFAULT_BURST_THRESHOLD=3
-DISPOSABLE={"mailinator.com","10minutemail.com","guerrillamail.com","tempmail.com","yopmail.com"}
-def build_newsletter_signup_source_quality_report(rows:list[dict[str,Any]],*,limit:int=DEFAULT_LIMIT,burst_threshold:int=DEFAULT_BURST_THRESHOLD,missing_tables:list[str]|None=None,missing_columns:dict[str,list[str]]|None=None,now=None)->dict[str,Any]:
-    positive("limit",limit); positive("burst_threshold",burst_threshold)
-    source_stats=defaultdict(lambda:{"total":0,"missing_consent":0,"missing_campaign":0,"disposable_domain":0,"domain_bursts":0})
-    domain_counts=Counter(domain(r.get("email")) for r in rows if domain(r.get("email")))
-    findings=[]
-    for i,r in enumerate(rows):
-        src=clean(r.get("source") or r.get("signup_source"),"unknown"); created=dt(r.get("created_at")); d=domain(r.get("email")); campaign=clean(r.get("campaign"))
-        source_stats[src]["total"]+=1
-        reasons=[]; severity=0
-        if not clean(r.get("consented_at")): reasons.append("missing_consent_timestamp"); source_stats[src]["missing_consent"]+=1; severity+=40
-        if not campaign: reasons.append("missing_campaign_attribution"); source_stats[src]["missing_campaign"]+=1; severity+=20
-        if d in DISPOSABLE: reasons.append("disposable_domain"); source_stats[src]["disposable_domain"]+=1; severity+=30
-        if d and domain_counts[d]>=burst_threshold: reasons.append("repeated_email_domain_burst"); source_stats[src]["domain_bursts"]+=1; severity+=10+domain_counts[d]
-        if reasons:
-            findings.append({"subscriber_id":r.get("subscriber_id") or r.get("id") or i+1,"source":src,"email_domain":d or None,"created_at":created.isoformat() if created else None,"reasons":sorted(reasons),"severity":severity})
-    breakdown=[{"source":s,**v,"issue_rate":round((v["missing_consent"]+v["missing_campaign"]+v["disposable_domain"]+v["domain_bursts"])/max(v["total"],1),4)} for s,v in source_stats.items()]
-    breakdown.sort(key=lambda x:(-x["issue_rate"],x["source"]))
-    findings.sort(key=lambda f:(-f["severity"], f["created_at"] or "", str(f["subscriber_id"])), reverse=False)
-    findings=sorted(findings,key=lambda f:(-f["severity"], -(dt(f["created_at"]) or dt("1970-01-01T00:00:00+00:00")).timestamp(), str(f["subscriber_id"])))[:limit]
-    return {"artifact_type":ARTIFACT_TYPE,"generated_at":now_iso(now),"filters":{"limit":limit,"burst_threshold":burst_threshold},"totals":{"subscribers":len(rows),"sources":len(source_stats),"findings":len(findings)},"source_breakdown":breakdown,"findings":findings,"missing_tables":sorted(missing_tables or []),"missing_columns":{k:sorted(v) for k,v in sorted((missing_columns or {}).items())},"empty_state":empty_state(findings,"No newsletter signup source quality issues found.",schema_gap=bool(missing_tables or missing_columns))}
-def build_newsletter_signup_source_quality_report_from_db(db_or_conn:Any,**kw)->dict[str,Any]:
-    conn=connection(db_or_conn); s=schema(conn); mt=[] if "newsletter_subscribers" in s else ["newsletter_subscribers"]; mc={}; rows=[]
-    if not mt:
-        cols=s["newsletter_subscribers"]; req=["id"]; opt=["signup_source","source","campaign","consented_at","created_at","email"]
-        miss=[c for c in req if c not in cols]
-        if miss: mc["newsletter_subscribers"]=miss
-        else: rows=load_table(conn,"newsletter_subscribers",cols,{"id":("id",),"subscriber_id":("subscriber_id","id"),"source":("signup_source","source"),"campaign":("campaign","utm_campaign"),"consented_at":("consented_at","consent_at"),"created_at":("created_at","signed_up_at"),"email":("email","email_address")})
-    return build_newsletter_signup_source_quality_report(rows,missing_tables=mt,missing_columns=mc,**kw)
-def format_newsletter_signup_source_quality_json(r): return json_dumps(r)
-def format_newsletter_signup_source_quality_text(r):
-    lines=["Newsletter Signup Source Quality",f"Generated: {r['generated_at']}",f"Totals: subscribers={r['totals']['subscribers']} sources={r['totals']['sources']} findings={r['totals']['findings']}"]
-    if r["missing_tables"]: lines.append("Missing tables: "+", ".join(r["missing_tables"]))
-    if r["missing_columns"]: lines.append("Missing columns: "+flatten_missing(r["missing_columns"]))
-    if not r["findings"]: lines.append(r["empty_state"]["message"]); return "\n".join(lines)
-    lines += ["","source | total | missing_consent | missing_campaign | disposable | bursts"]
-    for b in r["source_breakdown"]: lines.append(f"{b['source']} | {b['total']} | {b['missing_consent']} | {b['missing_campaign']} | {b['disposable_domain']} | {b['domain_bursts']}")
-    lines += ["","subscriber_id | source | severity | reasons"]
-    for f in r["findings"]: lines.append(f"{f['subscriber_id']} | {f['source']} | {f['severity']} | {', '.join(f['reasons'])}")
-    return "\n".join(lines)
+from ._report_utils import clean, connection, dt, expr, json_dumps, lower, now_iso, positive, schema
+ARTIFACT_TYPE="newsletter_signup_source_quality"; DEFAULT_LIMIT=50; DEFAULT_BURST_THRESHOLD=3; DEFAULT_MIN_SUBSCRIBERS=1
+DISPOSABLE={"mailinator.com","10minutemail.com","guerrillamail.com","tempmail.com","trashmail.com","yopmail.com"}
+def build_newsletter_signup_source_quality_report(subscribers:list[dict[str,Any]],events:list[dict[str,Any]]|None=None,*,burst_threshold:int=DEFAULT_BURST_THRESHOLD,min_subscribers:int=DEFAULT_MIN_SUBSCRIBERS,limit:int=DEFAULT_LIMIT,missing_tables:list[str]|None=None,missing_columns:dict[str,list[str]]|None=None,now:Any=None)->dict[str,Any]:
+ positive("burst_threshold",burst_threshold); positive("min_subscribers",min_subscribers); positive("limit",limit)
+ groups:dict[str,list[dict[str,Any]]]=defaultdict(list)
+ for row in subscribers: groups[clean(row.get("source") or row.get("signup_source"),"unknown")].append(row)
+ source_breakdown=[]; findings=[]
+ for source,items in groups.items():
+  if len(items)<min_subscribers: continue
+  missing_consent=sum(1 for r in items if not clean(r.get("consented_at") or r.get("consent_timestamp")))
+  missing_campaign=sum(1 for r in items if not clean(r.get("campaign") or r.get("utm_campaign")))
+  domains=[_domain(r.get("email")) for r in items]; counts=Counter(d for d in domains if d)
+  disposable=sum(c for d,c in counts.items() if d in DISPOSABLE)
+  bursts={d:c for d,c in counts.items() if c>=burst_threshold}
+  source_breakdown.append({"source":source,"subscriber_count":len(items),"missing_consent_count":missing_consent,"missing_campaign_count":missing_campaign,"disposable_domain_count":disposable,"burst_domains":dict(sorted(bursts.items()))})
+  if missing_consent: findings.append(_finding(source,"missing_consent",missing_consent,items))
+  if missing_campaign: findings.append(_finding(source,"missing_campaign",missing_campaign,items))
+  if disposable: findings.append(_finding(source,"disposable_domain",disposable,items))
+  for d,c in sorted(bursts.items()): findings.append(_finding(source,"domain_burst",c,items,domain=d))
+ findings.sort(key=lambda f:(-_severity(f["issue_type"],f["count"])[0],-_severity(f["issue_type"],f["count"])[1], f["latest_created_at"] or "", f["source"], f.get("domain") or ""))
+ source_breakdown.sort(key=lambda r:(-r["subscriber_count"],r["source"]))
+ shown=findings[:limit]
+ return {"artifact_type":ARTIFACT_TYPE,"generated_at":now_iso(now),"filters":{"min_subscribers":min_subscribers,"burst_threshold":burst_threshold,"limit":limit},"thresholds":{"min_subscribers":min_subscribers,"burst_threshold":burst_threshold,"limit":limit},"totals":{"subscriber_count":len(subscribers),"source_count":len(source_breakdown),"finding_count":len(findings),"shown_findings":len(shown)},"summary":{"source_count":len(source_breakdown),"subscriber_count":len(subscribers),"shown_count":len(shown)},"source_breakdown":source_breakdown,"sources":source_breakdown,"findings":shown,"missing_tables":sorted(missing_tables or []),"missing_columns":{k:sorted(v) for k,v in sorted((missing_columns or {}).items())},"empty_state":{"is_empty":not findings,"message":"No newsletter signup source quality issues found." if not findings else None}}
+def build_newsletter_signup_source_quality_report_from_db(db_or_conn:Any,**kwargs:Any)->dict[str,Any]:
+ conn=connection(db_or_conn); s=schema(conn); miss=[] if "newsletter_subscribers" in s else ["newsletter_subscribers"]; mc={}
+ subs=_subs(conn,s,mc) if "newsletter_subscribers" in s else []
+ return build_newsletter_signup_source_quality_report(subs,missing_tables=miss,missing_columns=mc,**kwargs)
+def format_newsletter_signup_source_quality_json(report:dict[str,Any])->str: return json_dumps(report)
+def format_newsletter_signup_source_quality_text(report:dict[str,Any])->str:
+ lines=["Newsletter Signup Source Quality",f"Generated: {report['generated_at']}",f"Totals: sources={report['totals']['source_count']} subscribers={report['totals']['subscriber_count']} findings={report['totals']['finding_count']} shown={report['totals']['shown_findings']}"]
+ if report["missing_tables"]: lines.append("Missing tables: "+", ".join(report["missing_tables"]))
+ if not report["findings"]: lines.append(report["empty_state"]["message"] or "No signup source quality rows found."); return "\n".join(lines)
+ lines+=["","issue | source | count | domain | latest_created_at"]
+ for r in report["findings"]: lines.append(f"{r['issue_type']} | {r['source']} | {r['count']} | {r.get('domain') or '-'} | {r.get('latest_created_at') or '-'}")
+ return "\n".join(lines)
+def _subs(conn:Any,s:dict[str,set[str]],mc:dict[str,list[str]])->list[dict[str,Any]]:
+ cols=s["newsletter_subscribers"]; gid=next((c for c in ("id","subscriber_id") if c in cols),None)
+ if not gid: mc["newsletter_subscribers"]=["id"]; return []
+ needed={"email","consented_at","campaign","created_at"}; missing=sorted(c for c in needed if c not in cols and not (c=="campaign" and "utm_campaign" in cols))
+ if missing: mc["newsletter_subscribers"]=missing
+ select=[f"{gid} AS subscriber_id",expr(cols,"source","signup_source",default="'unknown'",out="source"),expr(cols,"campaign","utm_campaign",default="NULL",out="campaign"),expr(cols,"consented_at","consent_timestamp",default="NULL",out="consented_at"),expr(cols,"created_at","subscribed_at",default="NULL",out="created_at"),expr(cols,"email",default="NULL",out="email")]
+ return [dict(r) for r in conn.execute(f"SELECT {', '.join(select)} FROM newsletter_subscribers ORDER BY {gid}")]
+def _domain(email:Any)->str:
+ text=lower(email); return text.rsplit("@",1)[-1] if "@" in text else ""
+def _finding(source:str,issue:str,count:int,items:list[dict[str,Any]],domain:str|None=None)->dict[str,Any]:
+ latest=max((dt(r.get("created_at")) for r in items if dt(r.get("created_at"))), default=None)
+ return {"issue_type":issue,"source":source,"count":count,"domain":domain,"latest_created_at":latest.isoformat() if latest else None}
+def _severity(issue:str,count:int)->tuple[int,int]:
+ rank={"disposable_domain":4,"domain_burst":3,"missing_consent":2,"missing_campaign":1}.get(issue,0)
+ return (rank,count)
