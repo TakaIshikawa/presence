@@ -1,0 +1,3 @@
+"""GitHub Activity Author Response Time report."""
+from __future__ import annotations
+from ._batch_generated_impl import build_github_activity_author_response_time_report, build_github_activity_author_response_time_report_from_db, format_github_activity_author_response_time_json, format_github_activity_author_response_time_text

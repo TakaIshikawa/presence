@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report newsletter signup source quality."""
+"""Report content feedback reopen rate."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from evaluation.newsletter_signup_source_quality import (  # noqa: E402
-    DEFAULT_BURST_THRESHOLD,
+from evaluation.content_feedback_reopen_rate import (  # noqa: E402
     DEFAULT_LIMIT,
-    build_newsletter_signup_source_quality_report_from_db,
-    format_newsletter_signup_source_quality_json,
-    format_newsletter_signup_source_quality_text,
+    DEFAULT_MIN_RESOLVED,
+    DEFAULT_WINDOW_DAYS,
+    build_content_feedback_reopen_rate_report_from_db,
+    format_content_feedback_reopen_rate_json,
+    format_content_feedback_reopen_rate_text,
 )
 from runner import script_context  # noqa: E402
 
@@ -34,27 +35,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db")
     parser.add_argument("--format", choices=("json", "text"), default="json")
+    parser.add_argument("--window-days", type=_positive_int, default=DEFAULT_WINDOW_DAYS)
+    parser.add_argument("--min-resolved", type=_positive_int, default=DEFAULT_MIN_RESOLVED)
     parser.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT)
-    parser.add_argument("--burst-threshold", type=_positive_int, default=DEFAULT_BURST_THRESHOLD)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     try:
         args = parse_args(argv)
-        kwargs = {"limit": args.limit, "burst_threshold": args.burst_threshold}
+        kwargs = {"window_days": args.window_days, "min_resolved": args.min_resolved, "limit": args.limit}
         if args.db:
             with sqlite3.connect(args.db) as conn:
-                report = build_newsletter_signup_source_quality_report_from_db(conn, **kwargs)
+                report = build_content_feedback_reopen_rate_report_from_db(conn, **kwargs)
         else:
             with script_context() as (_config, db):
-                report = build_newsletter_signup_source_quality_report_from_db(db, **kwargs)
+                report = build_content_feedback_reopen_rate_report_from_db(db, **kwargs)
     except SystemExit as exc:
         return int(exc.code or 0)
     except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(format_newsletter_signup_source_quality_text(report) if args.format == "text" else format_newsletter_signup_source_quality_json(report))
+    print(format_content_feedback_reopen_rate_text(report) if args.format == "text" else format_content_feedback_reopen_rate_json(report))
     return 0
 
 
