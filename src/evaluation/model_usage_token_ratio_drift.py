@@ -37,7 +37,7 @@ def build_model_usage_token_ratio_drift_report(
     if limit <= 0:
         raise ValueError("limit must be positive")
 
-    generated_at = _utc(now or datetime.now(timezone.utc))
+    generated_at = _report_now(now, rows, ("created_at",))
     current_start = generated_at - timedelta(days=current_days)
     baseline_start = current_start - timedelta(days=baseline_days)
     grouped: dict[tuple[str, str], dict[str, list[dict[str, Any]]]] = defaultdict(lambda: {"current": [], "baseline": []})
@@ -188,6 +188,18 @@ def _parse_time(value: Any) -> datetime | None:
         return _utc(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
     except ValueError:
         return None
+
+
+def _report_now(now: datetime | None, rows: list[dict[str, Any]], timestamp_keys: tuple[str, ...]) -> datetime:
+    if now is not None:
+        return _utc(now)
+    observed = [
+        parsed
+        for row in rows
+        for key in timestamp_keys
+        if (parsed := _parse_time(row.get(key))) is not None
+    ]
+    return max(observed) if observed else datetime.now(timezone.utc)
 
 
 def _to_int(value: Any) -> int:

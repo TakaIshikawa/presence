@@ -103,13 +103,18 @@ def build_eval_result_batch_integrity_report_from_db(db_or_conn: Any, **kwargs: 
     }
     if missing_tables or missing_columns:
         return build_eval_result_batch_integrity_report([], missing_tables=missing_tables, missing_columns=missing_columns, **kwargs)
-    days = int(kwargs.get("days", DEFAULT_DAYS))
-    now = _utc(kwargs.get("now") or datetime.now(timezone.utc))
+    report_kwargs = dict(kwargs)
+    days = int(report_kwargs.get("days", DEFAULT_DAYS))
+    now = _utc(report_kwargs["now"]) if report_kwargs.get("now") is not None else (
+        _latest_timestamp(conn, "eval_results", schema["eval_results"], ("created_at", "evaluated_at"))
+        or datetime.now(timezone.utc)
+    )
+    report_kwargs["now"] = now
     return build_eval_result_batch_integrity_report(
         _load_rows(conn, schema, cutoff=now - timedelta(days=days)),
         missing_tables=missing_tables,
         missing_columns=missing_columns,
-        **kwargs,
+        **report_kwargs,
     )
 
 
@@ -198,6 +203,16 @@ def _connection(db_or_conn: Any) -> sqlite3.Connection:
 def _schema(conn: sqlite3.Connection) -> dict[str, set[str]]:
     rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     return {row[0]: {column[1] for column in conn.execute(f"PRAGMA table_info({row[0]})")} for row in rows}
+
+
+def _latest_timestamp(conn: sqlite3.Connection, table: str, columns: set[str], names: tuple[str, ...]) -> datetime | None:
+    for name in names:
+        if name not in columns:
+            continue
+        row = conn.execute(f"SELECT MAX(datetime({name})) FROM {table}").fetchone()
+        if row and row[0]:
+            return _utc(datetime.fromisoformat(str(row[0]).replace(" ", "T")))
+    return None
 
 
 def _col(columns: set[str], *names: str, fallback: str, alias: str) -> str:

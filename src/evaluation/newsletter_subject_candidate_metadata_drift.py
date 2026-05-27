@@ -41,11 +41,14 @@ def build_newsletter_subject_candidate_metadata_drift_report_from_db(
         raise ValueError("days must be positive")
     if limit <= 0:
         raise ValueError("limit must be positive")
-    generated_at = _utc(now or datetime.now(timezone.utc))
     source_filter = _normalize_filter(source)
     conn = _connection(db_or_conn)
     schema = _schema(conn)
     columns = schema.get("newsletter_subject_candidates")
+    generated_at = _utc(now) if now is not None else (
+        _latest_timestamp(conn, "newsletter_subject_candidates", columns or set(), ("created_at",))
+        or datetime.now(timezone.utc)
+    )
     if columns is None:
         return _report(generated_at, days, source_filter, limit, [], 0, ["newsletter_subject_candidates"], {})
     missing = sorted(REQUIRED_COLUMNS - columns)
@@ -245,6 +248,16 @@ def _connection(db_or_conn: Any) -> sqlite3.Connection:
 def _schema(conn: sqlite3.Connection) -> dict[str, set[str]]:
     rows = conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
     return {str(row[0]): {str(column[1]) for column in conn.execute(f"PRAGMA table_info({row[0]})")} for row in rows}
+
+
+def _latest_timestamp(conn: sqlite3.Connection, table: str, columns: set[str], names: tuple[str, ...]) -> datetime | None:
+    for name in names:
+        if name not in columns:
+            continue
+        row = conn.execute(f"SELECT MAX(datetime({name})) FROM {table}").fetchone()
+        if row and row[0]:
+            return _utc(datetime.fromisoformat(str(row[0]).replace(" ", "T")))
+    return None
 
 
 def _normalize_filter(value: str | Iterable[str]) -> tuple[str, ...]:

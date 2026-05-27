@@ -37,7 +37,11 @@ def build_content_claim_check_failure_triage_report(
     if limit <= 0:
         raise ValueError("limit must be positive")
 
-    generated_at = _utc(now or datetime.now(timezone.utc))
+    generated_at = _report_now(
+        now,
+        claim_rows,
+        ("effective_checked_at", "claim_check_updated_at", "claim_check_created_at"),
+    )
     cutoff = generated_at - timedelta(days=days)
     findings: list[dict[str, Any]] = []
     unsupported_rows = 0
@@ -268,6 +272,18 @@ def _parse_dt(value: Any) -> datetime | None:
         return _utc(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
     except ValueError:
         return None
+
+
+def _report_now(now: datetime | None, rows: list[dict[str, Any]], timestamp_keys: tuple[str, ...]) -> datetime:
+    if now is not None:
+        return _utc(now)
+    observed = [
+        parsed
+        for row in rows
+        for key in timestamp_keys
+        if (parsed := _parse_dt(row.get(key))) is not None
+    ]
+    return max(observed) if observed else datetime.now(timezone.utc)
 
 
 def _truthy(value: Any) -> bool:

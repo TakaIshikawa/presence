@@ -65,13 +65,15 @@ def build_newsletter_segment_engagement_drift_report(
         raise ValueError("days and baseline_days must be positive")
     if min_delta_pct < 0:
         raise ValueError("min_delta_pct must be non-negative")
-    generated_at = _utc(now or datetime.now(timezone.utc))
-    recent_start = generated_at - timedelta(days=days)
-    baseline_start = recent_start - timedelta(days=baseline_days)
-    filters = {"days": days, "baseline_days": baseline_days, "segment": segment, "min_delta_pct": min_delta_pct}
     conn = _connection(db_or_conn)
     schema = _schema(conn)
     table = next((name for name in TABLES if name in schema), None)
+    generated_at = _utc(now) if now is not None else (
+        _latest_timestamp(conn, table, schema[table]) if table else None
+    ) or datetime.now(timezone.utc)
+    recent_start = generated_at - timedelta(days=days)
+    baseline_start = recent_start - timedelta(days=baseline_days)
+    filters = {"days": days, "baseline_days": baseline_days, "segment": segment, "min_delta_pct": min_delta_pct}
     if table is None:
         return _report(generated_at, filters, (), 0, TABLES)
     rows = _load_rows(conn, table, schema[table], baseline_start.isoformat(), generated_at.isoformat(), segment)
@@ -140,7 +142,7 @@ def _load_rows(conn: sqlite3.Connection, table: str, columns: set[str], start: s
     unsub_col = _first(columns, ("unsubscribe_rate", "unsub_rate"))
     if not segment_col or not ts_col:
         return []
-    where = [f"{ts_col} >= ?", f"{ts_col} < ?"]
+    where = [f"{ts_col} >= ?", f"{ts_col} <= ?"]
     params: list[Any] = [start, end]
     if segment:
         where.append(f"{segment_col} = ?")
@@ -186,6 +188,16 @@ def _increase_pct(recent: float, baseline: float) -> float:
 
 def _schema(conn: sqlite3.Connection) -> dict[str, set[str]]:
     return {str(row[0]): {str(col[1]) for col in conn.execute(f"PRAGMA table_info({row[0]})")} for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def _latest_timestamp(conn: sqlite3.Connection, table: str, columns: set[str]) -> datetime | None:
+    ts_col = _first(columns, ("sent_at", "published_at", "created_at"))
+    if not ts_col:
+        return None
+    row = conn.execute(f"SELECT MAX(datetime({ts_col})) FROM {table}").fetchone()
+    if row and row[0]:
+        return _utc(datetime.fromisoformat(str(row[0]).replace(" ", "T")))
+    return None
 
 
 def _connection(db_or_conn: Any) -> sqlite3.Connection:

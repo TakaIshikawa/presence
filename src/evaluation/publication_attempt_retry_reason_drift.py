@@ -49,7 +49,7 @@ def build_publication_attempt_retry_reason_drift_report(
     positive("min_sample", min_sample)
     bounded_share("min_delta", min_delta)
 
-    generated_at = now_value(now)
+    generated_at = now_value(now if now is not None else _latest_attempted_at(rows))
     current_start = generated_at - timedelta(days=current_days)
     baseline_start = current_start - timedelta(days=baseline_days)
     buckets: dict[str, dict[str, Counter[str]]] = defaultdict(
@@ -273,3 +273,12 @@ def _share(count: int, total: int) -> float:
 
 def _severity(delta_share: float, current_count: int) -> float:
     return round(abs(delta_share) * 100 + current_count, 2)
+
+
+def _latest_attempted_at(rows: list[dict[str, Any]]) -> Any:
+    observed = [
+        parsed
+        for row in rows
+        if (parsed := dt(row.get("attempted_at") or row.get("created_at"))) is not None
+    ]
+    return max(observed) if observed else None
