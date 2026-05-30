@@ -91,7 +91,7 @@ def build_visual_engagement_attribution_report(
 
     conn = _connection(db_or_conn)
     schema = _schema(conn)
-    now = _ensure_aware(now or datetime.now(timezone.utc))
+    now = _ensure_aware(now or _bounded_observed_now(_latest_content_observed_at(conn, schema)))
     cutoff = now - timedelta(days=days)
     platform_filter = _platform_label(platform) if _clean_label(platform) else None
 
@@ -244,6 +244,33 @@ def _content_rows(conn: sqlite3.Connection, schema: dict[str, set[str]]) -> list
              ORDER BY id ASC"""
     ).fetchall()
     return [dict(row) for row in rows if _int_or_none(row["id"]) is not None]
+
+
+def _latest_content_observed_at(conn: sqlite3.Connection, schema: dict[str, set[str]]) -> datetime | None:
+    timestamps: list[datetime] = []
+    if "content_publications" in schema:
+        for column in ("published_at",):
+            if column in schema["content_publications"]:
+                row = conn.execute(f"SELECT MAX({column}) AS observed_at FROM content_publications").fetchone()
+                parsed = _parse_timestamp(row["observed_at"] if row else None)
+                if parsed is not None:
+                    timestamps.append(parsed)
+    if "generated_content" in schema:
+        for column in ("published_at",):
+            if column in schema["generated_content"]:
+                row = conn.execute(f"SELECT MAX({column}) AS observed_at FROM generated_content").fetchone()
+                parsed = _parse_timestamp(row["observed_at"] if row else None)
+                if parsed is not None:
+                    timestamps.append(parsed)
+    return max(timestamps) if timestamps else None
+
+
+def _bounded_observed_now(observed_at: datetime | None) -> datetime:
+    current = datetime.now(timezone.utc)
+    if observed_at is None:
+        return current
+    observed_at = _ensure_aware(observed_at)
+    return observed_at if observed_at <= current else current
 
 
 def _publication_rows(

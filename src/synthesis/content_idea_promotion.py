@@ -78,7 +78,7 @@ def build_content_idea_promotion_report(
     if limit < 0:
         raise ValueError("limit must be non-negative")
 
-    now = _ensure_aware(now or datetime.now(timezone.utc))
+    now = _ensure_aware(now or _bounded_observed_now(_latest_engagement_observed_at(db)))
     cutoff = now - timedelta(days=days)
     if limit == 0:
         return ContentIdeaPromotionReport(
@@ -225,6 +225,31 @@ def _load_topic_engagement_rows(db, *, cutoff: datetime) -> list[dict[str, Any]]
         item["engagement_score"] = sum(platform_scores.values())
         rows.append(item)
     return rows
+
+
+def _latest_engagement_observed_at(db) -> datetime | None:
+    timestamps: list[datetime] = []
+    for table in ("post_engagement", "linkedin_engagement", "bluesky_engagement"):
+        if not _has_table(db, table):
+            continue
+        row = db.conn.execute(f"SELECT MAX(fetched_at) AS fetched_at FROM {table}").fetchone()
+        parsed = _parse_datetime(row["fetched_at"] if row else None)
+        if parsed is not None:
+            timestamps.append(parsed)
+    return max(timestamps) if timestamps else None
+
+
+def _bounded_observed_now(observed_at: datetime | None) -> datetime:
+    current = datetime.now(timezone.utc)
+    if observed_at is None:
+        return current
+    observed_at = _ensure_aware(observed_at)
+    return observed_at if observed_at <= current else current
+
+
+def _has_table(db, table: str) -> bool:
+    row = db.conn.execute("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?", (table,)).fetchone()
+    return row is not None
 
 
 def _load_open_content_ideas(

@@ -79,9 +79,9 @@ def build_planned_topic_source_material_integrity_report_from_db(
     """Load planned topics from SQLite and build an integrity report."""
     if days <= 0:
         raise ValueError("days must be positive")
-    generated_at = _utc(now or datetime.now(timezone.utc))
     conn = _connection(db_or_conn)
     schema = _schema(conn)
+    generated_at = _utc(now or _bounded_observed_now(_latest_planned_topic_observed_at(conn, schema.get(TABLE, set()))))
     missing_tables = [] if TABLE in schema else [TABLE]
     missing_columns = {
         TABLE: sorted(REQUIRED_COLUMNS - schema.get(TABLE, set()))
@@ -255,6 +255,32 @@ def _window_filter(columns: set[str], cutoff: datetime) -> tuple[str, list[Any]]
     return "(" + " OR ".join(filters) + ")", params
 
 
+def _latest_planned_topic_observed_at(conn: sqlite3.Connection, columns: set[str]) -> datetime | None:
+    if not columns:
+        return None
+    timestamps: list[datetime] = []
+    for column in ("created_at", "updated_at"):
+        if column in columns:
+            row = conn.execute(f"SELECT MAX({column}) AS observed_at FROM planned_topics").fetchone()
+            parsed = _parse_timestamp(row["observed_at"] if row else None)
+            if parsed is not None:
+                timestamps.append(parsed)
+    if "target_date" in columns:
+        row = conn.execute("SELECT MAX(target_date) AS observed_at FROM planned_topics").fetchone()
+        parsed_date = _parse_date(row["observed_at"] if row else None)
+        if parsed_date is not None:
+            timestamps.append(datetime.combine(parsed_date, datetime.min.time(), tzinfo=timezone.utc))
+    return max(timestamps) if timestamps else None
+
+
+def _bounded_observed_now(observed_at: datetime | None) -> datetime:
+    current = datetime.now(timezone.utc)
+    if observed_at is None:
+        return current
+    observed_at = _utc(observed_at)
+    return observed_at if observed_at <= current else current
+
+
 def _order_by(columns: set[str]) -> str:
     order = []
     if "target_date" in columns:
@@ -293,6 +319,16 @@ def _parse_date(value: Any) -> date | None:
             return date.fromisoformat(text[:10])
         except ValueError:
             return None
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return _utc(datetime.fromisoformat(str(value).strip().replace("Z", "+00:00")))
+    except ValueError:
+        parsed_date = _parse_date(value)
+        return datetime.combine(parsed_date, datetime.min.time(), tzinfo=timezone.utc) if parsed_date else None
 
 
 def _has_value(value: Any) -> bool:

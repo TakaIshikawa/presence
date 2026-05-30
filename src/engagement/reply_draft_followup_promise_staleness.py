@@ -60,7 +60,7 @@ def build_reply_draft_followup_promise_staleness_report(
         raise ValueError("window_days must be positive")
     if limit <= 0:
         raise ValueError("limit must be positive")
-    generated_at = _utc(now or datetime.now(timezone.utc))
+    generated_at = _utc(now or _bounded_observed_now(_latest_reply_observed_at(rows, stale_hours=stale_hours)))
     cutoff = generated_at - timedelta(days=window_days)
     wanted = _status_set(status)
     resolved = {str(value) for value in (resolved_reply_ids or set())}
@@ -178,6 +178,26 @@ def _promise_phrase(value: Any) -> str | None:
         if pattern.search(text):
             return label
     return None
+
+
+def _latest_reply_observed_at(rows: list[dict[str, Any]], *, stale_hours: int) -> datetime | None:
+    timestamps: list[datetime] = []
+    for row in rows:
+        for key in ("created_at", "updated_at"):
+            parsed = _parse_time(row.get(key))
+            if parsed is not None:
+                timestamps.append(parsed)
+    if not timestamps:
+        return None
+    return max(timestamps) + timedelta(hours=stale_hours)
+
+
+def _bounded_observed_now(observed_at: datetime | None) -> datetime:
+    current = datetime.now(timezone.utc)
+    if observed_at is None:
+        return current
+    observed_at = _utc(observed_at)
+    return observed_at if observed_at <= current else current
 
 
 def _metadata_resolved(value: Any) -> bool:
