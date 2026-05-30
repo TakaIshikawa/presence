@@ -35,7 +35,7 @@ def build_content_claim_check_reviewer_disagreement_report(
     _require_positive("min_reviewers", min_reviewers)
     _require_positive("limit", limit)
 
-    generated_at = _now(now)
+    generated_at = _report_now(now, rows)
     cutoff = generated_at - timedelta(days=window_days)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     scanned_count = 0
@@ -469,6 +469,18 @@ def _now(value: datetime | str | None) -> datetime:
     if parsed is None:
         raise ValueError("now must be a datetime or ISO timestamp")
     return parsed
+
+
+def _report_now(value: datetime | str | None, rows: list[dict[str, Any]]) -> datetime:
+    if value is not None:
+        return _now(value)
+    observed = [
+        parsed
+        for row in rows
+        for key in ("checked_at", "reviewed_at", "created_at", "updated_at")
+        if (parsed := _datetime(row.get(key))) is not None
+    ]
+    return max(observed) if observed else datetime.now(timezone.utc)
 
 
 def _datetime(value: Any) -> datetime | None:
