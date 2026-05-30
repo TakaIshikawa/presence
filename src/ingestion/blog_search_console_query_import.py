@@ -1,32 +1,154 @@
+"""Import Search Console query-level blog metrics."""
 from __future__ import annotations
-import csv,json
-from io import StringIO
+
+import csv
+import hashlib
+import io
+import json
+import sqlite3
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit,urlunsplit
-def _clean(v): return "" if v is None else str(v).strip()
-def _url(v):
- p=urlsplit(_clean(v)); return urlunsplit((p.scheme.lower(),p.netloc.lower(),p.path or "/",p.query,"")) if p.scheme and p.netloc else _clean(v)
-def _num(v,default=0.0):
- try: return float(str(v).strip().rstrip("%"))
- except Exception: return default
-def _items(text):
- raw=text.strip()
- if not raw: return []
- if raw.startswith("{") and "\n" in raw: return [json.loads(l) for l in raw.splitlines() if l.strip()]
- if raw[0] in "[{":
-  obj=json.loads(raw); return obj if isinstance(obj,list) else obj.get("rows") or obj.get("items") or [obj]
- return list(csv.DictReader(StringIO(text)))
-def parse_blog_search_console_query_payload(text:str)->list[dict[str,Any]]:
- out=[]
- for r in _items(text):
-  row={"observed_at":_clean(r.get("observed_at") or r.get("date")),"page_url":_url(r.get("page_url") or r.get("page")),"query":_clean(r.get("query")),"clicks":int(_num(r.get("clicks"),0)),"impressions":int(_num(r.get("impressions"),0)),"ctr":_num(r.get("ctr"),0.0),"position":_num(r.get("position"),0.0)}
-  if not (row["observed_at"] and row["page_url"] and row["query"]): raise ValueError("observed_at, page_url, and query are required")
-  out.append(row)
- return out
-def import_blog_search_console_queries(conn,rows,dry_run=False,now=None):
- _create(conn); existing={tuple(x) for x in conn.execute("SELECT observed_at,page_url,query FROM blog_search_console_queries")}; ins=sum(1 for r in rows if (r["observed_at"],r["page_url"],r["query"]) not in existing)
- if not dry_run: conn.executemany("INSERT INTO blog_search_console_queries VALUES (:observed_at,:page_url,:query,:clicks,:impressions,:ctr,:position) ON CONFLICT(observed_at,page_url,query) DO UPDATE SET clicks=excluded.clicks,impressions=excluded.impressions,ctr=excluded.ctr,position=excluded.position",rows); conn.commit()
- return {"artifact_type":"blog_search_console_query_import","dry_run":dry_run,"summary":{"parsed_count":len(rows),"inserted_count":ins,"updated_count":len(rows)-ins,"applied_count":0 if dry_run else len(rows)},"rows":rows}
-def format_blog_search_console_query_import_json(r): return json.dumps(r,indent=2,sort_keys=True)
-def format_blog_search_console_query_import_text(r): return f"Blog Search Console Query Import\nTotals: parsed={r['summary']['parsed_count']} applied={r['summary']['applied_count']}"
-def _create(c): c.execute("CREATE TABLE IF NOT EXISTS blog_search_console_queries (observed_at TEXT, page_url TEXT, query TEXT, clicks INTEGER, impressions INTEGER, ctr REAL, position REAL, PRIMARY KEY(observed_at,page_url,query))")
+from urllib.parse import urlsplit
+
+from evaluation._batch_report_utils import dump_json, text
+
+SCHEMA = """CREATE TABLE IF NOT EXISTS blog_search_console_queries (
+id TEXT PRIMARY KEY, canonical_path TEXT NOT NULL, search_query TEXT NOT NULL, metric_date TEXT NOT NULL, country TEXT, device TEXT,
+clicks INTEGER, impressions INTEGER, ctr REAL, position REAL)"""
+
+
+def parse_blog_search_console_queries(raw: str) -> list[dict[str, Any]]:
+    rows = []
+    for item in _records(raw):
+        path = _path(item.get("canonical_path") or item.get("url") or item.get("page_url") or item.get("page") or item.get("path"))
+        query = text(item.get("search_query") or item.get("query"))
+        metric_date = text(item.get("metric_date") or item.get("date") or item.get("observed_at"))
+        if not path or not query or not metric_date:
+            raise ValueError("canonical_path, query, and date are required")
+        country = text(item.get("country")) or None
+        device = text(item.get("device")) or None
+        row = {
+            "id": _id(path, query, metric_date, country, device),
+            "canonical_path": path,
+            "search_query": query,
+            "metric_date": metric_date,
+            "country": country,
+            "device": device,
+            "clicks": _int(item.get("clicks")),
+            "impressions": _int(item.get("impressions")),
+            "ctr": _float(item.get("ctr")),
+            "position": _float(item.get("position")),
+            "observed_at": metric_date,
+            "page_url": path,
+            "query": query,
+        }
+        rows.append(row)
+    rows.sort(key=lambda r: r["id"])
+    return rows
+
+
+def parse_blog_search_console_query_payload(raw: str) -> list[dict[str, Any]]:
+    return parse_blog_search_console_queries(raw)
+
+
+def upsert_blog_search_console_queries(conn: sqlite3.Connection, rows: list[dict[str, Any]], dry_run: bool = False):
+    inserted_count, updated_count = _change_counts(conn, rows) if _table_exists(conn) else (len(rows), 0)
+    if not dry_run:
+        conn.execute(SCHEMA)
+        for row in rows:
+            conn.execute(
+                """INSERT INTO blog_search_console_queries VALUES (:id,:canonical_path,:search_query,:metric_date,:country,:device,:clicks,:impressions,:ctr,:position)
+                ON CONFLICT(id) DO UPDATE SET canonical_path=excluded.canonical_path,search_query=excluded.search_query,metric_date=excluded.metric_date,country=excluded.country,device=excluded.device,clicks=excluded.clicks,impressions=excluded.impressions,ctr=excluded.ctr,position=excluded.position""",
+                row,
+            )
+        conn.commit()
+    applied_count = 0 if dry_run else len(rows)
+    return {
+        "artifact_type": "blog_search_console_query_import",
+        "dry_run": dry_run,
+        "parsed_count": len(rows),
+        "upserted_count": applied_count,
+        "summary": {
+            "parsed_count": len(rows),
+            "inserted_count": inserted_count,
+            "updated_count": updated_count,
+            "applied_count": applied_count,
+        },
+        "rows": rows,
+    }
+
+
+def import_blog_search_console_queries(conn: sqlite3.Connection, source, dry_run: bool = False, now=None):
+    rows = source if isinstance(source, list) else parse_blog_search_console_queries(Path(source).read_text())
+    return upsert_blog_search_console_queries(conn, rows, dry_run=dry_run)
+
+
+def format_blog_search_console_query_import_json(summary):
+    return dump_json(summary)
+
+
+def format_blog_search_console_query_import_text(summary):
+    return (
+        "Blog Search Console Query Import\n"
+        f"parsed={summary['parsed_count']} upserted={summary['upserted_count']} dry_run={summary['dry_run']}"
+    )
+
+
+def _records(raw: str):
+    raw = raw.strip()
+    if not raw:
+        return []
+    if raw[0] in "[{":
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return [json.loads(line) for line in raw.splitlines() if line.strip()]
+        if isinstance(data, dict):
+            return data.get("queries") or data.get("rows") or data.get("items") or [data]
+        return data
+    if "," in raw.splitlines()[0]:
+        return list(csv.DictReader(io.StringIO(raw)))
+    return [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+
+def _path(value: Any) -> str:
+    raw = text(value)
+    parsed = urlsplit(raw)
+    if parsed.scheme or parsed.netloc:
+        return parsed.path or "/"
+    return raw.split("?", 1)[0].split("#", 1)[0] or "/"
+
+
+def _int(value):
+    try:
+        return max(0, int(float(str(value).strip().replace(",", ""))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float(value):
+    try:
+        raw = str(value).strip()
+        number = float(raw.replace(",", "").replace("%", ""))
+        return number / 100 if "%" in raw else number
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _id(*parts):
+    return hashlib.sha256("|".join(text(part) for part in parts).encode()).hexdigest()[:24]
+
+
+def _table_exists(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'blog_search_console_queries'"
+    ).fetchone() is not None
+
+
+def _change_counts(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> tuple[int, int]:
+    existing = {
+        row[0]
+        for row in conn.execute("SELECT id FROM blog_search_console_queries")
+    }
+    inserted_count = sum(1 for row in rows if row["id"] not in existing)
+    return inserted_count, len(rows) - inserted_count
