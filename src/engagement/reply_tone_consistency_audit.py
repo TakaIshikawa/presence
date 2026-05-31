@@ -438,7 +438,8 @@ def _reply_rows(
     timestamp_expr = _timestamp_expr(columns)
     if timestamp_expr:
         filters.append(f"({timestamp_expr} IS NULL OR {timestamp_expr} >= ?)")
-        params.append((now - timedelta(days=days)).isoformat())
+        cutoff = (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+        params.append(cutoff.isoformat())
 
     query = "SELECT * FROM reply_queue"
     if filters:

@@ -32,7 +32,7 @@ def build_newsletter_segment_retention_drop_report(
     positive("limit", limit)
     non_negative("min_loss_rate", min_loss_rate)
     gen = now_value(now)
-    recent_cut = gen - timedelta(days=window_days)
+    recent_cut = (gen - timedelta(days=window_days)).replace(hour=0, minute=0, second=0, microsecond=0)
     base_cut = recent_cut - timedelta(days=baseline_days)
     buckets: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {"subscribers": set(), "subscriber_count": 0, "recent_loss": 0, "baseline_loss": 0}
