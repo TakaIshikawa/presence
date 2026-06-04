@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 from typing import Any
@@ -300,8 +301,9 @@ def _load_sends(
     days: int,
     send_id: int | None,
 ) -> list[sqlite3.Row]:
-    filters = ["datetime(sent_at) >= datetime('now', ?)"]
-    params: list[Any] = [f"-{days} days"]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    filters = ["datetime(sent_at) >= datetime(?)"]
+    params: list[Any] = [cutoff.isoformat()]
     if send_id is not None:
         filters.append("id = ?")
         params.append(send_id)

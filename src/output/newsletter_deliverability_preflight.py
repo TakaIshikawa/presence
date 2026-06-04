@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import re
 import sqlite3
@@ -326,12 +326,13 @@ def _load_newsletter_rows(
         if column in columns
     ]
     timestamp_expr = _timestamp_expr(columns)
-    where = f"datetime({timestamp_expr}) >= datetime('now', ?)" if timestamp_expr else ""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    where = f"datetime({timestamp_expr}) >= datetime(?)" if timestamp_expr else ""
     sql = f"SELECT {', '.join(selected)} FROM newsletter_sends"
     params: list[Any] = []
     if where:
         sql += f" WHERE {where}"
-        params.append(f"-{days} days")
+        params.append(cutoff.isoformat())
     order_expr = f"datetime({timestamp_expr}) DESC, " if timestamp_expr else ""
     sql += f" ORDER BY {order_expr}id DESC LIMIT ?"
     params.append(limit)

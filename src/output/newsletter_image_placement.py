@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 import json
 import re
@@ -772,8 +772,9 @@ def _load_newsletter_rows(
     sql = f"SELECT {', '.join(selected)} FROM newsletter_sends"
     params: list[Any] = []
     if timestamp_expr:
-        sql += f" WHERE datetime({timestamp_expr}) >= datetime('now', ?)"
-        params.append(f"-{days} days")
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        sql += f" WHERE datetime({timestamp_expr}) >= datetime(?)"
+        params.append(cutoff.isoformat())
     order_expr = f"datetime({timestamp_expr}) DESC, " if timestamp_expr else ""
     sql += f" ORDER BY {order_expr}id DESC LIMIT ?"
     params.append(limit)
